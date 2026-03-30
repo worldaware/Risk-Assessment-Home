@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" width="192" height="192">
+  <!-- Background: dark navy -->
+  <rect width="192" height="192" rx="24" fill="#1A1A2E"/>
+  <!-- Orange accent bar at top -->
+  <rect x="0" y="0" width="192" height="12" rx="0" fill="#E8650A"/>
+  <rect x="0" y="0" width="192" height="12" rx="0" fill="#E8650A"/>
+  <!-- WA initials in orange -->
+  <text
+    x="96"
+    y="115"
+    text-anchor="middle"
+    font-family="Arial, sans-serif"
+    font-weight="bold"
+    font-size="72"
+    fill="#E8650A"
+    letter-spacing="-2"
+  >WA</text>
+  <!-- Tagline -->
+  <text
+    x="96"
+    y="155"
+    text-anchor="middle"
+    font-family="Arial, sans-serif"
+    font-weight="normal"
+    font-size="13"
+    fill="rgba(255,255,255,0.6)"
+    letter-spacing="1"
+  >RISK ASSESS</text>
+  <!-- Bottom orange bar -->
+  <rect x="0" y="180" width="192" height="12" rx="0" fill="#E8650A"/>
+</svg>

@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Background: dark navy -->
+  <rect width="512" height="512" rx="64" fill="#1A1A2E"/>
+  <!-- Orange accent bar at top -->
+  <rect x="0" y="0" width="512" height="32" rx="0" fill="#E8650A"/>
+  <!-- WA initials in orange -->
+  <text
+    x="256"
+    y="310"
+    text-anchor="middle"
+    font-family="Arial, sans-serif"
+    font-weight="bold"
+    font-size="192"
+    fill="#E8650A"
+    letter-spacing="-4"
+  >WA</text>
+  <!-- Tagline -->
+  <text
+    x="256"
+    y="400"
+    text-anchor="middle"
+    font-family="Arial, sans-serif"
+    font-weight="normal"
+    font-size="36"
+    fill="rgba(255,255,255,0.6)"
+    letter-spacing="3"
+  >RISK ASSESSMENT</text>
+  <!-- beworldaware.com -->
+  <text
+    x="256"
+    y="448"
+    text-anchor="middle"
+    font-family="Arial, sans-serif"
+    font-weight="normal"
+    font-size="24"
+    fill="#E8650A"
+    letter-spacing="1"
+  >beworldaware.com</text>
+  <!-- Bottom orange bar -->
+  <rect x="0" y="480" width="512" height="32" rx="0" fill="#E8650A"/>
+</svg>
