@@ -373,12 +373,16 @@ let state = {
   householdSize: '',
   hh1Name: 'Household 1',
   hh2Name: 'Household 2',
-  scores: {},     // { hazardId: { l: 0, i: 0, notes: '', l2: 0, i2: 0 } }
+  scores: {},     // { hazardId: { l: 0, i: 0, notes: '', l2: 0, i2: 0, isAuto: bool } }
   customNames: {  // custom hazard names/desc
     60: { name: '', description: '' },
     61: { name: '', description: '' },
     62: { name: '', description: '' },
   },
+  // Research My Area — persisted research report
+  researchAddress:   '',
+  researchReport:    null,   // { geocoded, findings[], timestamp }
+  autoScoreOrigins:  {},     // { hazardId: { source, finding, confidence } }
 };
 
 /* ---------------------------------------------------------------
@@ -498,9 +502,10 @@ function showScreen(screenId) {
   currentScreen = screenId;
 
   // Screen-specific initialization
-  if (screenId === 'results') renderResults();
-  if (screenId === 'about') renderSavedList();
+  if (screenId === 'results')   renderResults();
+  if (screenId === 'about')     renderSavedList();
   if (screenId === 'reference') buildRiskMatrix();
+  if (screenId === 'research' && typeof initResearchScreen === 'function') initResearchScreen();
 
   // Scroll to top
   window.scrollTo(0, 0);
@@ -553,6 +558,30 @@ function initAssessmentUI() {
   // Build hazard list
   buildHazardList();
   updateProgress();
+
+  // Show/refresh "View Research Report" link if auto-scores exist
+  _syncResearchReportLink();
+}
+
+function _syncResearchReportLink() {
+  const existing = document.getElementById('research-report-link');
+  const hasAutoScores = Object.values(state.scores).some(s => s?.isAuto);
+  if (!hasAutoScores) {
+    if (existing) existing.remove();
+    return;
+  }
+  if (existing) return; // already shown
+  const link = document.createElement('div');
+  link.id = 'research-report-link';
+  link.className = 'research-report-link';
+  link.innerHTML = `
+    <button class="btn-small btn-ghost" onclick="showScreen('research')">
+      🔍 View Research Report
+    </button>
+    <span>Likelihood scores pre-populated from government data. Set Impact to score.</span>
+  `;
+  const header = document.querySelector('.assessment-header');
+  if (header) header.insertAdjacentElement('afterend', link);
 }
 
 /* ---------------------------------------------------------------
@@ -647,6 +676,12 @@ function buildHazardRow(hazard) {
     `;
   }
 
+  // Auto-score badge (shown when likelihood was set by Research My Area)
+  const isAutoScored = !!(state.scores[hazard.id]?.isAuto);
+  const autoScoreBadgeHtml = isAutoScored
+    ? `<span class="auto-score-badge" id="auto-badge-${hazard.id}">🔍 Auto</span>`
+    : `<span class="auto-score-badge hidden" id="auto-badge-${hazard.id}">🔍 Auto</span>`;
+
   // Hazard name display
   const displayName = hazard.isCustom
     ? (state.customNames[hazard.id]?.name || `Custom Hazard ${hazard.customIndex}`)
@@ -704,6 +739,7 @@ function buildHazardRow(hazard) {
     <div class="hazard-top">
       <div class="hazard-name-wrap">
         <strong class="hazard-name">${escHtml(displayName)}</strong>
+        ${autoScoreBadgeHtml}
         <button class="desc-toggle" onclick="toggleDesc(${hazard.id})" aria-label="Toggle description">
           <i data-feather="info" class="desc-icon"></i>
         </button>
@@ -758,6 +794,11 @@ function stepperChange(hazardId, field, delta) {
   const next = Math.max(0, Math.min(5, current + delta));
   state.scores[hazardId][field] = next;
 
+  // If user manually adjusts the likelihood, clear the auto-score flag
+  if ((field === 'l' || field === 'l2') && state.scores[hazardId].isAuto) {
+    state.scores[hazardId].isAuto = false;
+  }
+
   // Update the value display
   const sv = document.getElementById(`sv-${hazardId}-${field}`);
   if (sv) sv.textContent = next > 0 ? next : '—';
@@ -789,6 +830,12 @@ function updateRowScore(hazardId) {
 
   const score = calcScore(hazardId);
   const rl = score > 0 ? getRiskLevel(score) : null;
+
+  // Sync auto-score badge visibility
+  const autoBadge = document.getElementById(`auto-badge-${hazardId}`);
+  if (autoBadge) {
+    autoBadge.classList.toggle('hidden', !state.scores[hazardId]?.isAuto);
+  }
 
   // Update main score badge
   const badge = row.querySelector('.score-badge');
@@ -978,13 +1025,20 @@ function renderResults() {
     `;
 
     bandItems.forEach(it => {
-      const catColor = CATEGORY_COLORS[it.hazard.category] || '#333';
+      const catColor  = CATEGORY_COLORS[it.hazard.category] || '#333';
+      const isAuto    = !!(state.scores[it.hazard.id]?.isAuto);
+      const sourceTag = isAuto
+        ? `<span class="result-source-tag auto">🔍 Auto</span>`
+        : `<span class="result-source-tag manual">✏️ Manual</span>`;
       html += `
         <div class="result-card">
           <div class="result-card-top">
             <div class="result-left">
               <span class="result-name">${escHtml(it.displayName)}</span>
-              <span class="result-cat-badge" style="background:${catColor}">${escHtml(it.hazard.category)}</span>
+              <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;">
+                <span class="result-cat-badge" style="background:${catColor}">${escHtml(it.hazard.category)}</span>
+                ${sourceTag}
+              </div>
             </div>
             <div class="result-score" style="background:${it.rl.bg};color:${it.rl.color}">
               <span class="result-score-num">${it.score}</span>
@@ -1272,6 +1326,9 @@ function clearAllData() {
       hh2Name: 'Household 2',
       scores: {},
       customNames: { 60: { name: '', description: '' }, 61: { name: '', description: '' }, 62: { name: '', description: '' } },
+      researchAddress:  '',
+      researchReport:   null,
+      autoScoreOrigins: {},
     };
     renderSavedList();
     showScreen('home');

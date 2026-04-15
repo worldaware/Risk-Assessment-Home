@@ -272,6 +272,57 @@
       </div>
     </section>
 
+    <!-- ========================================================
+         SCREEN 6 — RESEARCH MY AREA
+    ======================================================== -->
+    <section id="screen-research" class="screen">
+
+      <!-- Header -->
+      <div class="research-header">
+        <div class="research-header-top">
+          <span class="logo-text logo-small">WORLD AWARE</span>
+        </div>
+        <h2 class="research-title">🔍 Research My Area</h2>
+        <p class="research-subtitle">Enter an address and we'll automatically score your area's hazards using public government data.</p>
+      </div>
+
+      <!-- Privacy notice -->
+      <div class="research-privacy">
+        <strong>Privacy:</strong> Your address is sent directly to U.S. government APIs (FEMA, USGS, EPA, NOAA). World Aware does not receive, store, or log your address. All data stays in your browser.
+      </div>
+
+      <!-- Address input section -->
+      <div id="research-input-section" class="research-input-section">
+        <div class="research-input-wrap">
+          <label class="research-input-label" for="research-address-input">Street Address</label>
+          <input
+            type="text"
+            id="research-address-input"
+            class="research-address-input"
+            placeholder="123 Main Street, Boulder CO 80302"
+            autocomplete="street-address"
+            inputmode="text"
+          />
+        </div>
+        <button class="btn-primary btn-large" id="research-run-btn" onclick="startResearch()">
+          🔍 Research This Address
+        </button>
+        <p class="research-input-hint">Include city and state (or ZIP) for best results. U.S. addresses only.</p>
+      </div>
+
+      <!-- Loading state -->
+      <div id="research-loading" class="research-loading hidden">
+        <div id="research-steps-list" class="research-steps-list"></div>
+        <p class="research-timing">⏱ This usually takes 10–20 seconds…</p>
+      </div>
+
+      <!-- Results / report -->
+      <div id="research-results" class="research-results hidden">
+        <div id="research-report-content"></div>
+      </div>
+
+    </section>
+
   </div><!-- end #app -->
 
   <!-- ============================================================
@@ -289,6 +340,10 @@
     <button class="nav-item" onclick="showScreen('results')" data-screen="results">
       <i data-feather="bar-chart-2"></i>
       <span>Results</span>
+    </button>
+    <button class="nav-item" onclick="showScreen('research')" data-screen="research">
+      <i data-feather="search"></i>
+      <span>Research</span>
     </button>
     <button class="nav-item" onclick="showScreen('reference')" data-screen="reference">
       <i data-feather="book-open"></i>
@@ -312,6 +367,11 @@
       </div>
     </div>
   </div>
+
+  <!-- Research Feature Scripts (load before app.js so globals are available) -->
+  <script src="js/apiConfig.js"></script>
+  <script src="js/scoreMapper.js"></script>
+  <script src="js/research.js"></script>
 
   <!-- App Script -->
   <script src="app.js"></script>

@@ -1093,6 +1093,529 @@ button:active, .btn-primary:active, .btn-secondary:active { opacity: 0.85; }
   justify-content: flex-end;
 }
 
+/* ── Screen 6 — Research My Area ────────────────────────── */
+
+.research-header {
+  background: var(--dark-navy);
+  padding: 12px 16px 16px;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+}
+.research-header-top {
+  margin-bottom: 6px;
+}
+.research-title {
+  font-size: 1.1rem;
+  color: #fff;
+  margin-bottom: 4px;
+}
+.research-subtitle {
+  font-size: 0.82rem;
+  color: rgba(255,255,255,0.7);
+  line-height: 1.4;
+}
+
+.research-privacy {
+  background: #EAF4FB;
+  border-left: 4px solid #2E86C1;
+  padding: 10px 14px;
+  font-size: 0.78rem;
+  color: #1A5276;
+  line-height: 1.5;
+}
+
+/* ── Address Input ───────────────────────────────────────── */
+.research-input-section {
+  padding: 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.research-input-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.research-input-label {
+  font-size: 0.72rem;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--gray-text);
+}
+.research-address-input {
+  width: 100%;
+  padding: 12px 14px;
+  font-size: 1rem;
+  font-family: var(--font);
+  border: 2px solid var(--gray-border);
+  border-radius: var(--radius);
+  color: var(--dark-navy);
+  background: #fff;
+  transition: border-color 0.15s;
+}
+.research-address-input:focus {
+  outline: none;
+  border-color: var(--orange);
+}
+.research-address-input::placeholder { color: #bbb; }
+
+.research-input-hint {
+  font-size: 0.76rem;
+  color: #888;
+  text-align: center;
+}
+
+.research-error-msg {
+  background: #FADBD8;
+  border: 1px solid #E74C3C;
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  font-size: 0.85rem;
+  color: #C0392B;
+  line-height: 1.5;
+}
+.research-error-msg.hidden { display: none; }
+
+/* ── Loading State ───────────────────────────────────────── */
+.research-loading {
+  padding: 20px 16px;
+}
+.research-steps-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+.research-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--gray-light);
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+  transition: background 0.2s;
+}
+.research-step.step-running {
+  background: #EBF5FB;
+  border-left: 3px solid #2E86C1;
+}
+.research-step.step-success {
+  background: #D5F5E3;
+  border-left: 3px solid #27AE60;
+}
+.research-step.step-error {
+  background: #FADBD8;
+  border-left: 3px solid #E74C3C;
+}
+.step-icon {
+  font-size: 1rem;
+  flex-shrink: 0;
+}
+.step-label {
+  color: var(--dark-navy);
+  line-height: 1.3;
+}
+.research-timing {
+  font-size: 0.8rem;
+  color: #888;
+  text-align: center;
+  font-style: italic;
+}
+
+/* ── Research Results / Report ──────────────────────────── */
+.research-results {
+  padding: 0 0 120px;
+}
+
+.report-address-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  background: #fff;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--gray-border);
+}
+.report-address-icon {
+  font-size: 1.4rem;
+  flex-shrink: 0;
+  padding-top: 2px;
+}
+.report-address-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.report-address-info strong {
+  font-size: 0.92rem;
+  color: var(--dark-navy);
+  line-height: 1.3;
+}
+.report-address-info span {
+  font-size: 0.75rem;
+  color: var(--gray-text);
+}
+
+.report-summary-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #EAF2FF;
+  border-left: 4px solid var(--orange);
+  padding: 14px 16px;
+  margin: 0 0 0 0;
+}
+.report-summary-icon { font-size: 1.3rem; flex-shrink: 0; }
+.report-summary-banner strong { font-size: 0.95rem; color: var(--dark-navy); }
+.report-summary-sub { font-size: 0.78rem; color: var(--gray-text); }
+
+.report-aq-note {
+  background: #FEF9E7;
+  border-left: 3px solid #F39C12;
+  padding: 10px 16px;
+  font-size: 0.8rem;
+  color: #7D6608;
+  line-height: 1.5;
+}
+
+.report-section-heading {
+  font-size: 0.88rem;
+  font-weight: bold;
+  color: var(--dark-navy);
+  padding: 14px 16px 8px;
+  border-top: 1px solid var(--gray-border);
+  margin-top: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Category group in report */
+.report-category-group {
+  margin-bottom: 4px;
+}
+.report-cat-label {
+  font-size: 0.7rem;
+  font-weight: bold;
+  color: #fff;
+  padding: 4px 14px;
+  letter-spacing: 0.03em;
+}
+
+/* Individual finding card */
+.finding-card {
+  background: #fff;
+  border-left: 4px solid var(--orange);
+  margin: 4px 8px;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  padding: 12px 12px 10px;
+  box-shadow: var(--shadow);
+}
+
+.finding-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.finding-left {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+}
+
+.finding-name {
+  font-size: 0.9rem;
+  font-weight: bold;
+  color: var(--dark-navy);
+  line-height: 1.3;
+}
+
+.finding-cat-badge {
+  font-size: 0.63rem;
+  font-weight: bold;
+  color: #fff;
+  padding: 2px 7px;
+  border-radius: 20px;
+  display: inline-block;
+  width: fit-content;
+}
+
+/* 🔍 AUTO-SCORED badge */
+.auto-scored-badge {
+  display: inline-block;
+  background: var(--orange);
+  color: #fff;
+  font-size: 0.62rem;
+  font-weight: bold;
+  padding: 2px 8px;
+  border-radius: 20px;
+  letter-spacing: 0.03em;
+  width: fit-content;
+}
+
+/* 🔍 badge on assessment hazard rows */
+.auto-score-badge {
+  display: inline-block;
+  background: var(--orange);
+  color: #fff;
+  font-size: 0.6rem;
+  font-weight: bold;
+  padding: 1px 6px;
+  border-radius: 20px;
+  margin-left: 4px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.override-badge {
+  display: inline-block;
+  background: #9B59B6;
+  color: #fff;
+  font-size: 0.62rem;
+  font-weight: bold;
+  padding: 2px 8px;
+  border-radius: 20px;
+  width: fit-content;
+}
+
+/* Score box on finding cards */
+.finding-score {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 52px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.finding-score-num {
+  font-size: 1.4rem;
+  font-weight: bold;
+  line-height: 1;
+}
+.finding-score-label {
+  font-size: 0.58rem;
+  font-weight: bold;
+  letter-spacing: 0.05em;
+  line-height: 1.2;
+}
+
+/* Detail rows */
+.finding-details {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  background: var(--gray-light);
+  border-radius: 6px;
+  font-size: 0.78rem;
+}
+.finding-detail-row {
+  display: flex;
+  gap: 6px;
+  line-height: 1.4;
+  flex-wrap: wrap;
+}
+.finding-detail-key {
+  font-weight: bold;
+  color: var(--dark-navy);
+  flex-shrink: 0;
+  min-width: 68px;
+}
+.confidence-high   { color: #27AE60; font-weight: bold; }
+.confidence-medium { color: #E67E22; font-weight: bold; }
+.confidence-low    { color: #E74C3C; font-weight: bold; }
+.confidence-n\/a   { color: #aaa; }
+
+.finding-error {
+  display: block;
+  font-size: 0.8rem;
+  color: #C0392B;
+  padding: 6px 0;
+}
+
+.finding-override-btn {
+  font-size: 0.75rem;
+  padding: 5px 12px;
+}
+
+/* Override UI (inline) */
+.override-ui {
+  margin-top: 10px;
+  padding: 10px;
+  background: #f9f0ff;
+  border: 1px solid #d7bde2;
+  border-radius: 6px;
+}
+.override-label {
+  font-size: 0.78rem;
+  font-weight: bold;
+  color: var(--dark-navy);
+  margin-bottom: 8px;
+}
+.override-choices {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.override-score-btn {
+  background: var(--gray-light);
+  border: 2px solid var(--gray-border);
+  border-radius: 6px;
+  width: 38px;
+  height: 38px;
+  font-size: 1rem;
+  font-weight: bold;
+  cursor: pointer;
+  color: var(--dark-navy);
+  transition: background 0.1s, border-color 0.1s;
+}
+.override-score-btn.selected {
+  background: var(--orange);
+  border-color: var(--orange);
+  color: #fff;
+}
+.override-score-btn:hover { border-color: var(--orange); }
+.override-revert-btn {
+  background: none;
+  border: none;
+  color: var(--orange);
+  font-size: 0.78rem;
+  font-weight: bold;
+  cursor: pointer;
+  padding: 4px 8px;
+  text-decoration: underline;
+}
+
+/* ── Unavailable / Failed APIs ───────────────────────────── */
+.report-unavailable {
+  margin: 8px 16px;
+  padding: 12px 14px;
+  background: #FEF9E7;
+  border: 1px solid #F9E79F;
+  border-radius: var(--radius);
+  font-size: 0.82rem;
+  color: #7D6608;
+}
+.report-unavailable ul {
+  margin: 6px 0 0 16px;
+  line-height: 1.8;
+}
+
+/* ── Manual Hazards Section ──────────────────────────────── */
+.report-manual-intro {
+  font-size: 0.8rem;
+  color: var(--gray-text);
+  padding: 0 16px 8px;
+}
+.report-manual-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 8px;
+}
+.report-manual-item {
+  background: var(--gray-light);
+  border-radius: 6px;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.report-manual-item strong {
+  font-size: 0.84rem;
+  color: var(--dark-navy);
+}
+.report-manual-item span {
+  font-size: 0.75rem;
+  color: var(--gray-text);
+  line-height: 1.4;
+}
+
+/* ── Report Action Buttons ───────────────────────────────── */
+.report-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 20px 16px 24px;
+  border-top: 1px solid var(--gray-border);
+  margin-top: 16px;
+}
+.report-actions button {
+  width: 100%;
+  justify-content: center;
+}
+
+/* ── Research Report Link (assessment screen) ────────────── */
+.research-report-link {
+  background: #EAF4FB;
+  border-bottom: 1px solid #AED6F1;
+  padding: 8px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.78rem;
+  color: var(--gray-text);
+  flex-wrap: wrap;
+}
+
+/* ── Auto-score Banner (assessment screen) ───────────────── */
+.auto-score-banner {
+  background: #EAF2FF;
+  border-bottom: 2px solid var(--orange);
+  padding: 0;
+}
+.auto-score-banner-inner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  font-size: 0.82rem;
+  color: var(--dark-navy);
+  flex-wrap: wrap;
+}
+.auto-score-banner-inner strong { color: var(--orange); }
+.auto-score-banner-close {
+  background: none;
+  border: none;
+  color: #aaa;
+  cursor: pointer;
+  margin-left: auto;
+  font-size: 14px;
+  padding: 4px 6px;
+  flex-shrink: 0;
+}
+
+/* ── Auto-scored tag on Results screen ───────────────────── */
+.result-source-tag {
+  font-size: 0.62rem;
+  font-weight: bold;
+  padding: 1px 6px;
+  border-radius: 10px;
+  white-space: nowrap;
+  display: inline-block;
+}
+.result-source-tag.auto {
+  background: var(--orange);
+  color: #fff;
+}
+.result-source-tag.manual {
+  background: var(--gray-light);
+  color: var(--gray-text);
+  border: 1px solid var(--gray-border);
+}
+
 /* ── Scrollbar (webkit) ──────────────────────────────────── */
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -1150,7 +1673,10 @@ button:active, .btn-primary:active, .btn-secondary:active { opacity: 0.85; }
   #screen-assessment,
   #screen-reference,
   #screen-about,
-  #confirm-dialog {
+  #screen-research,
+  #confirm-dialog,
+  .auto-score-banner,
+  .research-report-link {
     display: none !important;
   }
 
@@ -1235,4 +1761,147 @@ button:active, .btn-primary:active, .btn-secondary:active { opacity: 0.85; }
   @page {
     margin: 1.5cm;
   }
+}
+
+/* =============================================================
+   MANUAL LOOKUP CARDS (Research My Area)
+   ============================================================= */
+
+.manual-lookup-card {
+  background: #1e1e38;
+  border: 1px solid #f59e0b;
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 12px;
+}
+
+.manual-lookup-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.manual-lookup-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #f1f5f9;
+  margin: 0;
+}
+
+.manual-lookup-badge {
+  display: inline-block;
+  background: #f59e0b;
+  color: #1a1a2e;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 2px 8px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.manual-lookup-message {
+  font-size: 0.85rem;
+  color: #94a3b8;
+  margin: 0 0 12px;
+  line-height: 1.5;
+}
+
+.manual-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #f59e0b;
+  color: #1a1a2e;
+  font-weight: 700;
+  font-size: 0.875rem;
+  padding: 8px 16px;
+  border-radius: 8px;
+  text-decoration: none;
+  margin-bottom: 6px;
+  transition: background 0.15s;
+}
+
+.manual-action-btn:hover {
+  background: #fbbf24;
+  color: #1a1a2e;
+}
+
+.manual-action-note {
+  display: block;
+  font-size: 0.75rem;
+  color: #64748b;
+  margin-bottom: 12px;
+}
+
+.manual-instructions {
+  font-size: 0.82rem;
+  color: #94a3b8;
+  padding-left: 18px;
+  margin: 0 0 14px;
+  line-height: 1.7;
+}
+
+.manual-instructions li {
+  margin-bottom: 4px;
+}
+
+.manual-score-entry {
+  border-top: 1px solid #2d2d52;
+  padding-top: 12px;
+}
+
+.manual-score-label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #cbd5e1;
+  margin-bottom: 8px;
+}
+
+.manual-score-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.manual-score-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  border: 2px solid #3d3d6e;
+  background: #16213e;
+  color: #cbd5e1;
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.manual-score-btn:hover {
+  border-color: #f59e0b;
+  color: #f59e0b;
+}
+
+.manual-score-btn.selected {
+  background: #f59e0b;
+  border-color: #f59e0b;
+  color: #1a1a2e;
+}
+
+.manual-score-confirm {
+  font-size: 0.8rem;
+  color: #4ade80;
+  font-weight: 600;
+}
+
+.manual-score-confirm.hidden {
+  display: none;
 }

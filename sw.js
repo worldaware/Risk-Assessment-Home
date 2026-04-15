@@ -3,7 +3,7 @@
    Service Worker: caches app shell for full offline use.
    ============================================================= */
 
-const CACHE_NAME = 'wa-risk-v1.0.0';
+const CACHE_NAME = 'wa-risk-v1.1.0';  // bumped: added Research My Area feature
 
 // App shell files to cache on install
 const APP_SHELL = [
@@ -16,6 +16,10 @@ const APP_SHELL = [
   './icons/icon-512.svg',
   './icons/icon-192.png',
   './icons/icon-512.png',
+  // Research My Area scripts
+  './js/apiConfig.js',
+  './js/scoreMapper.js',
+  './js/research.js',
 ];
 
 /* ── Install: cache app shell ──────────────────────────────── */
