@@ -1457,27 +1457,11 @@ function initResearchScreen() {
     return;
   }
 
-  // If state has a prior research report (from localStorage), reload it
-  if (state.researchReport && state.researchReport.findings) {
-    _research.geocoded   = state.researchReport.geocoded;
-    _research.findings   = state.researchReport.findings;
-    _research.address    = state.researchAddress || '';
-    _research.hasResults = true;
-    _showSection('results');
-    _renderReport();
-    return;
-  }
-
-  // Fresh state — show input
+  // Always show the input form — results only appear after user clicks the button
   _showSection('input');
 
-  // Pre-populate address field from last known location
-  const addrInput = document.getElementById('research-address-input');
-  if (addrInput && state.location) {
-    addrInput.value = addrInput.value || state.location;
-  }
-
   // Bind Enter key on address input
+  const addrInput = document.getElementById('research-address-input');
   if (addrInput && !addrInput._researchBound) {
     addrInput.addEventListener('keydown', e => {
       if (e.key === 'Enter') startResearch();

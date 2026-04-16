@@ -478,6 +478,9 @@ function loadCurrentState() {
       console.warn('Could not parse saved state', e);
     }
   }
+  // Never persist research results between sessions
+  state.researchAddress = '';
+  state.researchReport  = null;
 }
 
 /* ---------------------------------------------------------------
