@@ -116,48 +116,17 @@ function withTimeout(promise, ms, label) {
 }
 
 /**
- * Try each proxy in API_CONFIG.CORS_PROXIES in order.
- * Returns parsed JSON from the first proxy that succeeds.
- * Throws if all proxies fail.
- */
-async function fetchWithProxyCascade(targetUrl, timeoutMs) {
-  const proxies = API_CONFIG.CORS_PROXIES;
-  const totalTimeout = timeoutMs + API_CONFIG.PROXY_EXTRA_MS;
-  let lastError = null;
-
-  for (const proxy of proxies) {
-    const wrappedUrl = proxy.url + encodeURIComponent(targetUrl);
-    try {
-      const fetchPromise = fetch(wrappedUrl);
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Timeout')), totalTimeout)
-      );
-      const response = await Promise.race([fetchPromise, timeoutPromise]);
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      const result = await proxy.extract(response);
-      console.log('[Proxy success]', proxy.name, '<-', targetUrl);
-      return result;
-    } catch (err) {
-      console.warn('[Proxy failed]', proxy.name, err.message);
-      lastError = err;
-      // continue to next proxy
-    }
-  }
-
-  throw new Error(`All CORS proxies failed for: ${targetUrl} (last: ${lastError?.message})`);
-}
-
-/**
- * Fetch via CORS proxy cascade — use for all government ArcGIS/EPA/NOAA
+ * Fetch via allorigins CORS proxy — use for all government ArcGIS/EPA/NOAA
  * endpoints that block direct browser requests.
  * Returns parsed JSON of the actual API response.
  */
 async function proxyFetch(url) {
-  return fetchWithProxyCascade(url, API_CONFIG.TIMEOUT_MS);
+  const proxyUrl = API_CONFIG.CORS_PROXY + encodeURIComponent(url);
+  const resp = await fetch(proxyUrl);
+  if (!resp.ok) throw new Error('Proxy fetch failed: HTTP ' + resp.status);
+  const wrapper = await resp.json();
+  if (!wrapper || !wrapper.contents) throw new Error('Empty proxy response');
+  return JSON.parse(wrapper.contents);
 }
 
 /**
@@ -238,11 +207,20 @@ async function _geocode(address) {
     const censusUrl =
       `https://geocoding.geo.census.gov/geocoder/locations/onelineaddress` +
       `?address=${encodeURIComponent(address)}&benchmark=Public_AR_Current&format=json`;
-    console.log('[Geocode] Census fallback via proxy cascade:', censusUrl);
+    const proxied = API_CONFIG.CORS_PROXY + encodeURIComponent(censusUrl);
+
+    console.log('[Geocode] Census fallback URL (proxied):', proxied);
 
     let censusData;
     try {
-      censusData = await fetchWithProxyCascade(censusUrl, API_CONFIG.TIMEOUT_MS);
+      const ctrl  = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), API_CONFIG.TIMEOUT_MS + API_CONFIG.PROXY_EXTRA_MS);
+      const resp  = await fetch(proxied, { signal: ctrl.signal });
+      clearTimeout(timer);
+      if (!resp.ok) throw new Error('Census proxy HTTP ' + resp.status);
+      const wrapper = await resp.json();
+      if (!wrapper?.contents) throw new Error('Empty proxy response');
+      censusData = JSON.parse(wrapper.contents);
       console.log('[Geocode] Census raw response:', censusData);
     } catch (censusErr) {
       console.error('[Geocode] Census fallback also failed:', censusErr.message);
@@ -995,19 +973,17 @@ async function startResearch() {
 function applyResearchScores() {
   if (!_research.hasResults) return;
 
-  // Include both 'success' and 'estimated' (fallback) findings
   const successFindings = _research.findings.filter(
     f => (f.status === 'success' || f.status === 'estimated') && f.scoreAssigned !== null
   );
 
-  // STEP 1: Show assessment screen FIRST so DOM is active before buildHazardList runs
+  // 1. Show the assessment screen FIRST so the DOM is active
   showScreen('assessment');
 
-  // STEP 2: Write scores to state
+  // 2. Write scores to state
   successFindings.forEach(f => {
     if (!state.scores[f.hazardId]) state.scores[f.hazardId] = {};
     const entry = state.scores[f.hazardId];
-    // Only skip if user manually entered a score (not auto)
     if (entry.l > 0 && !entry.isAuto) return;
     entry.l      = f.scoreAssigned;
     entry.isAuto = true;
@@ -1018,7 +994,7 @@ function applyResearchScores() {
     entry.notes = autoNote;
   });
 
-  // STEP 3: Persist metadata to state
+  // 3. Persist metadata
   state.researchAddress = _research.address;
   state.researchReport  = {
     geocoded:  _research.geocoded,
@@ -1032,7 +1008,7 @@ function applyResearchScores() {
     };
   });
 
-  // STEP 4: Save and rebuild UI (screen is now active, DOM ready)
+  // 4. Save, then rebuild UI (screen is now active)
   autoSave();
   initAssessmentUI();
   _expandScoredCategories(successFindings.map(f => f.hazardId));

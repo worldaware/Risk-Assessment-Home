@@ -10,8 +10,31 @@ const API_CONFIG = {
   TIMEOUT_MS:       10000,  // 10 s per API call
   PROXY_EXTRA_MS:   5000,   // extra time when routing via CORS proxy
 
-  /* ── CORS Proxy ─────────────────────────────────────────── */
-  // allorigins wraps the response as { contents: "<string>", status: { … } }
+  /* ── CORS Proxy Cascade ──────────────────────────────────
+     Tried in order. First success wins. extractor handles each proxy's
+     unique response format and returns a parsed JS object.            */
+  CORS_PROXIES: [
+    {
+      name: 'allorigins',
+      url:  'https://api.allorigins.win/get?url=',
+      extract: async (response) => {
+        const data = await response.json();
+        return JSON.parse(data.contents);
+      },
+    },
+    {
+      name: 'corsproxy.io',
+      url:  'https://corsproxy.io/?',
+      extract: async (response) => await response.json(),
+    },
+    {
+      name: 'codetabs',
+      url:  'https://api.codetabs.com/v1/proxy?quest=',
+      extract: async (response) => await response.json(),
+    },
+  ],
+
+  // Backwards-compatibility alias — points at the first proxy URL
   CORS_PROXY: 'https://api.allorigins.win/get?url=',
 
   /* ── Geocoding (US Census Bureau) — no key required ─────── */

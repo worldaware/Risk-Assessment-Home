@@ -3,7 +3,7 @@
    Service Worker: caches app shell for full offline use.
    ============================================================= */
 
-const CACHE_NAME = 'wa-risk-v1.1.0';  // bumped: added Research My Area feature
+const CACHE_NAME = 'wa-risk-v1.5.0';  // bumped: multi-proxy cascade
 
 // App shell files to cache on install
 const APP_SHELL = [
