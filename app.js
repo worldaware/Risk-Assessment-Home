@@ -502,13 +502,23 @@ function loadCurrentState() {
   } catch (e) {
     console.warn('localStorage unavailable', e);
   }
+  let needsSave = !saved;
   if (saved) {
     try {
       const parsed = JSON.parse(saved);
+      // Pre-v2 states have no assessmentId; the one generated below must be
+      // saved right away or report edits keyed to it are lost on reload.
+      if (!parsed || !parsed.assessmentId) needsSave = true;
       state = normalizeState(parsed);
     } catch (e) {
       console.warn('Could not parse saved state', e);
+      needsSave = true;
     }
+  }
+  if (needsSave) {
+    try {
+      localStorage.setItem('wa_current_state', JSON.stringify(state));
+    } catch (e) { /* storage unavailable */ }
   }
 }
 
@@ -1163,6 +1173,28 @@ function formatReportDate(iso) {
 }
 
 /**
+ * Plain-text likelihood × impact line for a scored hazard.
+ * Neighborhood mode lists each household that rated it, plus the average
+ * when both did (the score is that average).
+ */
+function formatLIText(it) {
+  if (state.assessmentType !== 'neighborhood') {
+    return `Likelihood ${it.l} (${LIKELIHOOD_LABELS[it.l] || ''}) × Impact ${it.i} (${IMPACT_LABELS[it.i] || ''})`;
+  }
+  const names = [state.hh1Name || 'Household 1', state.hh2Name || 'Household 2'];
+  const pairs = [[it.l, it.i], [it.l2, it.i2]];
+  const parts = [];
+  let full = 0;
+  pairs.forEach(([l, i], idx) => {
+    if (l > 0 && i > 0) { parts.push(`${names[idx]}: L${l} × I${i} = ${l * i}`); full++; }
+    else if (l > 0)     { parts.push(`${names[idx]}: L${l}, impact not rated`); }
+    else if (i > 0)     { parts.push(`${names[idx]}: I${i}, likelihood not rated`); }
+  });
+  if (full === 2) parts.push(`average ${it.score}`);
+  return parts.join(' · ');
+}
+
+/**
  * Build the complete report model from current state.
  * Everything that displays or exports results reads from this.
  */
@@ -1195,6 +1227,7 @@ function buildReportData() {
       finding: origin ? cleanFindingText(origin.finding) : '',
     };
   }).sort((a, b) => b.score - a.score || a.id - b.id);
+  scored.forEach(it => { it.liText = formatLIText(it); });
 
   const unrated = active
     .filter(h => researchIds.has(h.id) && !isScored(h.id))
@@ -1336,7 +1369,7 @@ function renderResults() {
                 <span class="result-cat-badge" style="background:${catColor}">${escHtml(it.category)}</span>
                 ${sourceTag}
               </div>
-              <span class="result-li">Likelihood ${it.l || '—'} × Impact ${it.i || '—'}</span>
+              <span class="result-li">${escHtml(it.liText)}</span>
             </div>
             <div class="result-score" style="background:${it.rl.bg};color:${it.rl.color}">
               <span class="result-score-num">${it.score}</span>
@@ -1465,7 +1498,7 @@ function buildTextSummary() {
     if (bandItems.length === 0) return;
     out += `\n── ${band.key} ──\n`;
     bandItems.forEach(it => {
-      out += `  [${it.score}] ${it.name}  (${it.category})  L${it.l} × I${it.i}\n`;
+      out += `  [${it.score}] ${it.name}  (${it.category})\n       ${it.liText}\n`;
       const notes = (edits.notes && edits.notes[it.id] !== undefined) ? edits.notes[it.id] : it.notes;
       if (notes) out += `       Notes: ${notes}\n`;
     });

@@ -156,7 +156,7 @@ function renderReportView() {
           </div>
           <div class="rd-item-body">
             <div class="rd-item-name"><span class="rd-rank">${idx + 1}.</span> ${escHtml(it.name)}</div>
-            <div class="rd-item-meta">${escHtml(it.category)} · Likelihood ${it.l} (${escHtml(LIKELIHOOD_LABELS[it.l] || '')}) × Impact ${it.i} (${escHtml(IMPACT_LABELS[it.i] || '')})${it.fromResearch ? ' · Likelihood from address research' : ''}</div>
+            <div class="rd-item-meta">${escHtml(it.category)} · ${escHtml(it.liText)}${it.fromResearch ? ' · Likelihood from address research' : ''}</div>
             ${it.fromResearch && it.finding ? `<div class="rd-item-finding">${escHtml(it.finding)}</div>` : ''}
             ${_editable('notes.' + it.id, it.reportNotes, 'Add notes', 'div', 'rd-notes')}
           </div>
@@ -360,8 +360,10 @@ async function buildReportPDF() {
     });
     y += opts.after !== undefined ? opts.after : 4;
   }
-  function heading(text) {
-    ensure(40);
+  const HEADING_H = 35;
+  // keep: height of the content that must stay on the same page as the heading
+  function heading(text, keep) {
+    ensure(HEADING_H + (keep || lh(10.5) * 2));
     y += 8;
     font('bold', 13);
     setColor(PDF_COLORS.maroon);
@@ -414,7 +416,7 @@ async function buildReportPDF() {
   y += metaH + 6;
 
   // ── Summary ───────────────────────────────────────────────
-  heading('Summary');
+  heading('Summary', measure(r.summary || ' ', 10.5, W) + 20);
   if (r.summary.trim()) para(r.summary, { after: 6 });
   const countBits = [];
   ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].forEach(k => { if (d.counts[k]) countBits.push(`${d.counts[k]} ${k.toLowerCase()}`); });
@@ -424,24 +426,25 @@ async function buildReportPDF() {
   para(countLine, { size: 9.5, color: PDF_COLORS.muted });
 
   // ── Ranked risks ──────────────────────────────────────────
-  heading('Ranked risks');
-  if (r.scored.length === 0) {
-    para('No hazards have both a likelihood and an impact rating yet.', { color: PDF_COLORS.muted });
-  }
   const boxW = 54;
   const bodyX = M + boxW + 12;
   const bodyW = W - boxW - 12;
+  // Height an item needs before it is allowed to start on the current page
+  function itemHeight(it, rank, opts) {
+    const nameText = (rank ? rank + '. ' : '') + it.name;
+    const notes = (it.reportNotes || '').trim();
+    let h = measure(nameText, 11, bodyW, 'bold') + measure(opts.meta, 9, bodyW);
+    (opts.extra || []).forEach(t => { h += measure(t, 9, bodyW); });
+    if (notes) h += measure('Notes: ' + notes, 9.5, bodyW) + 2;
+    h = Math.max(h, 40) + 10;
+    return Math.min(h, 120); // very long notes: allow page flow
+  }
   function item(it, rank, opts) {
     const nameText = (rank ? rank + '. ' : '') + it.name;
     const metaText = opts.meta;
     const extra = opts.extra || [];
     const notes = (it.reportNotes || '').trim();
-    let h = measure(nameText, 11, bodyW, 'bold') + measure(metaText, 9, bodyW);
-    extra.forEach(t => { h += measure(t, 9, bodyW); });
-    if (notes) h += measure('Notes: ' + notes, 9.5, bodyW) + 2;
-    h = Math.max(h, 40) + 10;
-    if (h > BOTTOM - M) h = BOTTOM - M; // very long notes: allow page flow
-    ensure(Math.min(h, 120));
+    ensure(itemHeight(it, rank, opts));
 
     const c = PDF_LEVEL[opts.levelKey] || PDF_LEVEL.LIKELY;
     doc.setFillColor(c.bg[0], c.bg[1], c.bg[2]);
@@ -466,34 +469,33 @@ async function buildReportPDF() {
     doc.line(M, y - 4, M + W, y - 4);
   }
 
-  r.scored.forEach((it, idx) => {
-    const extra = [];
-    if (it.fromResearch && it.finding) extra.push('Research: ' + it.finding);
-    item(it, idx + 1, {
-      levelKey: it.level,
-      boxNum: String(it.score),
-      boxLabel: it.level,
-      meta: `${it.category} · Likelihood ${it.l} (${LIKELIHOOD_LABELS[it.l] || ''}) × Impact ${it.i} (${IMPACT_LABELS[it.i] || ''})`,
-      extra,
-    });
-  });
+  const scoredOpts = r.scored.map(it => ({
+    levelKey: it.level,
+    boxNum: String(it.score),
+    boxLabel: it.level,
+    meta: `${it.category} · ${it.liText}`,
+    extra: (it.fromResearch && it.finding) ? ['Research: ' + it.finding] : [],
+  }));
+  heading('Ranked risks', r.scored.length ? itemHeight(r.scored[0], 1, scoredOpts[0]) : lh(10.5) * 2);
+  if (r.scored.length === 0) {
+    para('No hazards have both a likelihood and an impact rating yet.', { color: PDF_COLORS.muted });
+  }
+  r.scored.forEach((it, idx) => item(it, idx + 1, scoredOpts[idx]));
 
   // ── Unrated research findings ─────────────────────────────
   if (r.unrated.length) {
-    heading('Identified by research — impact not yet rated');
-    para('Address research estimated the likelihood of these hazards. They do not have a risk score until their impact is rated.', { size: 9.5, color: PDF_COLORS.muted, after: 8 });
-    r.unrated.forEach(it => {
-      const extra = [];
-      if (it.finding) extra.push('Finding: ' + it.finding);
-      if (it.source)  extra.push('Source: ' + it.source);
-      item(it, null, {
-        levelKey: 'LIKELY',
-        boxNum: 'L' + it.l,
-        boxLabel: it.likelihoodLabel.toUpperCase(),
-        meta: `${it.category} · Likelihood ${it.l} (${it.likelihoodLabel})${it.confidence ? ' · Confidence: ' + it.confidence : ''}`,
-        extra,
-      });
-    });
+    const unratedOpts = r.unrated.map(it => ({
+      levelKey: 'LIKELY',
+      boxNum: 'L' + it.l,
+      boxLabel: it.likelihoodLabel.toUpperCase(),
+      meta: `${it.category} · Likelihood ${it.l} (${it.likelihoodLabel})${it.confidence ? ' · Confidence: ' + it.confidence : ''}`,
+      extra: [it.finding ? 'Finding: ' + it.finding : '', it.source ? 'Source: ' + it.source : ''].filter(Boolean),
+    }));
+    const introText = 'Address research estimated the likelihood of these hazards. They do not have a risk score until their impact is rated.';
+    heading('Identified by research — impact not yet rated',
+      measure(introText, 9.5, W) + 12 + itemHeight(r.unrated[0], null, unratedOpts[0]));
+    para(introText, { size: 9.5, color: PDF_COLORS.muted, after: 8 });
+    r.unrated.forEach((it, idx) => item(it, null, unratedOpts[idx]));
   }
 
   // ── Action items ──────────────────────────────────────────

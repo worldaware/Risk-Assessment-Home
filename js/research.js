@@ -183,6 +183,17 @@ async function directFetch(url) {
  * Try Nominatim first; fall back to Census via allorigins proxy.
  * Then enrich with county FIPS from the FCC Area API.
  */
+function _geoError(code, message) {
+  const e = new Error(message);
+  e.code = code;
+  return e;
+}
+
+const GEOCODE_MESSAGES = {
+  NOT_FOUND:   'Address not found — check the spelling or skip to assess without a lookup.',
+  UNREACHABLE: 'Couldn\u2019t reach the address lookup service — try again or skip.',
+};
+
 async function _geocode(address) {
   console.log('[Geocode] Starting for address:', address);
 
@@ -196,6 +207,7 @@ async function _geocode(address) {
   console.log('[Geocode] Nominatim URL:', nominatimUrl);
 
   let nominatimOk = false;
+  let nominatimEmpty = false; // service answered but found nothing
   try {
     const ctrl  = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), API_CONFIG.TIMEOUT_MS);
@@ -213,6 +225,7 @@ async function _geocode(address) {
     console.log('[Geocode] Nominatim raw response:', results);
 
     if (!results || results.length === 0) {
+      nominatimEmpty = true;
       throw new Error('no results');
     }
 
@@ -245,13 +258,15 @@ async function _geocode(address) {
       censusData = await fetchWithProxyCascade(censusUrl, API_CONFIG.TIMEOUT_MS);
       console.log('[Geocode] Census raw response:', censusData);
     } catch (censusErr) {
-      console.error('[Geocode] Census fallback also failed:', censusErr.message);
-      throw new Error('Could not reach geocoding service. Check your internet connection and try again.');
+      console.warn('[Geocode] Census fallback also failed:', censusErr.message);
+      // If the primary geocoder answered with no match, the address itself is the problem
+      if (nominatimEmpty) throw _geoError('NOT_FOUND', 'Address not found');
+      throw _geoError('UNREACHABLE', 'Could not reach geocoding service');
     }
 
     const matches = censusData?.result?.addressMatches;
     if (!matches || matches.length === 0) {
-      throw new Error('Address not found. Double-check the street address, city, and state.');
+      throw _geoError('NOT_FOUND', 'Address not found');
     }
 
     const m  = matches[0];
@@ -270,7 +285,7 @@ async function _geocode(address) {
 
   /* Validate we have usable coordinates */
   if (!lat || !lng || isNaN(lat) || isNaN(lng)) {
-    throw new Error('Address not found. Double-check the street address, city, and state.');
+    throw _geoError('NOT_FOUND', 'Address not found');
   }
 
   /* ── FIPS LOOKUP: FCC Area API ───────────────────────── */
@@ -936,12 +951,9 @@ async function startResearch() {
   } catch (err) {
     _setStep('geocode', 'error');
     _research.isRunning = false;
-    console.error('[Research] Geocoding failed:', err.message);
-    _showResearchError(
-      err.message.includes('not found') || err.message.includes('Double-check')
-        ? 'Address not found. Double-check the street address, city, and state.'
-        : 'Could not reach geocoding service. Check your internet connection and try again.'
-    );
+    console.warn('[Research] Geocoding failed:', err.message);
+    // Anything that is not a confirmed "no match" (timeouts, HTTP/network errors) is unreachable
+    _showResearchError(err.code === 'NOT_FOUND' ? GEOCODE_MESSAGES.NOT_FOUND : GEOCODE_MESSAGES.UNREACHABLE);
     return;
   }
 
@@ -1047,11 +1059,27 @@ function applyResearchScores() {
  * Remove all auto-scores from state (keep manual scores intact).
  */
 function clearAutoScores() {
+  // Research likelihoods the user has not changed still carry isAuto=true;
+  // changing a likelihood by hand clears isAuto, so those values are kept.
+  const autoIds = Object.keys(state.scores).filter(id => state.scores[id]?.isAuto && (parseInt(state.scores[id].l) || 0) > 0);
+  if (autoIds.length === 0 && !state.researchReport) {
+    _clearAutoScoresNow();
+    return;
+  }
+  const msg = autoIds.length
+    ? `Research a different address? This removes the ${autoIds.length} likelihood estimate${autoIds.length === 1 ? '' : 's'} from the current address research. Impact ratings, notes, and any likelihood you changed yourself are kept.`
+    : 'Research a different address? This clears the current research results. Your own ratings and notes are kept.';
+  showConfirm(msg, _clearAutoScoresNow);
+}
+
+function _clearAutoScoresNow() {
   Object.keys(state.scores).forEach(id => {
     if (state.scores[id]?.isAuto) {
       state.scores[id].l      = 0;
       state.scores[id].isAuto = false;
-      state.scores[id].notes  = '';
+      if (typeof state.scores[id].notes === 'string' && state.scores[id].notes.startsWith('[Auto-scored from:')) {
+        state.scores[id].notes = '';
+      }
     }
   });
   state.researchReport    = null;
