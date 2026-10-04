@@ -2,11 +2,11 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="description" content="World Aware Neighborhood & Household Risk Assessment Tool" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="description" content="World Aware Emergency Planning: household and neighborhood risk assessment tool" />
 
   <!-- PWA Meta -->
-  <meta name="theme-color" content="#1A1A2E" />
+  <meta name="theme-color" content="#4D0000" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="WA Risk" />
@@ -14,62 +14,155 @@
   <link rel="manifest" href="manifest.json" />
 
   <title>World Aware Risk Assessment</title>
+  <link rel="preload" href="fonts/poppins-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="preload" href="fonts/space-grotesk-latin-700-normal.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="stylesheet" href="fonts.css" />
+  <link rel="stylesheet" href="tokens.css" />
   <link rel="stylesheet" href="styles.css" />
-
-  <!-- Feather Icons (optional icon library) -->
-  <script src="https://unpkg.com/feather-icons@4.29.0/dist/feather.min.js" defer></script>
 </head>
-<body>
+<body data-screen="home">
+<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+<symbol id="i-house" viewBox="0 0 24 24"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8" /> <path d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></symbol>
+<symbol id="i-map" viewBox="0 0 24 24"><path d="M14.106 5.553a2 2 0 0 0 1.788 0l3.659-1.83A1 1 0 0 1 21 4.619v12.764a1 1 0 0 1-.553.894l-4.553 2.277a2 2 0 0 1-1.788 0l-4.212-2.106a2 2 0 0 0-1.788 0l-3.659 1.83A1 1 0 0 1 3 19.381V6.618a1 1 0 0 1 .553-.894l4.553-2.277a2 2 0 0 1 1.788 0z" /> <path d="M15 5.764v15" /> <path d="M9 3.236v15" /></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><path d="m21 21-4.34-4.34" /> <circle cx="11" cy="11" r="8" /></symbol>
+<symbol id="i-clipboard-list" viewBox="0 0 24 24"><rect width="8" height="4" x="8" y="2" rx="1" ry="1" /> <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" /> <path d="M12 11h4" /> <path d="M12 16h4" /> <path d="M8 11h.01" /> <path d="M8 16h.01" /></symbol>
+<symbol id="i-chart-column" viewBox="0 0 24 24"><path d="M3 3v16a2 2 0 0 0 2 2h16" /> <path d="M18 17V9" /> <path d="M13 17V5" /> <path d="M8 17v-3" /></symbol>
+<symbol id="i-book-open" viewBox="0 0 24 24"><path d="M12 5v16" /> <path d="M20.001 19A2 2 0 0022 17V5a2 2 0 00-1.999-2L16 3.002A5 5 0 0012 5a5 5 0 00-4-2H4a2 2 0 00-2 2v12a2 2 0 001.999 2H8a5 5 0 014 2 5 5 0 014-2z" /></symbol>
+<symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" /> <path d="M12 16v-4" /> <path d="M12 8h.01" /></symbol>
+<symbol id="i-arrow-left" viewBox="0 0 24 24"><path d="m12 19-7-7 7-7" /> <path d="M19 12H5" /></symbol>
+<symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></symbol>
+<symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18" /> <path d="m6 6 12 12" /></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5" /></symbol>
+<symbol id="i-pencil" viewBox="0 0 24 24"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" /> <path d="m15 5 4 4" /></symbol>
+<symbol id="i-map-pin" viewBox="0 0 24 24"><path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0" /> <circle cx="12" cy="10" r="3" /></symbol>
+<symbol id="i-file-text" viewBox="0 0 24 24"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" /> <path d="M14 2v5a1 1 0 0 0 1 1h5" /> <path d="M10 9H8" /> <path d="M16 13H8" /> <path d="M16 17H8" /></symbol>
+<symbol id="i-file-down" viewBox="0 0 24 24"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" /> <path d="M14 2v5a1 1 0 0 0 1 1h5" /> <path d="M12 18v-6" /> <path d="m9 15 3 3 3-3" /></symbol>
+<symbol id="i-share" viewBox="0 0 24 24"><path d="M12 2v13" /> <path d="m16 6-4-4-4 4" /> <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" /></symbol>
+<symbol id="i-message-square" viewBox="0 0 24 24"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z" /></symbol>
+<symbol id="i-rotate-ccw" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /> <path d="M3 3v5h5" /></symbol>
+<symbol id="i-external-link" viewBox="0 0 24 24"><path d="M15 3h6v6" /> <path d="M10 14 21 3" /> <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /></symbol>
+<symbol id="i-save" viewBox="0 0 24 24"><path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" /> <path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7" /> <path d="M7 3v4a1 1 0 0 0 1 1h7" /></symbol>
+<symbol id="i-download" viewBox="0 0 24 24"><path d="M12 15V3" /> <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /> <path d="m7 10 5 5 5-5" /></symbol>
+<symbol id="i-trash-2" viewBox="0 0 24 24"><path d="M10 11v6" /> <path d="M14 11v6" /> <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /> <path d="M3 6h18" /> <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></symbol>
+<symbol id="i-triangle-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" /> <path d="M12 9v4" /> <path d="M12 17h.01" /></symbol>
+<symbol id="i-circle-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" /> <line x1="12" x2="12" y1="8" y2="12" /> <line x1="12" x2="12.01" y1="16" y2="16" /></symbol>
+<symbol id="i-circle-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" /> <path d="m16 9-5.5 5.5L8 12" /></symbol>
+<symbol id="i-circle-dashed" viewBox="0 0 24 24"><path d="M10.1 2.182a10 10 0 0 1 3.8 0" /> <path d="M13.9 21.818a10 10 0 0 1-3.8 0" /> <path d="M17.609 3.721a10 10 0 0 1 2.69 2.7" /> <path d="M2.182 13.9a10 10 0 0 1 0-3.8" /> <path d="M20.279 17.609a10 10 0 0 1-2.7 2.69" /> <path d="M21.818 10.1a10 10 0 0 1 0 3.8" /> <path d="M3.721 6.391a10 10 0 0 1 2.7-2.69" /> <path d="M6.391 20.279a10 10 0 0 1-2.69-2.7" /></symbol>
+<symbol id="i-cloud-lightning" viewBox="0 0 24 24"><path d="M6 16.326A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 .5 8.973" /> <path d="m13 12-3 5h4l-3 5" /></symbol>
+<symbol id="i-factory" viewBox="0 0 24 24"><path d="M12 16h.01" /> <path d="M16 16h.01" /> <path d="M3 19a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8.5a.5.5 0 0 0-.769-.422l-4.462 2.844A.5.5 0 0 1 15 10.5v-2a.5.5 0 0 0-.769-.422L9.77 10.922A.5.5 0 0 1 9 10.5V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2z" /> <path d="M8 16h.01" /></symbol>
+<symbol id="i-plug-zap" viewBox="0 0 24 24"><path d="M6.3 20.3a2.4 2.4 0 0 0 3.4 0L12 18l-6-6-2.3 2.3a2.4 2.4 0 0 0 0 3.4Z" /> <path d="m2 22 3-3" /> <path d="M7.5 13.5 10 11" /> <path d="M10.5 16.5 13 14" /> <path d="m18 3-4 4h6l-4 4" /></symbol>
+<symbol id="i-building-2" viewBox="0 0 24 24"><path d="M10 12h4" /> <path d="M10 8h4" /> <path d="M14 21v-3a2 2 0 0 0-4 0v3" /> <path d="M6 10H4a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-2" /> <path d="M6 21V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16" /></symbol>
+<symbol id="i-truck" viewBox="0 0 24 24"><path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2" /> <path d="M15 18H9" /> <path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14" /> <circle cx="17" cy="18" r="2" /> <circle cx="7" cy="18" r="2" /></symbol>
+<symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /> <path d="M16 3.128a4 4 0 0 1 0 7.744" /> <path d="M22 21v-2a4 4 0 0 0-3-3.87" /> <circle cx="9" cy="7" r="4" /></symbol>
+<symbol id="i-waves" viewBox="0 0 24 24"><path d="M2 12q2.5 2 5 0t5 0 5 0 5 0" /> <path d="M2 19q2.5 2 5 0t5 0 5 0 5 0" /> <path d="M2 5q2.5 2 5 0t5 0 5 0 5 0" /></symbol>
+<symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2" /></symbol>
+<symbol id="i-flame" viewBox="0 0 24 24"><path d="M12 3q1 4 4 6.5t3 5.5a1 1 0 0 1-14 0 5 5 0 0 1 1-3 1 1 0 0 0 5 0c0-2-1.5-3-1.5-5q0-2 2.5-4" /></symbol>
+<symbol id="i-wind" viewBox="0 0 24 24"><path d="M12.8 19.6A2 2 0 1 0 14 16H2" /> <path d="M17.5 8a2.5 2.5 0 1 1 2 4H2" /> <path d="M9.8 4.4A2 2 0 1 1 11 8H2" /></symbol>
+<symbol id="i-mountain" viewBox="0 0 24 24"><path d="m8 3 4 8 5-5 5 15H2L8 3z" /></symbol>
+<symbol id="i-loader-circle" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-6.219-8.56" /></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14" /> <path d="M12 5v14" /></symbol>
+<symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14" /></symbol>
+<symbol id="i-list-checks" viewBox="0 0 24 24"><path d="M13 5h8" /> <path d="M13 12h8" /> <path d="M13 19h8" /> <path d="m3 17 2 2 4-4" /> <path d="m3 7 2 2 4-4" /></symbol>
+</svg>
+
+  <a class="skip-link" href="#app">Skip to content</a>
 
   <!-- ============================================================
-       INSTALL BANNER (shown on first visit when installable)
+       INSTALL BANNER (shown when the browser offers installation)
   ============================================================ -->
-  <div id="install-banner" class="install-banner hidden">
+  <div id="install-banner" class="install-banner hidden" role="region" aria-label="Install">
+    <svg class="i" aria-hidden="true" focusable="false"><use href="#i-info"/></svg>
     <span>Add World Aware Risk Assessment to your home screen for offline use.</span>
-    <button id="install-btn" class="btn-install">Install</button>
-    <button id="install-dismiss" class="btn-dismiss" aria-label="Dismiss">✕</button>
+    <button id="install-btn" class="btn btn-secondary btn-small">Install</button>
+    <button id="install-dismiss" class="btn-icon" aria-label="Dismiss"><svg class="i" aria-hidden="true" focusable="false"><use href="#i-x"/></svg></button>
   </div>
 
-  <!-- ============================================================
-       MAIN APP WRAPPER
-  ============================================================ -->
-  <div id="app">
+  <div class="shell">
+
+    <!-- ============================================================
+         NAVIGATION: bottom bar on phones, left rail from 1024px
+    ============================================================ -->
+    <nav id="bottom-nav" class="bottom-nav" aria-label="Main">
+      <a class="rail-logo" href="https://beworldaware.com" target="_blank" rel="noopener" aria-label="World Aware, Emergency Planning (opens beworldaware.com)">
+        <img src="assets/wa-lockup-full-color.png" width="780" height="180" alt="World Aware, Emergency Planning" />
+      </a>
+      <div class="nav-items">
+        <button class="nav-item active" onclick="showScreen('home')" data-screen="home" aria-current="page">
+          <svg class="i" aria-hidden="true" focusable="false"><use href="#i-house"/></svg>
+          <span>Home</span>
+        </button>
+        <button class="nav-item" onclick="showScreen('assessment')" data-screen="assessment">
+          <svg class="i" aria-hidden="true" focusable="false"><use href="#i-clipboard-list"/></svg>
+          <span>Assess</span>
+        </button>
+        <button class="nav-item" onclick="showScreen('results')" data-screen="results">
+          <svg class="i" aria-hidden="true" focusable="false"><use href="#i-chart-column"/></svg>
+          <span>Results</span>
+        </button>
+        <button class="nav-item nav-item-wide" onclick="showScreen('report')" data-screen="report">
+          <svg class="i" aria-hidden="true" focusable="false"><use href="#i-file-text"/></svg>
+          <span>Report</span>
+        </button>
+        <button class="nav-item" onclick="showScreen('reference')" data-screen="reference">
+          <svg class="i" aria-hidden="true" focusable="false"><use href="#i-book-open"/></svg>
+          <span>Guide</span>
+        </button>
+        <button class="nav-item" onclick="showScreen('about')" data-screen="about">
+          <svg class="i" aria-hidden="true" focusable="false"><use href="#i-info"/></svg>
+          <span>About</span>
+        </button>
+      </div>
+      <p class="rail-note">Your assessment is saved on this device. No account needed.</p>
+    </nav>
+
+    <div class="main">
+
+      <!-- Phone header (the rail carries the logo from 1024px) -->
+      <header class="app-header">
+        <a href="https://beworldaware.com" target="_blank" rel="noopener" aria-label="World Aware, Emergency Planning (opens beworldaware.com)">
+          <img class="logo-color" src="assets/wa-lockup-full-color.png" width="780" height="180" alt="World Aware, Emergency Planning" />
+          <img class="logo-cream" src="assets/wa-lockup-reversed-cream.png" width="780" height="180" alt="" />
+        </a>
+      </header>
+
+      <main id="app" tabindex="-1">
 
     <!-- ========================================================
-         SCREEN 1 — HOME
+         SCREEN 1: HOME
     ======================================================== -->
-    <section id="screen-home" class="screen active">
-      <div class="home-container">
-        <div class="home-logo">
-          <span class="logo-text">WORLD AWARE</span>
-          <span class="logo-tagline">beworldaware.com</span>
+    <section id="screen-home" class="screen active" aria-labelledby="home-title">
+      <div class="hero">
+        <div class="hero-inner">
+          <h1 id="home-title" class="hero-title">Neighborhood &amp; household risk assessment</h1>
+          <p class="hero-intro">
+            Identify, score, and prioritize the disaster risks facing your household
+            and neighborhood. Takes 10–15 minutes. Your assessment is saved on this device.
+          </p>
+
+          <div class="home-buttons">
+            <button class="btn btn-amber btn-large" id="start-household-btn" onclick="startAssessment('household')">
+              <svg class="i" aria-hidden="true" focusable="false"><use href="#i-house"/></svg>
+              Start household assessment
+            </button>
+            <button class="btn btn-on-brand btn-large" id="start-neighborhood-btn" onclick="startAssessment('neighborhood')">
+              <svg class="i" aria-hidden="true" focusable="false"><use href="#i-map"/></svg>
+              Start neighborhood assessment
+            </button>
+          </div>
         </div>
 
-        <h1 class="home-title">Neighborhood &amp; Household<br>Risk Assessment</h1>
-
-        <p class="home-intro">
-          Identify, score, and prioritize the disaster risks facing your household
-          and neighborhood. Takes 10–15 minutes. Your assessment is saved on this device.
-        </p>
-
-        <div class="home-buttons">
-          <button class="btn-primary btn-large" id="start-household-btn" onclick="startAssessment('household')">
-            <i data-feather="home"></i>
-            Start Household Assessment
-          </button>
-          <button class="btn-secondary btn-large" id="start-neighborhood-btn" onclick="startAssessment('neighborhood')">
-            <i data-feather="map"></i>
-            Start Neighborhood Assessment
-          </button>
+        <p class="scale-note">Risk score bands. Each hazard scores likelihood times impact, from 1 to 25.</p>
+        <div class="scale-strip" role="group" aria-label="How risk scores are banded">
+          <div class="scale-cell s-low"><strong>Low</strong><span>1 to 5</span></div>
+          <div class="scale-cell s-moderate"><strong>Moderate</strong><span>6 to 9</span></div>
+          <div class="scale-cell s-high"><strong>High</strong><span>10 to 14</span></div>
+          <div class="scale-cell s-critical"><strong>Critical</strong><span>15 to 25</span></div>
         </div>
-
-        <p class="home-program-text">
-          Part of the World Aware Neighborhood Resiliency Program
-        </p>
       </div>
 
-      <!-- Address entry + area research (formerly the Research screen) -->
-      <div id="home-address-card" class="home-address-card">
+      <div class="content">
+      <!-- Address entry + area research -->
+      <div id="home-address-card" class="sheet home-address-card">
         <div class="address-card-head">
           <h2 class="address-card-title">Start with your address</h2>
           <span id="address-type-pill" class="address-type-pill">Household assessment</span>
@@ -79,38 +172,46 @@
           You then rate the impact for your situation.
         </p>
 
-        <div class="research-privacy">
-          <strong>Privacy:</strong> Your address is sent to public mapping and government data services
-          (OpenStreetMap, FCC, FEMA, USGS, EPA, NOAA), some through third-party relay servers.
-          World Aware does not receive, store, or log your address. Your results stay in this browser.
+        <div class="alert alert-info research-privacy">
+          <svg class="i" aria-hidden="true" focusable="false"><use href="#i-info"/></svg>
+          <div>
+            <p class="alert-title">Privacy</p>
+            <p>Your address is sent to public mapping and government data services
+            (OpenStreetMap, FCC, FEMA, USGS, EPA, NOAA), some through third-party relay servers.
+            World Aware does not receive, store, or log your address. Your results stay in this browser.</p>
+          </div>
         </div>
 
         <!-- Address input section -->
         <div id="research-input-section" class="research-input-section">
-          <div class="research-input-wrap">
-            <label class="research-input-label" for="research-address-input">Street address</label>
+          <div class="field">
+            <label class="field-label" for="research-address-input">Street address</label>
             <input
               type="text"
               id="research-address-input"
-              class="research-address-input"
+              class="research-address-input input"
               placeholder="123 Main Street, Boulder CO 80302"
               autocomplete="street-address"
               inputmode="text"
+              aria-describedby="research-address-hint"
             />
+            <p class="field-help" id="research-address-hint">Include city and state (or ZIP) for best results. U.S. addresses only.</p>
           </div>
-          <button class="btn-primary btn-large btn-block" id="research-run-btn" onclick="startResearch()">
-            <i data-feather="search"></i> Research This Address
-          </button>
-          <p class="research-input-hint">Include city and state (or ZIP) for best results. U.S. addresses only.</p>
-          <button class="btn-link" id="skip-research-btn" onclick="skipResearch()">
-            Skip — assess without an address lookup
-          </button>
+          <div class="research-input-actions">
+            <button class="btn btn-primary btn-large" id="research-run-btn" onclick="startResearch()">
+              <svg class="i" aria-hidden="true" focusable="false"><use href="#i-search"/></svg>
+              Research this address
+            </button>
+            <button class="btn btn-ghost" id="skip-research-btn" onclick="skipResearch()">
+              Skip the lookup and assess without an address
+            </button>
+          </div>
         </div>
 
         <!-- Loading state -->
-        <div id="research-loading" class="research-loading hidden">
+        <div id="research-loading" class="research-loading hidden" role="status" aria-live="polite">
           <div id="research-steps-list" class="research-steps-list"></div>
-          <p class="research-timing">This usually takes 10–20 seconds…</p>
+          <p class="research-timing">This usually takes 10–20 seconds.</p>
         </div>
 
         <!-- Results / report -->
@@ -119,73 +220,85 @@
         </div>
       </div>
 
-      <div class="home-container home-container-tail">
-        <!-- Quick nav to saved assessments -->
-        <div id="home-saved-list" class="home-saved hidden">
-          <h3>Saved Assessments</h3>
-          <div id="home-saved-items"></div>
-        </div>
+      <!-- Quick nav to saved assessments -->
+      <div id="home-saved-list" class="home-saved hidden">
+        <h2 class="section-title">Saved assessments</h2>
+        <div id="home-saved-items" class="saved-list"></div>
+      </div>
       </div>
     </section>
 
     <!-- ========================================================
-         SCREEN 2 — ASSESSMENT
+         SCREEN 2: ASSESSMENT
     ======================================================== -->
-    <section id="screen-assessment" class="screen">
-
-      <!-- Assessment Header -->
+    <section id="screen-assessment" class="screen" aria-labelledby="assessment-type-label">
       <div class="assessment-header">
-        <div class="assessment-header-top">
+        <div class="page-head">
           <button class="btn-icon" onclick="goHome()" aria-label="Back to Home">
-            <i data-feather="arrow-left"></i>
+            <svg class="i" aria-hidden="true" focusable="false"><use href="#i-arrow-left"/></svg>
           </button>
-          <span class="logo-text logo-small">WORLD AWARE</span>
+          <h2 id="assessment-type-label">Household assessment</h2>
           <button class="btn-icon" onclick="showScreen('results')" aria-label="View Results">
-            <i data-feather="bar-chart-2"></i>
+            <svg class="i" aria-hidden="true" focusable="false"><use href="#i-chart-column"/></svg>
           </button>
         </div>
 
-        <div class="assessment-meta-bar">
-          <h2 id="assessment-type-label">Household Assessment</h2>
-          <span id="progress-indicator" class="progress-badge">0 of 62 scored</span>
+        <div class="progress-wrap">
+          <span id="progress-indicator" class="progress-badge">0 of 62 hazards scored</span>
+          <div class="progress-bar" aria-hidden="true"><i id="progress-fill"></i></div>
         </div>
 
         <!-- Optional header fields -->
         <div class="assessment-info-fields">
-          <input type="text" id="field-location" class="info-input" placeholder="Address / Location (optional)" />
+          <div class="field">
+            <label class="field-label" for="field-location">Address or location <span class="opt">(optional)</span></label>
+            <input type="text" id="field-location" class="input" placeholder="1600 Pearl Street, Boulder CO 80302" autocomplete="off" />
+          </div>
           <div class="info-row">
-            <input type="date" id="field-date" class="info-input info-half" />
-            <input type="text" id="field-household-size" class="info-input info-half" placeholder="Household size" />
+            <div class="field">
+              <label class="field-label" for="field-date">Date</label>
+              <input type="date" id="field-date" class="input" />
+            </div>
+            <div class="field">
+              <label class="field-label" for="field-household-size">Household size <span class="opt">(optional)</span></label>
+              <input type="text" id="field-household-size" class="input" placeholder="4 people, 1 dog" autocomplete="off" />
+            </div>
           </div>
         </div>
 
         <!-- Neighborhood household names (shown only in neighborhood mode) -->
         <div id="neighborhood-hh-names" class="neighborhood-names hidden">
-          <input type="text" id="hh1-name" class="info-input" placeholder="Household 1 Name" />
-          <input type="text" id="hh2-name" class="info-input" placeholder="Household 2 Name" />
+          <div class="field">
+            <label class="field-label" for="hh1-name">First household name</label>
+            <input type="text" id="hh1-name" class="input" placeholder="Household 1" />
+          </div>
+          <div class="field">
+            <label class="field-label" for="hh2-name">Second household name</label>
+            <input type="text" id="hh2-name" class="input" placeholder="Household 2" />
+          </div>
         </div>
       </div>
 
-      <!-- Hazard Categories + Rows (generated by JS) -->
+      <!-- Hazard categories + rows (generated by JS) -->
       <div id="hazard-list" class="hazard-list"></div>
 
-      <!-- Floating Results Button -->
-      <button id="float-results-btn" class="float-results-btn hidden" onclick="showScreen('results')">
-        <i data-feather="bar-chart-2"></i> View Results
+      <!-- Floating results button -->
+      <button id="float-results-btn" class="btn btn-primary float-results-btn hidden" onclick="showScreen('results')">
+        <svg class="i" aria-hidden="true" focusable="false"><use href="#i-chart-column"/></svg> View results
       </button>
     </section>
 
     <!-- ========================================================
-         SCREEN 3 — RESULTS
+         SCREEN 3: RESULTS
     ======================================================== -->
-    <section id="screen-results" class="screen">
-      <div class="results-header">
+    <section id="screen-results" class="screen" aria-labelledby="results-title">
+      <div class="page-head">
         <button class="btn-icon" onclick="showScreen('assessment')" aria-label="Back">
-          <i data-feather="arrow-left"></i>
+          <svg class="i" aria-hidden="true" focusable="false"><use href="#i-arrow-left"/></svg>
         </button>
-        <h2>Your Risk Priority List</h2>
+        <h2 id="results-title">Your risk priority list</h2>
         <button class="btn-icon" onclick="showScreen('home')" aria-label="Home">
-          <i data-feather="home"></i>
+          <svg class="i" aria-hidden="true" focusable="false"><use href="#i-house"/></svg>
         </button>
       </div>
 
@@ -197,48 +310,51 @@
 
       <!-- Action buttons -->
       <div class="results-actions">
-        <button class="btn-primary" id="results-pdf-btn" onclick="sharePdf(this)">
-          <i data-feather="share"></i> PDF / Share
+        <button class="btn btn-primary" id="results-pdf-btn" onclick="sharePdf(this)">
+          <svg class="i" aria-hidden="true" focusable="false"><use href="#i-share"/></svg> PDF / Share
         </button>
-        <button class="btn-secondary" id="results-report-btn" onclick="showScreen('report')">
-          <i data-feather="file-text"></i> View / Edit Report
+        <button class="btn btn-secondary" id="results-report-btn" onclick="showScreen('report')">
+          <svg class="i" aria-hidden="true" focusable="false"><use href="#i-file-text"/></svg> View / edit report
         </button>
-        <button class="btn-secondary" id="results-share-btn" onclick="shareResults()">
-          <i data-feather="message-square"></i> Share Text Summary
+        <button class="btn btn-secondary" id="results-share-btn" onclick="shareResults()">
+          <svg class="i" aria-hidden="true" focusable="false"><use href="#i-message-square"/></svg> Share text summary
         </button>
-        <button class="btn-ghost" onclick="showScreen('assessment')">
-          <i data-feather="edit-2"></i> Back to Assessment
+        <button class="btn btn-ghost" onclick="showScreen('assessment')">
+          <svg class="i" aria-hidden="true" focusable="false"><use href="#i-pencil"/></svg> Back to assessment
         </button>
       </div>
     </section>
 
     <!-- ========================================================
-         SCREEN 4 — REFERENCE GUIDE
+         SCREEN 4: REFERENCE GUIDE
     ======================================================== -->
-    <section id="screen-reference" class="screen">
-      <div class="ref-header">
-        <h2><span class="logo-text">WORLD AWARE</span> Reference Guide</h2>
+    <section id="screen-reference" class="screen" aria-labelledby="guide-title">
+      <div class="page-head page-head-plain">
+        <h2 id="guide-title">Reference guide</h2>
       </div>
 
       <div class="ref-content">
-        <h3>Likelihood Scale</h3>
+        <h3>Likelihood scale</h3>
+        <div class="table-wrap">
         <table class="ref-table">
           <thead>
-            <tr><th>Score</th><th>Label</th><th>Frequency</th></tr>
+            <tr><th scope="col">Score</th><th scope="col">Label</th><th scope="col">Frequency</th></tr>
           </thead>
           <tbody>
-            <tr><td class="score-cell">1</td><td><strong>Extremely Unlikely</strong></td><td>Expected once every 50+ years</td></tr>
+            <tr><td class="score-cell">1</td><td><strong>Extremely unlikely</strong></td><td>Expected once every 50+ years</td></tr>
             <tr><td class="score-cell">2</td><td><strong>Unlikely</strong></td><td>Expected once every 20–50 years</td></tr>
             <tr><td class="score-cell">3</td><td><strong>Possible</strong></td><td>Expected once every 5–20 years</td></tr>
             <tr><td class="score-cell">4</td><td><strong>Likely</strong></td><td>Expected once every 1–5 years</td></tr>
-            <tr><td class="score-cell">5</td><td><strong>Almost Certain</strong></td><td>Annually or more</td></tr>
+            <tr><td class="score-cell">5</td><td><strong>Almost certain</strong></td><td>Annually or more</td></tr>
           </tbody>
         </table>
+        </div>
 
-        <h3>Impact Scale</h3>
+        <h3>Impact scale</h3>
+        <div class="table-wrap">
         <table class="ref-table">
           <thead>
-            <tr><th>Score</th><th>Label</th><th>Description</th></tr>
+            <tr><th scope="col">Score</th><th scope="col">Label</th><th scope="col">Description</th></tr>
           </thead>
           <tbody>
             <tr><td class="score-cell">1</td><td><strong>Negligible</strong></td><td>Minor inconvenience, resolved in hours</td></tr>
@@ -248,74 +364,81 @@
             <tr><td class="score-cell">5</td><td><strong>Catastrophic</strong></td><td>Life-threatening, infrastructure failure, years to recover</td></tr>
           </tbody>
         </table>
-
-        <h3>Risk Score Matrix (Likelihood × Impact)</h3>
-        <div class="matrix-container">
-          <table class="risk-matrix">
-            <thead>
-              <tr>
-                <th class="matrix-corner">L \ I</th>
-                <th>1</th><th>2</th><th>3</th><th>4</th><th>5</th>
-              </tr>
-            </thead>
-            <tbody id="risk-matrix-body">
-              <!-- Filled by JS -->
-            </tbody>
-          </table>
-          <div class="matrix-labels">
-            <span class="matrix-y-label">← Likelihood</span>
-            <span class="matrix-x-label">Impact →</span>
-          </div>
         </div>
 
-        <div class="risk-legend">
-          <div class="legend-item critical">CRITICAL (15–25)</div>
-          <div class="legend-item high">HIGH (10–14)</div>
-          <div class="legend-item medium">MEDIUM (6–9)</div>
-          <div class="legend-item low">LOW (1–5)</div>
+        <h3>Risk score matrix (likelihood × impact)</h3>
+        <div class="matrix-layout">
+          <div class="matrix-container">
+            <div class="matrix-y-title" aria-hidden="true">Likelihood</div>
+            <div class="matrix-grid-wrap">
+              <table class="risk-matrix" aria-label="Risk score matrix: likelihood by impact">
+                <thead>
+                  <tr>
+                    <th class="matrix-corner"><span class="sr-only">Likelihood and impact</span></th>
+                    <th scope="col">1</th><th scope="col">2</th><th scope="col">3</th><th scope="col">4</th><th scope="col">5</th>
+                  </tr>
+                </thead>
+                <tbody id="risk-matrix-body">
+                  <!-- Filled by JS -->
+                </tbody>
+              </table>
+              <div class="matrix-x-title" aria-hidden="true">Impact</div>
+            </div>
+          </div>
+
+          <div class="matrix-side">
+            <div class="risk-legend">
+              <div class="legend-item"><span class="badge b-critical"><span class="meter" aria-hidden="true"><i class="f"></i><i class="f"></i><i class="f"></i><i class="f"></i></span>Critical</span><span class="legend-text"><strong>15 to 25</strong> Act now</span></div>
+              <div class="legend-item"><span class="badge b-high"><span class="meter" aria-hidden="true"><i class="f"></i><i class="f"></i><i class="f"></i><i></i></span>High</span><span class="legend-text"><strong>10 to 14</strong> Write a specific plan</span></div>
+              <div class="legend-item"><span class="badge b-medium"><span class="meter" aria-hidden="true"><i class="f"></i><i class="f"></i><i></i><i></i></span>Moderate</span><span class="legend-text"><strong>6 to 9</strong> Cover in general preparedness</span></div>
+              <div class="legend-item"><span class="badge b-low"><span class="meter" aria-hidden="true"><i class="f"></i><i></i><i></i><i></i></span>Low</span><span class="legend-text"><strong>1 to 5</strong> Monitor</span></div>
+            </div>
+            <p id="matrix-readout" class="matrix-readout" aria-live="polite">Select a cell to read its score. A dot marks cells that hold hazards you have scored.</p>
+          </div>
         </div>
       </div>
     </section>
 
     <!-- ========================================================
-         SCREEN 5 — ABOUT / SAVE & EXPORT
+         SCREEN 5: ABOUT / SAVE & EXPORT
     ======================================================== -->
-    <section id="screen-about" class="screen">
-      <div class="about-header">
-        <span class="logo-text logo-large">WORLD AWARE</span>
-        <p class="about-program">Neighborhood Resiliency Program</p>
-        <a href="https://beworldaware.com" target="_blank" rel="noopener" class="about-link">beworldaware.com</a>
-      </div>
-
-      <div class="about-content">
+    <section id="screen-about" class="screen" aria-labelledby="about-title">
+      <div class="about-band">
+        <div class="about-inner">
+        <img src="assets/wa-lockup-reversed-cream.png" width="780" height="180" alt="World Aware, Emergency Planning" class="about-logo" />
+        <h2 id="about-title" class="sr-only">About World Aware</h2>
         <p class="about-description">
           This tool is part of the World Aware Neighborhood Resiliency Program.
           Henry offers private household and neighborhood risk assessment consultations.
           Fee-for-service; sliding scale for low-income households.
         </p>
-
-        <a href="https://beworldaware.com" target="_blank" rel="noopener" class="btn-primary btn-contact">
-          <i data-feather="external-link"></i> Contact / Learn More
-        </a>
+        <div class="about-actions">
+          <a href="https://beworldaware.com" target="_blank" rel="noopener" class="btn btn-amber btn-contact">
+            <svg class="i" aria-hidden="true" focusable="false"><use href="#i-external-link"/></svg> Contact / learn more
+          </a>
+          <a href="https://beworldaware.com" target="_blank" rel="noopener" class="about-link">beworldaware.com</a>
+        </div>
+        </div>
       </div>
 
+      <div class="content">
       <div class="save-export-section">
-        <h3>Save &amp; Export</h3>
+        <h3 class="section-title">Save &amp; export</h3>
 
         <div class="save-actions">
-          <button class="btn-primary" onclick="saveAssessment()">
-            <i data-feather="save"></i> Save Assessment
+          <button class="btn btn-primary" onclick="saveAssessment()">
+            <svg class="i" aria-hidden="true" focusable="false"><use href="#i-save"/></svg> Save assessment
           </button>
-          <button class="btn-secondary" onclick="exportJSON()">
-            <i data-feather="download"></i> Export as JSON
+          <button class="btn btn-secondary" onclick="exportJSON()">
+            <svg class="i" aria-hidden="true" focusable="false"><use href="#i-download"/></svg> Export as JSON
           </button>
-          <button class="btn-danger" onclick="clearAllData()">
-            <i data-feather="trash-2"></i> Clear All Data
+          <button class="btn btn-danger" onclick="clearAllData()">
+            <svg class="i" aria-hidden="true" focusable="false"><use href="#i-trash-2"/></svg> Clear all data
           </button>
         </div>
 
         <div id="saved-assessments-section">
-          <h4>Saved Assessments</h4>
+          <h4>Saved assessments</h4>
           <div id="saved-assessments-list" class="saved-list">
             <p class="empty-state">No saved assessments yet.</p>
           </div>
@@ -323,31 +446,32 @@
       </div>
 
       <div class="about-version">
-        <p>World Aware Risk Assessment v2.0</p>
+        <p>World Aware Risk Assessment v2.1</p>
         <p>Data stored locally on your device. No account required.</p>
+      </div>
       </div>
     </section>
 
     <!-- ========================================================
-         SCREEN 6 — REPORT (editable, printable, PDF)
+         SCREEN 6: REPORT (editable, printable, PDF)
     ======================================================== -->
-    <section id="screen-report" class="screen">
+    <section id="screen-report" class="screen" aria-labelledby="report-title">
       <div class="report-toolbar">
-        <div class="report-toolbar-top">
+        <div class="page-head">
           <button class="btn-icon" onclick="showScreen('results')" aria-label="Back to Results">
-            <i data-feather="arrow-left"></i>
+            <svg class="i" aria-hidden="true" focusable="false"><use href="#i-arrow-left"/></svg>
           </button>
-          <h2>Report</h2>
+          <h2 id="report-title">Report</h2>
           <button class="btn-icon" onclick="showScreen('home')" aria-label="Home">
-            <i data-feather="home"></i>
+            <svg class="i" aria-hidden="true" focusable="false"><use href="#i-house"/></svg>
           </button>
         </div>
         <div class="report-toolbar-actions">
-          <button class="btn-primary btn-small" id="report-pdf-btn" onclick="sharePdf(this)">
-            <i data-feather="share"></i> PDF / Share
+          <button class="btn btn-primary btn-small" id="report-pdf-btn" onclick="sharePdf(this)">
+            <svg class="i" aria-hidden="true" focusable="false"><use href="#i-share"/></svg> PDF / Share
           </button>
-          <button class="btn-ghost-light btn-small" id="report-reset-btn" onclick="resetReportEdits()">
-            <i data-feather="rotate-ccw"></i> Reset edits
+          <button class="btn btn-ghost btn-small" id="report-reset-btn" onclick="resetReportEdits()">
+            <svg class="i" aria-hidden="true" focusable="false"><use href="#i-rotate-ccw"/></svg> Reset edits
           </button>
         </div>
         <p class="report-toolbar-hint">Tap any text with a dotted outline to edit it. Edits are saved on this device.</p>
@@ -356,43 +480,24 @@
       <article id="report-doc" class="report-doc"></article>
     </section>
 
-  </div><!-- end #app -->
+      </main>
 
-  <!-- ============================================================
-       BOTTOM NAVIGATION
-  ============================================================ -->
-  <nav id="bottom-nav" class="bottom-nav">
-    <button class="nav-item active" onclick="showScreen('home')" data-screen="home">
-      <i data-feather="home"></i>
-      <span>Home</span>
-    </button>
-    <button class="nav-item" onclick="showScreen('assessment')" data-screen="assessment">
-      <i data-feather="clipboard"></i>
-      <span>Assess</span>
-    </button>
-    <button class="nav-item" onclick="showScreen('results')" data-screen="results">
-      <i data-feather="bar-chart-2"></i>
-      <span>Results</span>
-    </button>
-    <button class="nav-item" onclick="showScreen('reference')" data-screen="reference">
-      <i data-feather="book-open"></i>
-      <span>Guide</span>
-    </button>
-    <button class="nav-item" onclick="showScreen('about')" data-screen="about">
-      <i data-feather="info"></i>
-      <span>About</span>
-    </button>
-  </nav>
+      <footer class="app-footer">
+        <p>World Aware Emergency Planning, Boulder, Colorado</p>
+        <a href="https://beworldaware.com" target="_blank" rel="noopener">beworldaware.com</a>
+      </footer>
+    </div><!-- end .main -->
+  </div><!-- end .shell -->
 
   <!-- ============================================================
        CONFIRMATION DIALOG (generic)
   ============================================================ -->
   <div id="confirm-dialog" class="dialog-overlay hidden">
-    <div class="dialog-box">
+    <div class="dialog-box" role="alertdialog" aria-modal="true" aria-labelledby="confirm-message">
       <p id="confirm-message">Are you sure?</p>
       <div class="dialog-buttons">
-        <button class="btn-danger" onclick="confirmAction()">Yes, Continue</button>
-        <button class="btn-ghost" onclick="cancelAction()">Cancel</button>
+        <button class="btn btn-danger" onclick="confirmAction()">Yes, continue</button>
+        <button class="btn btn-ghost" onclick="cancelAction()">Cancel</button>
       </div>
     </div>
   </div>
@@ -401,6 +506,7 @@
   <script src="js/apiConfig.js"></script>
   <script src="js/scoreMapper.js"></script>
   <script src="js/research.js"></script>
+  <script src="js/wa-pdf-theme.js"></script>
   <script src="js/report.js"></script>
 
   <!-- App Script -->

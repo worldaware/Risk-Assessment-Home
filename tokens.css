@@ -1,0 +1,214 @@
+/* =====================================================================
+   World Aware design tokens  ·  v1.0  ·  2026-10-04
+   Shared by plans.beworldaware.com (plan builder) and Risk-Assessment-Home.
+   Load order: fonts.css, then tokens.css, then the app stylesheet.
+   Every text/background pairing marked "AA" below was checked with
+   scripts/contrast_check.py; results are in contrast-report.txt.
+   ===================================================================== */
+
+:root {
+  /* ------------------------------------------------------------------
+     1. Brand constants (locked; never edit)
+     ------------------------------------------------------------------ */
+  --wa-maroon:   #4D0000;
+  --wa-amber:    #B97A14;
+  --wa-forest:   #2F4A3C;   /* accent only, never leads a screen */
+  --wa-cream:    #F7EDD8;
+  --wa-offwhite: #F9F4F4;
+
+  /* ------------------------------------------------------------------
+     2. Scales (derived in OKLCH from the brand hues; 800 = brand maroon)
+     ------------------------------------------------------------------ */
+  --maroon-50:  #FDF2F0;
+  --maroon-100: #FBE1DD;
+  --maroon-200: #F6C3BB;
+  --maroon-300: #E59B90;
+  --maroon-400: #CF6A5D;
+  --maroon-500: #AF3E32;
+  --maroon-600: #89221A;
+  --maroon-700: #6A0F0A;   /* hover/pressed for maroon buttons */
+  --maroon-800: #4D0000;   /* brand */
+  --maroon-900: #350302;
+
+  --amber-50:  #FFF5E9;
+  --amber-100: #FFE7C7;
+  --amber-200: #FDCE95;
+  --amber-300: #EDB161;
+  --amber-400: #D89534;
+  --amber-500: #B97A14;    /* brand; graphics, rules, focus ring. NOT body text on light (3.6:1) */
+  --amber-600: #956211;    /* amber text on white/off-white: 5.2 / 4.8 AA */
+  --amber-700: #774F12;
+  --amber-800: #593B11;
+  --amber-900: #3D290E;
+
+  /* Neutrals: warm "stone", hue pulled toward cream, chroma kept low */
+  --stone-0:   #FFFDFB;
+  --stone-50:  #FAF6F3;
+  --stone-100: #F2EBE6;
+  --stone-200: #E4DCD6;
+  --stone-300: #CBC2BB;
+  --stone-400: #A69C95;
+  --stone-500: #837870;    /* placeholder / disabled text only (4.3:1 on white, large or non-essential) */
+  --stone-600: #665B54;    /* secondary text AA */
+  --stone-700: #4D433C;
+  --stone-800: #352C25;
+  --stone-900: #201913;    /* primary ink */
+
+  --forest-100: #E0F0E7;
+  --forest-300: #A2C0AF;
+  --forest-500: #577B68;
+  --forest-700: #2F4A3C;   /* brand */
+  --forest-800: #1D3328;
+
+  /* ------------------------------------------------------------------
+     3. Semantic tokens: apps reference ONLY these
+     ------------------------------------------------------------------ */
+  --color-bg:            var(--wa-offwhite);  /* page */
+  --color-surface:       #FFFFFF;             /* sheets, inputs */
+  --color-surface-sunk:  var(--stone-50);     /* table banding, wells */
+  --color-surface-warm:  var(--wa-cream);     /* callouts, selected rows, notes */
+  --color-surface-brand: var(--wa-maroon);    /* hero panels, cover, header band */
+
+  --color-text:          var(--stone-900);    /* 17.4:1 on white  AA */
+  --color-text-muted:    var(--stone-600);    /* 6.6:1 on white, 6.0 on off-white  AA */
+  --color-text-subtle:   var(--stone-500);    /* 4.3:1: captions >=14px bold or placeholders only */
+  --color-text-heading:  var(--wa-maroon);    /* 16.0:1 on white  AA */
+  --color-text-link:     var(--maroon-600);   /* 9.1:1 on white, underlined */
+  --color-text-accent:   var(--amber-600);    /* 5.2:1 on white  AA */
+  --color-text-on-brand: var(--wa-cream);     /* 13.7:1 on maroon  AA */
+  --color-text-on-brand-muted: #D9C3AE;       /* 9.4:1 on maroon  AA */
+
+  --color-border:        var(--stone-200);    /* hairlines between items */
+  --color-border-strong: var(--stone-400);    /* input outlines: 2.7:1 vs white; paired with 1.5px width */
+  --color-border-brand:  var(--wa-amber);     /* section rules, active indicators */
+
+  --color-primary:        var(--wa-maroon);
+  --color-primary-hover:  var(--maroon-700);
+  --color-primary-active: var(--maroon-900);
+  --color-on-primary:     var(--wa-cream);
+  --color-secondary:      var(--wa-amber);    /* fills/graphics only; text on amber uses --stone-900 (5.2:1) */
+  --color-accent:         var(--wa-forest);
+
+  --focus-ring: 0 0 0 2px var(--color-surface), 0 0 0 4px var(--wa-amber); /* amber 3.6:1 vs white: meets 3:1 non-text */
+
+  --color-success:     var(--forest-700);     /* text 9.7:1 */
+  --color-success-bg:  #E4F3EA;
+  --color-warning:     var(--amber-700);      /* text 7.2:1 */
+  --color-warning-bg:  #FFF3DB;
+  --color-danger:      #A12623;               /* text 7.5:1; always with icon + words */
+  --color-danger-bg:   #FFEFEC;
+  --color-info:        var(--stone-700);
+  --color-info-bg:     var(--stone-50);
+
+  /* ------------------------------------------------------------------
+     4. Risk scale: ONE ordinal warm ramp, light to dark.
+        Validated with the dataviz ordinal checks (monotone L, single hue
+        family <40deg, adjacent dE >=15 normal vision, >=14.5 protan/deutan).
+        Grayscale: #B4B4B4 / #838383 / #585858 / #343434, four distinct greys.
+        Colour is never the only signal: every band also shows its word
+        label and the 4-segment level meter (1-4 segments filled).
+     ------------------------------------------------------------------ */
+  --risk-low:          #E4AB5F;   /* score 1-5   */
+  --risk-moderate:     #C76D14;   /* score 6-9   */
+  --risk-high:         #9B3700;   /* score 10-14 */
+  --risk-critical:     #631100;   /* score 15-25 */
+  --risk-unrated:      var(--stone-300);
+
+  /* Ink to print ON each band fill (all AA for text >=14px bold) */
+  --risk-low-ink:      var(--stone-900);  /* 8.5:1 */
+  --risk-moderate-ink: var(--stone-900);  /* 4.7:1 */
+  --risk-high-ink:     #FFFFFF;           /* 7.1:1 */
+  --risk-critical-ink: #FFFFFF;           /* 13.0:1 */
+
+  /* Pale tints for row/background washes behind a band (text stays --color-text) */
+  --risk-low-tint:      #FCF3E6;
+  --risk-moderate-tint: #FBEADB;
+  --risk-high-tint:     #F8E3D8;
+  --risk-critical-tint: #F6E0DC;
+
+  /* 5x5 heat map = the same four band fills (score = L x I, banded at
+     1-5 / 6-9 / 10-14 / 15-25), with the score printed in every cell.
+     No separate rainbow ramp. See components.md > Heat map. */
+
+  /* ------------------------------------------------------------------
+     5. Typography
+     ------------------------------------------------------------------ */
+  --font-display: "Space Grotesk", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --font-body:    "Poppins", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --font-numeric: var(--font-display);  /* scores, step numbers: tabular figures */
+
+  /* Major-third scale (1.25) on a 16px base */
+  --text-xs:   0.75rem;    /* 12  legal/footer only */
+  --text-sm:   0.875rem;   /* 14  meta, captions, chips */
+  --text-base: 1rem;       /* 16  body, inputs (never smaller on mobile inputs: iOS zoom) */
+  --text-md:   1.125rem;   /* 18  lead paragraph, card titles */
+  --text-lg:   1.25rem;    /* 20  h4 */
+  --text-xl:   1.5625rem;  /* 25  h3 */
+  --text-2xl:  1.953rem;   /* 31  h2 */
+  --text-3xl:  2.441rem;   /* 39  h1 (desktop) */
+  --text-4xl:  3.052rem;   /* 49  cover / hero only */
+
+  --weight-regular:  400;  /* Poppins body */
+  --weight-medium:   500;  /* Poppins UI labels, buttons; Space Grotesk h3-h4 */
+  --weight-semibold: 600;  /* Poppins emphasis, table headers */
+  --weight-bold:     700;  /* Space Grotesk h1-h2, scores */
+
+  --leading-tight: 1.1;    /* display */
+  --leading-snug:  1.25;   /* headings */
+  --leading-body:  1.6;    /* Poppins runs tall; 1.6 keeps paragraphs open */
+  --tracking-display: -0.02em;  /* Space Grotesk >= 25px */
+  --measure: 68ch;         /* max line length for prose */
+
+  /* ------------------------------------------------------------------
+     6. Space (4px base)
+     ------------------------------------------------------------------ */
+  --space-1: 0.25rem;  /* 4  */
+  --space-2: 0.5rem;   /* 8  */
+  --space-3: 0.75rem;  /* 12 */
+  --space-4: 1rem;     /* 16 */
+  --space-5: 1.5rem;   /* 24 */
+  --space-6: 2rem;     /* 32 */
+  --space-7: 3rem;     /* 48 */
+  --space-8: 4rem;     /* 64 */
+  --space-9: 6rem;     /* 96 */
+
+  /* ------------------------------------------------------------------
+     7. Shape: radius follows hierarchy (controls < sheets), not one value everywhere
+     ------------------------------------------------------------------ */
+  --radius-xs:   2px;    /* meter segments, heat-map cells */
+  --radius-sm:   4px;    /* buttons, inputs, badges */
+  --radius-md:   8px;    /* sheets, panels, dialogs */
+  --radius-pill: 999px;  /* step dots and toggles only */
+
+  --border-hair: 1px;
+  --border-control: 1.5px;
+  --border-rule: 3px;    /* amber section rule, active-tab indicator */
+
+  /* Restrained elevation: borders do most of the work */
+  --shadow-1: 0 1px 2px rgba(53, 3, 2, 0.06);                                   /* sheets */
+  --shadow-2: 0 2px 4px rgba(53, 3, 2, 0.06), 0 8px 24px rgba(53, 3, 2, 0.08);  /* menus, sticky bars, dialogs */
+
+  /* ------------------------------------------------------------------
+     8. Layout
+     ------------------------------------------------------------------ */
+  --gutter: 16px;              /* phone side gutter */
+  --gutter-desktop: 32px;
+  --header-h: 56px;            /* mobile app header */
+  --header-h-desktop: 64px;
+  --bottom-nav-h: 64px;        /* mobile only, plus env(safe-area-inset-bottom) */
+  --rail-w: 264px;             /* desktop side nav / wizard step rail */
+  --content-max: 760px;        /* forms and reading column */
+  --wide-max: 1200px;          /* app frame max on desktop */
+  --bp-tablet: 768px;          /* reference values for media queries */
+  --bp-desktop: 1024px;
+  --tap-min: 44px;             /* minimum hit target */
+
+  /* Motion: only in response to an action */
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur-fast: 0ms; --dur-base: 0ms; }
+}
