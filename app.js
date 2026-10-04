@@ -562,7 +562,12 @@ function showScreen(screenId, opts) {
   if (screenId === 'home')       initHomeScreen();
   if (screenId === 'assessment') initAssessmentUI();
   if (screenId === 'results')    renderResults();
-  if (screenId === 'report' && typeof renderReportView === 'function') renderReportView();
+  if (screenId === 'report' && typeof renderReportView === 'function') {
+    renderReportView();
+    // Preload the PDF library so PDF/print-fallback taps stay within the tap's
+    // permission window on iPhone (a slow first load can expire it).
+    if (typeof _loadJsPDF === 'function') _loadJsPDF().catch(() => {});
+  }
   if (screenId === 'about')      renderSavedList();
   if (screenId === 'reference')  buildRiskMatrix();
 

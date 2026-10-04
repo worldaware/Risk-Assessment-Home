@@ -260,12 +260,46 @@ function _bindReportEditing(doc) {
    PRINT
 --------------------------------------------------------------- */
 
+/**
+ * iPhone/iPad home-screen web apps (standalone mode) ignore window.print().
+ * There we hand the PDF to the share sheet, which offers Print.
+ */
+function _isIOSHomeScreenApp() {
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const standalone = window.navigator.standalone === true ||
+    (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+  return isIOS && standalone;
+}
+
 function printReport() {
   if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
   if (currentScreen !== 'report') showScreen('report');
   else renderReportView();
-  // Let layout settle before opening the print dialog
-  setTimeout(() => window.print(), 50);
+
+  if (_isIOSHomeScreenApp() || typeof window.print !== 'function') {
+    _printViaShareSheet();
+    return;
+  }
+  // Call print() directly inside the tap handler. Mobile browsers (Safari in
+  // particular) silently ignore print() called from a timer or after an await.
+  window.print();
+}
+
+async function _printViaShareSheet() {
+  try {
+    const { doc, filename } = await buildReportPDF();
+    const file = new File([doc.output('blob')], filename, { type: 'application/pdf' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: filename });
+    } else {
+      doc.save(filename);
+    }
+  } catch (err) {
+    if (err && err.name === 'AbortError') return; // user closed the share sheet
+    console.error('Print fallback failed', err);
+    alert('Printing is not available here. Use Download PDF, then print the PDF.');
+  }
 }
 
 /* ---------------------------------------------------------------
