@@ -91,14 +91,14 @@ let _research = {
 
 /* Research step definitions (UI order) */
 const STEPS = [
-  { id: 'geocode',    label: 'Geocoding address',             emoji: '📍' },
-  { id: 'flood',      label: 'Checking flood zones (FEMA)',   emoji: '🌊' },
-  { id: 'earthquake', label: 'Checking earthquake hazard (USGS)', emoji: '🌎' },
-  { id: 'wildfire',   label: 'Checking wildfire risk (USFS)', emoji: '🔥' },
-  { id: 'weather',    label: 'Checking severe weather patterns (NOAA)', emoji: '🌩️' },
-  { id: 'epa',        label: 'Checking industrial facilities (EPA TRI)', emoji: '🏭' },
-  { id: 'airquality', label: 'Assessing air quality risk',    emoji: '💨' },
-  { id: 'landslide',  label: 'Checking landslide susceptibility (USGS)', emoji: '⛰️' },
+  { id: 'geocode',    label: 'Geocoding address' },
+  { id: 'flood',      label: 'Checking flood zones (FEMA)' },
+  { id: 'earthquake', label: 'Checking earthquake hazard (USGS)' },
+  { id: 'wildfire',   label: 'Checking wildfire risk (USFS)' },
+  { id: 'weather',    label: 'Checking severe weather patterns (NOAA)' },
+  { id: 'epa',        label: 'Checking industrial facilities (EPA TRI)' },
+  { id: 'airquality', label: 'Assessing air quality risk' },
+  { id: 'landslide',  label: 'Checking landslide susceptibility (USGS)' },
 ];
 
 /* ---------------------------------------------------------------
@@ -737,7 +737,7 @@ function _compileFindings(apiResults, geocoded) {
           hazardId, hazardName, category,
           scoreAssigned: fb.score,
           source,
-          finding: `⚠️ Estimated (data unavailable): ${fb.finding}`,
+          finding: `Estimated (data unavailable): ${fb.finding}`,
           confidence: 'Low',
           status: 'estimated',
           isOverridden: false,
@@ -883,8 +883,8 @@ function _renderStepItem(stepId, status) {
   const step   = STEPS.find(s => s.id === stepId);
   if (!step || !iconEl) return;
 
-  const icons = { pending: '⏳', running: '⏳', success: '✅', error: '⚠️' };
-  iconEl.textContent = icons[status] || '⏳';
+  const icons = { pending: 'circle-dashed', running: 'loader-circle', success: 'circle-check', error: 'triangle-alert' };
+  iconEl.innerHTML = ic(icons[status] || 'circle-dashed');
 
   el.className = `research-step step-${status}`;
 }
@@ -1122,13 +1122,13 @@ function _overrideScore(hazardId) {
   const overrideDiv = document.createElement('div');
   overrideDiv.className = 'override-ui';
   overrideDiv.innerHTML = `
-    <p class="override-label">Set Likelihood score:</p>
+    <p class="override-label">Set likelihood score</p>
     <div class="override-choices">
       ${[1,2,3,4,5].map(v => `
-        <button class="override-score-btn ${v === finding.scoreAssigned ? 'selected' : ''}"
+        <button class="override-score-btn ${v === finding.scoreAssigned ? 'selected' : ''}" aria-pressed="${v === finding.scoreAssigned}"
           onclick="_applyOverride(${hazardId}, ${v})">${v}</button>
       `).join('')}
-      ${finding.isOverridden ? `<button class="override-revert-btn" onclick="_revertOverride(${hazardId})">↺ Revert to auto</button>` : ''}
+      ${finding.isOverridden ? `<button class="btn btn-ghost btn-small override-revert-btn" onclick="_revertOverride(${hazardId})">${ic('rotate-ccw')} Revert to auto</button>` : ''}
     </div>
   `;
   cardEl.appendChild(overrideDiv);
@@ -1175,11 +1175,13 @@ function _showResearchError(msg) {
   if (!errEl) {
     errEl = document.createElement('div');
     errEl.id = 'research-error';
-    errEl.className = 'research-error-msg';
+    errEl.className = 'alert alert-error research-error-msg';
+    errEl.setAttribute('role', 'alert');
     const inputSection = document.getElementById('research-input-section');
     if (inputSection) inputSection.appendChild(errEl);
   }
-  errEl.textContent = msg;
+  errEl.innerHTML = `${ic('circle-alert')}<p></p>`;
+  errEl.querySelector('p').textContent = msg;
   errEl.classList.remove('hidden');
 }
 
@@ -1193,8 +1195,8 @@ function _renderLoadingSteps() {
 
   container.innerHTML = STEPS.map(step => `
     <div class="research-step step-pending" id="step-${step.id}">
-      <span class="step-icon">⏳</span>
-      <span class="step-label">${step.emoji} ${step.label}</span>
+      <span class="step-icon">${ic('circle-dashed')}</span>
+      <span class="step-label">${step.label}</span>
     </div>
   `).join('');
 }
@@ -1223,7 +1225,7 @@ function applyManualScore(hazardId, score, source) {
     });
     const confirm = card.querySelector('.manual-score-confirm');
     if (confirm) {
-      confirm.textContent = `✅ Score ${score} saved to assessment.`;
+      confirm.innerHTML = `${ic('circle-check')} Score ${score} saved to assessment.`;
       confirm.classList.remove('hidden');
     }
   }
@@ -1238,15 +1240,15 @@ function _buildManualLookupCard(hazardId) {
 
   if (!IS_PIPELINE && !IS_NUCLEAR) return '';
 
-  const title   = IS_PIPELINE ? '🔧 Natural Gas Pipeline Leak / Explosion' : '☢️ Nuclear / Radiological Incident';
-  const badge   = '🔗 MANUAL LOOKUP REQUIRED';
+  const title   = IS_PIPELINE ? 'Natural Gas Pipeline Leak / Explosion' : 'Nuclear / Radiological Incident';
+  const badge   = 'Manual lookup required';
   const message = IS_PIPELINE
     ? 'Pipeline proximity data cannot be retrieved automatically — PHMSA does not provide a public address-level API.'
     : 'Nuclear facility proximity requires manual lookup — NRC does not provide a CORS-compatible public API.';
   const linkUrl = IS_PIPELINE
     ? 'https://pvnpms.phmsa.dot.gov/PublicViewer/'
     : 'https://www.nrc.gov/info-finder/facilities/';
-  const linkLabel = IS_PIPELINE ? '🗺️ Open PHMSA Pipeline Map' : '☢️ Open NRC Facility Search';
+  const linkLabel = IS_PIPELINE ? 'Open PHMSA pipeline map' : 'Open NRC facility search';
   const source    = IS_PIPELINE
     ? 'PHMSA Public Viewer (pvnpms.phmsa.dot.gov) — manual lookup'
     : 'NRC Info Finder (nrc.gov) — manual lookup';
@@ -1285,12 +1287,12 @@ function _buildManualLookupCard(hazardId) {
         <span class="manual-lookup-badge">${badge}</span>
       </div>
       <p class="manual-lookup-message">${escHtml(message)}</p>
-      <a href="${escHtml(linkUrl)}" target="_blank" rel="noopener" class="manual-action-btn">
-        ${linkLabel}
+      <a href="${escHtml(linkUrl)}" target="_blank" rel="noopener" class="btn btn-secondary manual-action-btn">
+        ${ic('external-link')} ${linkLabel}
       </a>
       ${instructions}
       <div class="manual-score-entry">
-        <span class="manual-score-label">Enter Likelihood score after lookup:</span>
+        <span class="manual-score-label">Enter likelihood score after lookup</span>
         <div class="manual-score-buttons">
           ${[1,2,3,4,5].map(v => `
             <button class="manual-score-btn ${currentScore === v ? 'selected' : ''}"
@@ -1300,7 +1302,7 @@ function _buildManualLookupCard(hazardId) {
             </button>`).join('')}
         </div>
         <span class="manual-score-confirm hidden" id="manual-confirm-${hazardId}">
-          ${currentScore ? `✅ Score ${currentScore} saved to assessment.` : ''}
+          ${currentScore ? `${ic('circle-check')} Score ${currentScore} saved to assessment.` : ''}
         </span>
       </div>
     </div>`;
@@ -1327,7 +1329,7 @@ function _renderReport() {
   let html = `
     <!-- Confirmed address -->
     <div class="report-address-card">
-      <div class="report-address-icon">📍</div>
+      <div class="report-address-icon">${ic('map-pin')}</div>
       <div class="report-address-info">
         <strong>${escHtml(geo.displayAddress)}</strong>
         <span>${Number(geo.lat).toFixed(5)}, ${Number(geo.lng).toFixed(5)} | ${escHtml(String(geo.county || '').replace(/ County$/i, ''))} County, ${escHtml(geo.stateAbbr || '')}</span>
@@ -1336,21 +1338,21 @@ function _renderReport() {
     </div>
 
     <!-- Summary banner -->
-    <div class="report-summary-banner">
-      <div class="report-summary-icon">📊</div>
+    <div class="alert alert-info report-summary-banner">
+      ${ic('chart-column')}
       <div>
         <strong>Likelihood estimated for ${successful.length} hazards</strong> from public data.<br>
-        <span class="report-summary-sub">${failed.length > 0 ? `${failed.length} source${failed.length > 1 ? 's' : ''} unavailable · ` : ''}${manualCount} hazards require your input.</span>
+        <span class="report-summary-sub">${failed.length > 0 ? `${failed.length} source${failed.length > 1 ? 's' : ''} unavailable. ` : ''}${manualCount} hazards require your input.</span>
       </div>
     </div>
 
     <!-- Primary next step -->
     <div class="report-actions report-actions-top">
-      <button class="btn-primary btn-large btn-block" id="research-continue-btn" onclick="applyResearchScores()">
-        Continue to Assessment →
+      <button class="btn btn-primary btn-large" id="research-continue-btn" onclick="applyResearchScores()">
+        Continue to assessment
       </button>
       <p class="report-actions-note">Likelihood estimates are added to your assessment. You rate the impact for your household.</p>
-      <button class="btn-link" id="research-restart-btn" onclick="clearAutoScores()">
+      <button class="btn btn-ghost" id="research-restart-btn" onclick="clearAutoScores()">
         Research a different address
       </button>
     </div>
@@ -1358,12 +1360,12 @@ function _renderReport() {
     <div class="research-details">
     <!-- API availability note -->
     <p class="report-aq-note">
-      💨 For real-time air quality, visit <strong>airnow.gov</strong> and enter your address for current AQI.
+      ${ic('wind')} <span>For real-time air quality, visit <strong>airnow.gov</strong> and enter your address for current AQI.</span>
     </p>
   `;
 
   // ── AUTO-SCORED HAZARDS ─────────────────────────────────────
-  html += `<h3 class="report-section-heading">✅ Likelihood Estimated (${successful.length})</h3>`;
+  html += `<h3 class="report-section-heading">${ic('circle-check')} Likelihood estimated (${successful.length})</h3>`;
 
   if (successful.length > 0) {
     // Group by category
@@ -1374,9 +1376,8 @@ function _renderReport() {
     });
 
     Object.keys(cats).forEach(cat => {
-      const catColor = (typeof CATEGORY_COLORS !== 'undefined' && CATEGORY_COLORS[cat]) || '#333';
       html += `<div class="report-category-group">
-        <div class="report-cat-label" style="background:${catColor}">${escHtml(cat)}</div>
+        <div class="report-cat-label">${ic((typeof CATEGORY_ICONS !== 'undefined' && CATEGORY_ICONS[cat]) || 'circle-dashed')} ${escHtml(typeof catLabel === 'function' ? catLabel(cat) : cat)}</div>
       `;
       cats[cat].forEach(f => { html += _buildFindingCard(f); });
       html += `</div>`;
@@ -1386,16 +1387,20 @@ function _renderReport() {
   // ── FAILED API CALLS ────────────────────────────────────────
   if (failed.length > 0) {
     html += `
-      <div class="report-unavailable">
-        <strong>⚠️ ${failed.length} data source${failed.length > 1 ? 's' : ''} unavailable</strong> — these hazards were not auto-scored:
-        <ul>${failed.map(f => `<li>${escHtml(f.hazardName)}</li>`).join('')}</ul>
+      <div class="alert alert-warning report-unavailable">
+        ${ic('triangle-alert')}
+        <div>
+          <p class="alert-title">${failed.length} data source${failed.length > 1 ? 's' : ''} unavailable</p>
+          <p>These hazards were not auto-scored.</p>
+          <ul>${failed.map(f => `<li>${escHtml(f.hazardName)}</li>`).join('')}</ul>
+        </div>
       </div>
     `;
   }
 
   // ── MANUAL HAZARDS ────────────────────────────────────────
-  html += `<h3 class="report-section-heading">✏️ Needs Your Input (${Object.keys(MANUAL_REASONS).length} hazards)</h3>
-  <p class="report-manual-intro">These hazards cannot be scored from public APIs. Guidance below:</p>
+  html += `<h3 class="report-section-heading">${ic('pencil')} Needs your input (${Object.keys(MANUAL_REASONS).length} hazards)</h3>
+  <p class="report-manual-intro">These hazards cannot be scored from public APIs. Guidance below.</p>
   <div class="report-manual-list">`;
 
   // Only show hazards that aren't already in the auto-scored list
@@ -1422,21 +1427,18 @@ function _renderReport() {
   html += `</div>`; // end .research-details
 
   container.innerHTML = html;
-  if (window.feather) feather.replace();
 }
 
 function _buildFindingCard(f) {
-  const scoreColor = _likelihoodColor(f.scoreAssigned);
   const scoreLabel = _likelihoodLabel(f.scoreAssigned);
-  const catColor   = (typeof CATEGORY_COLORS !== 'undefined' && CATEGORY_COLORS[f.category]) || '#333';
 
   const scoredBadge = f.status === 'estimated'
-    ? `<span class="auto-scored-badge" style="background:#E67E22">⚠️ ESTIMATED</span>`
-    : `<span class="auto-scored-badge">🔍 AUTO-SCORED</span>`;
+    ? `<span class="auto-scored-badge is-estimated">Estimated</span>`
+    : `<span class="auto-scored-badge">Auto-scored</span>`;
   const overrideBadge = f.isOverridden
-    ? `<span class="override-badge">✏️ Overridden</span>` : '';
+    ? `<span class="override-badge">Overridden</span>` : '';
   const errorHtml = f.status === 'error'
-    ? `<span class="finding-error">⚠️ ${escHtml(f.finding)}</span>` : '';
+    ? `<span class="finding-error">${ic('triangle-alert')} ${escHtml(cleanFindingText(f.finding))}</span>` : '';
 
   const showDetails = f.status === 'success' || f.status === 'estimated';
 
@@ -1445,46 +1447,36 @@ function _buildFindingCard(f) {
       <div class="finding-card-top">
         <div class="finding-left">
           <span class="finding-name">${escHtml(f.hazardName)}</span>
-          <span class="finding-cat-badge" style="background:${catColor}">${escHtml(f.category)}</span>
-          ${scoredBadge}
-          ${overrideBadge}
+          <span class="finding-tags">${scoredBadge}${overrideBadge}</span>
         </div>
         ${f.scoreAssigned !== null ? `
-        <div class="finding-score" style="background:${scoreColor.bg};color:${scoreColor.text}">
-          <span class="finding-score-num">${f.scoreAssigned}</span>
+        <div class="finding-score">
+          <span class="finding-score-num">L${f.scoreAssigned}</span>
           <span class="finding-score-label">${scoreLabel}</span>
         </div>` : ''}
       </div>
       ${showDetails ? `
       <div class="finding-details">
-        <div class="finding-detail-row"><span class="finding-detail-key">Source:</span> <span>${escHtml(f.source)}</span></div>
-        <div class="finding-detail-row"><span class="finding-detail-key">Finding:</span> <span>${escHtml(f.finding)}</span></div>
-        <div class="finding-detail-row"><span class="finding-detail-key">Confidence:</span> <span class="confidence-${(f.confidence||'').toLowerCase()}">${f.confidence}</span></div>
+        <div class="finding-detail-row"><span class="finding-detail-key">Source</span> <span>${escHtml(f.source)}</span></div>
+        <div class="finding-detail-row"><span class="finding-detail-key">Finding</span> <span>${escHtml(cleanFindingText(f.finding))}</span></div>
+        <div class="finding-detail-row"><span class="finding-detail-key">Confidence</span> <span class="confidence-${(f.confidence||'').toLowerCase()}">${f.confidence}</span></div>
       </div>
       ${f.femaMapUrl ? `
-      <a href="${escHtml(f.femaMapUrl)}" target="_blank" rel="noopener" class="manual-action-btn">
-        🗺️ Check Official FEMA Flood Map
+      <a href="${escHtml(f.femaMapUrl)}" target="_blank" rel="noopener" class="btn btn-secondary btn-small manual-action-btn">
+        ${ic('external-link')} Check official FEMA flood map
       </a>
-      <p class="manual-action-note">Verify at msc.fema.gov — enter your address for the official FIRM panel for your parcel.</p>
+      <p class="manual-action-note">Verify at msc.fema.gov. Enter your address for the official FIRM panel for your parcel.</p>
       ` : ''}
-      <button class="btn-small btn-ghost finding-override-btn" onclick="_overrideScore(${f.hazardId})">
-        ✏️ Override Score
+      <button class="btn btn-ghost btn-small finding-override-btn" onclick="_overrideScore(${f.hazardId})">
+        ${ic('pencil')} Override score
       </button>` : errorHtml}
     </div>
   `;
 }
 
-function _likelihoodColor(score) {
-  if (!score) return { bg: '#f4f4f4', text: '#888' };
-  if (score >= 5) return { bg: '#FADBD8', text: '#C0392B' };
-  if (score >= 4) return { bg: '#FDEBD0', text: '#E67E22' };
-  if (score >= 3) return { bg: '#FEF9E7', text: '#9A7D0A' };
-  return                 { bg: '#D5F5E3', text: '#27AE60' };
-}
-
 function _likelihoodLabel(score) {
-  const labels = { 1: 'UNLIKELY', 2: 'LOW', 3: 'POSSIBLE', 4: 'LIKELY', 5: 'ALMOST CERTAIN' };
-  return labels[score] || '—';
+  const labels = { 1: 'Unlikely', 2: 'Low', 3: 'Possible', 4: 'Likely', 5: 'Almost certain' };
+  return labels[score] || '';
 }
 
 /* ---------------------------------------------------------------

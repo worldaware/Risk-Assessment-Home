@@ -102,7 +102,8 @@ function _editable(key, value, placeholder, tag, extraClass) {
 }
 
 function _riskClass(level) {
-  return 'rd-level-' + String(level || '').toLowerCase();
+  const rl = RISK_LEVELS[level];
+  return rl ? 'b-' + rl.cls : 'b-unrated';
 }
 
 function renderReportView() {
@@ -120,7 +121,11 @@ function renderReportView() {
 
   let html = `
     <header class="rd-header">
-      <div class="rd-brand">WORLD AWARE <span>Neighborhood Resiliency Program</span></div>
+      <div class="rd-brand">
+        <img src="assets/wa-lockup-reversed-cream.png" width="780" height="180" alt="World Aware, Emergency Planning" />
+        <span class="rd-brand-url">beworldaware.com</span>
+      </div>
+      <div class="rd-header-body">
       ${_editable('title', r.title, 'Report title', 'h1', 'rd-title')}
       <p class="rd-prepared${r.preparedFor.trim() ? '' : ' is-empty-line'}" data-line="preparedFor">
         <span class="rd-label">Prepared for</span>
@@ -129,16 +134,17 @@ function renderReportView() {
       <dl class="rd-meta">
         ${metaRows.map(([k, v]) => `<div><dt>${escHtml(k)}</dt><dd>${escHtml(v)}</dd></div>`).join('')}
       </dl>
+      </div>
     </header>
 
+    <div class="rd-body">
     <section class="rd-section">
       <h2>Summary</h2>
       ${_editable('summary', r.summary, 'Write a short summary of this assessment', 'div', 'rd-summary')}
       <div class="rd-counts">
-        ${['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map(k => d.counts[k] ? `<span class="rd-count ${_riskClass(k)}">${d.counts[k]} ${k.charAt(0) + k.slice(1).toLowerCase()}</span>` : '').join('')}
-        <span class="rd-count rd-count-total">${d.scored.length} scored</span>
-        ${d.unrated.length ? `<span class="rd-count rd-count-unrated">${d.unrated.length} impact not rated</span>` : ''}
+        ${['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map(k => `<span class="rd-count ${_riskClass(k)}${d.counts[k] ? '' : ' is-zero'}"><span class="rd-count-num">${d.counts[k]}</span><span class="rd-count-label">${RISK_LEVELS[k].label}</span></span>`).join('')}
       </div>
+      <p class="rd-count-line">${d.scored.length} scored${d.unrated.length ? `. ${d.unrated.length} identified by research with impact not yet rated` : ''}.</p>
     </section>
   `;
 
@@ -153,11 +159,11 @@ function renderReportView() {
         <li class="rd-item">
           <div class="rd-score ${_riskClass(it.level)}">
             <span class="rd-score-num">${it.score}</span>
-            <span class="rd-score-label">${it.level}</span>
+            <span class="rd-score-label">${RISK_LEVELS[it.level].label}</span>
           </div>
           <div class="rd-item-body">
             <div class="rd-item-name"><span class="rd-rank">${idx + 1}.</span> ${escHtml(it.name)}</div>
-            <div class="rd-item-meta">${escHtml(it.category)} · ${escHtml(it.liText)}${it.fromResearch ? ' · Likelihood from address research' : ''}</div>
+            <div class="rd-item-meta">${escHtml(catLabel(it.category))}. ${escHtml(it.liText)}.${it.fromResearch ? ' Likelihood from address research.' : ''}</div>
             ${it.fromResearch && it.finding ? `<div class="rd-item-finding">${escHtml(it.finding)}</div>` : ''}
             ${_editable('notes.' + it.id, it.reportNotes, 'Add notes', 'div', 'rd-notes')}
           </div>
@@ -171,7 +177,7 @@ function renderReportView() {
   if (r.unrated.length) {
     html += `
       <section class="rd-section rd-unrated">
-        <h2>Identified by research — impact not yet rated</h2>
+        <h2>Identified by research, impact not yet rated</h2>
         <p class="rd-section-intro">Address research estimated the likelihood of these hazards. They do not have a risk score until their impact is rated.</p>
         <ul class="rd-list rd-list-plain">`;
     r.unrated.forEach(it => {
@@ -179,11 +185,11 @@ function renderReportView() {
           <li class="rd-item">
             <div class="rd-score rd-score-likelihood">
               <span class="rd-score-num">L${it.l}</span>
-              <span class="rd-score-label">${escHtml(it.likelihoodLabel)}</span>
+              <span class="rd-score-label">Not rated</span>
             </div>
             <div class="rd-item-body">
               <div class="rd-item-name">${escHtml(it.name)}</div>
-              <div class="rd-item-meta">${escHtml(it.category)}${it.confidence ? ' · Confidence: ' + escHtml(it.confidence) : ''}</div>
+              <div class="rd-item-meta">${escHtml(catLabel(it.category))}. Likelihood ${it.l} (${escHtml(it.likelihoodLabel)}).${it.confidence ? ' Confidence: ' + escHtml(it.confidence) + '.' : ''}</div>
               ${it.finding ? `<div class="rd-item-finding">${escHtml(it.finding)}</div>` : ''}
               ${it.source ? `<div class="rd-item-source">Source: ${escHtml(it.source)}</div>` : ''}
               ${_editable('notes.' + it.id, it.reportNotes, 'Add notes', 'div', 'rd-notes')}
@@ -211,7 +217,7 @@ function renderReportView() {
       </section>`;
   }
 
-  html += `<footer class="rd-footer">${escHtml(d.footer)}</footer>`;
+  html += `</div><footer class="rd-footer"><strong>beworldaware.com</strong><span>World Aware Emergency Planning, Boulder, Colorado</span></footer>`;
 
   doc.innerHTML = html;
   _bindReportEditing(doc);
@@ -260,6 +266,7 @@ function _bindReportEditing(doc) {
 
 /* ---------------------------------------------------------------
    PDF (jsPDF, text-based, loaded on demand)
+   Theme (fonts, colors, band rendering) lives in js/wa-pdf-theme.js.
 --------------------------------------------------------------- */
 
 let _jspdfLoading = null;
@@ -280,34 +287,26 @@ function _loadJsPDF() {
   return _jspdfLoading;
 }
 
-/** Map text to characters the built-in PDF fonts (WinAnsi) can draw. */
+let _pdfBrandFonts = false;   // true while the brand fonts are registered on the doc being built
+
+/** Map text to characters the PDF fonts can draw (brand fonts are Latin subsets). */
 function _pdfSafe(text) {
-  return String(text || '')
+  let t = String(text || '')
     .replace(/[←-⇿]/g, '->')
     .replace(/[−]/g, '-')
     .replace(/[≤]/g, '<=').replace(/[≥]/g, '>=')
-    .replace(/[   ]/g, ' ')
-    // keep Latin-1 and the WinAnsi extras (dashes, quotes, bullet, ellipsis, etc.)
+    .replace(/[   ]/g, ' ');
+  if (_pdfBrandFonts) {
+    // Glyphs missing from the Latin subsets: fall back to plain letters
+    t = t.replace(/[Š]/g, 'S').replace(/[š]/g, 's').replace(/[Ÿ]/g, 'Y')
+         .replace(/[Ž]/g, 'Z').replace(/[ž]/g, 'z').replace(/[ƒ]/g, 'f')
+         .replace(/[†‡]/g, '').replace(/[‰]/g, '%');
+  }
+  // keep Latin-1 and the WinAnsi extras (dashes, quotes, bullet, ellipsis, etc.)
+  return t
     .replace(/[^\x09\x0A\x0D\x20-\x7E¡-ÿ–—‘’“”•…€™ŒœŠšŸŽžƒˆ˜†‡‰‹›‚„]/g, '')
     .replace(/[ \t]+\n/g, '\n');
 }
-
-const PDF_COLORS = {
-  maroon: [77, 0, 0],
-  amber:  [185, 122, 20],
-  cream:  [247, 237, 216],
-  forest: [47, 74, 60],
-  text:   [34, 34, 34],
-  muted:  [102, 102, 102],
-  rule:   [221, 210, 190],
-};
-const PDF_LEVEL = {
-  CRITICAL: { bg: [250, 219, 216], fg: [192, 57, 43] },
-  HIGH:     { bg: [253, 235, 208], fg: [176, 90, 20] },
-  MEDIUM:   { bg: [254, 249, 231], fg: [154, 125, 10] },
-  LOW:      { bg: [213, 245, 227], fg: [30, 132, 73] },
-  LIKELY:   { bg: [247, 237, 216], fg: [77, 0, 0] },
-};
 
 function reportPdfFilename(dateIso) {
   const d = /^\d{4}-\d{2}-\d{2}$/.test(dateIso || '') ? dateIso : localToday();
@@ -317,29 +316,47 @@ function reportPdfFilename(dateIso) {
 /** Build the PDF document object (no download). */
 async function buildReportPDF() {
   const JsPDF = await _loadJsPDF();
+  // Brand fonts and logos are cached after the first load; each falls back on its own.
+  const fontsOk = (typeof waLoadPdfFonts === 'function') ? await waLoadPdfFonts() : false;
+  const logoCream = await waLoadLogo('assets/wa-lockup-reversed-cream-520.png').catch(() => null);
+  const logoColor = await waLoadLogo('assets/wa-lockup-full-color-520.png').catch(() => null);
+
   const r = buildResolvedReport();
   const d = r.data;
 
-  const doc = new JsPDF({ unit: 'pt', format: 'letter' });
+  const doc = new JsPDF({ unit: 'pt', format: 'letter', compress: true });
+  const F = fontsOk ? waRegisterPdfFonts(doc) : { display: 'helvetica', body: 'helvetica', brand: false };
+  _pdfBrandFonts = !!F.brand;
+
   const PW = doc.internal.pageSize.getWidth();
   const PH = doc.internal.pageSize.getHeight();
   const M  = 54;
   const W  = PW - M * 2;
   const BOTTOM = PH - 60;
+  const C = WA_PDF;
   let y = M;
 
   const setColor = c => doc.setTextColor(c[0], c[1], c[2]);
-  const font = (style, size) => { doc.setFont('helvetica', style); doc.setFontSize(size); };
-  const lh = size => size * 1.35;
+  // face: 'display' (Space Grotesk, bold only) or 'body' (Poppins)
+  const font = (style, size, face) => {
+    if (face === 'display') doc.setFont(F.display, F.brand ? 'bold' : style);
+    else doc.setFont(F.body, style);
+    doc.setFontSize(size);
+  };
+  const lh = size => size * 1.45;
 
+  function newPage() {
+    doc.addPage();
+    y = waRunningHeader(doc, F, logoColor, r.title ? _pdfSafe(r.title).slice(0, 80) : 'Risk assessment report');
+  }
   function ensure(h) {
-    if (y + h > BOTTOM) { doc.addPage(); y = M; }
+    if (y + h > BOTTOM) newPage();
   }
   function para(text, opts) {
     opts = opts || {};
     const size = opts.size || 10.5;
-    font(opts.style || 'normal', size);
-    setColor(opts.color || PDF_COLORS.text);
+    font(opts.style || 'normal', size, opts.face);
+    setColor(opts.color || C.ink);
     const x = opts.x || M;
     const width = opts.width || W;
     const lines = doc.splitTextToSize(_pdfSafe(text), width);
@@ -350,70 +367,66 @@ async function buildReportPDF() {
     });
     y += opts.after !== undefined ? opts.after : 4;
   }
-  const HEADING_H = 35;
+  const HEADING_H = 38;
   // keep: height of the content that must stay on the same page as the heading
   function heading(text, keep) {
     ensure(HEADING_H + (keep || lh(10.5) * 2));
     y += 8;
-    font('bold', 13);
-    setColor(PDF_COLORS.maroon);
-    doc.text(_pdfSafe(text), M, y + 13);
-    y += 19;
-    doc.setDrawColor(PDF_COLORS.amber[0], PDF_COLORS.amber[1], PDF_COLORS.amber[2]);
-    doc.setLineWidth(1);
-    doc.line(M, y, M + W, y);
-    y += 8;
+    y = waHeading(doc, F, _pdfSafe(text), M, y, W);
   }
   function measure(text, size, width, style) {
     font(style || 'normal', size);
     return doc.splitTextToSize(_pdfSafe(text), width).length * lh(size);
   }
 
-  // ── Header band ───────────────────────────────────────────
-  doc.setFillColor(PDF_COLORS.cream[0], PDF_COLORS.cream[1], PDF_COLORS.cream[2]);
-  doc.rect(0, 0, PW, 6, 'F');
-  font('bold', 9);
-  setColor(PDF_COLORS.maroon);
-  doc.text('WORLD AWARE', M, y + 9);
-  font('normal', 9);
-  setColor(PDF_COLORS.muted);
-  doc.text('Neighborhood Resiliency Program', M + 72, y + 9);
-  y += 20;
+  // ── Cover band (page 1) ───────────────────────────────────
+  y = waCoverBand(doc, F, logoCream, 'beworldaware.com');
 
-  para(r.title, { size: 20, style: 'bold', color: PDF_COLORS.maroon, after: 2 });
-  if (r.preparedFor.trim()) para('Prepared for: ' + r.preparedFor, { size: 11, color: PDF_COLORS.text, after: 6 });
+  font('bold', 22, 'display');
+  setColor(C.maroon);
+  const titleLines = doc.splitTextToSize(_pdfSafe(r.title), W);
+  titleLines.forEach((ln, i) => doc.text(ln, M, y + 18 + i * 27));
+  y += 18 + (titleLines.length - 1) * 27;
+  if (r.preparedFor.trim()) {
+    y += 20;
+    para('Prepared for ' + r.preparedFor, { size: 10.5, color: C.muted, after: 6 });
+  } else {
+    y += 8;
+  }
+  y += 6;
 
-  // Meta box
+  // Meta box: cream fill with an amber spine
   const meta = [['Location', d.location || 'Not specified'], ['Date', d.dateDisplay || d.date], ['Assessment type', d.typeLabel]];
   if (d.householdSize) meta.push(['Household size', d.householdSize]);
   if (d.hhNames) meta.push(['Households', d.hhNames.join(' & ')]);
   const labelW = 118;
-  const metaH = meta.reduce((acc, [, v]) => acc + Math.max(lh(10), measure(v, 10, W - labelW - 20)), 0) + 16;
+  const metaRowH = v => Math.max(15, measure(v, 10, W - labelW - 20));
+  const metaH = meta.reduce((acc, [, v]) => acc + metaRowH(v), 0) + 16;
   ensure(metaH);
-  doc.setFillColor(PDF_COLORS.cream[0], PDF_COLORS.cream[1], PDF_COLORS.cream[2]);
+  doc.setFillColor(C.cream[0], C.cream[1], C.cream[2]);
   doc.rect(M, y, W, metaH, 'F');
-  doc.setFillColor(PDF_COLORS.amber[0], PDF_COLORS.amber[1], PDF_COLORS.amber[2]);
+  doc.setFillColor(C.amber[0], C.amber[1], C.amber[2]);
   doc.rect(M, y, 3, metaH, 'F');
   let my = y + 8;
   meta.forEach(([k, v]) => {
-    font('bold', 9); setColor(PDF_COLORS.muted);
-    doc.text(_pdfSafe(k.toUpperCase()), M + 12, my + 10);
-    font('normal', 10); setColor(PDF_COLORS.text);
+    font('bold', 8.5); setColor(C.muted);
+    doc.text(_pdfSafe(k), M + 14, my + 10);
+    font('normal', 10); setColor(C.ink);
     const lines = doc.splitTextToSize(_pdfSafe(v), W - labelW - 20);
-    lines.forEach((ln, i) => doc.text(ln, M + labelW, my + 10 + i * lh(10)));
-    my += Math.max(lh(10), lines.length * lh(10));
+    lines.forEach((ln, i) => doc.text(ln, M + labelW, my + 10 + i * 15));
+    my += Math.max(15, lines.length * 15);
   });
   y += metaH + 6;
 
   // ── Summary ───────────────────────────────────────────────
   heading('Summary', measure(r.summary || ' ', 10.5, W) + 20);
-  if (r.summary.trim()) para(r.summary, { after: 6 });
-  const countBits = [];
-  ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].forEach(k => { if (d.counts[k]) countBits.push(`${d.counts[k]} ${k.toLowerCase()}`); });
+  if (r.summary.trim()) para(r.summary, { after: 8 });
+  ensure(40 + 24);
+  waCountTiles(doc, F, M, y, W, d.counts);
+  y += 40 + 8;
   let countLine = `${d.scored.length} hazard${d.scored.length === 1 ? '' : 's'} scored`;
-  if (countBits.length) countLine += ` (${countBits.join(', ')})`;
-  if (d.unrated.length) countLine += ` · ${d.unrated.length} identified by research with impact not yet rated`;
-  para(countLine, { size: 9.5, color: PDF_COLORS.muted });
+  if (d.unrated.length) countLine += `. ${d.unrated.length} identified by research with impact not yet rated`;
+  para(countLine + '.', { size: 9, color: C.muted });
 
   // ── Ranked risks ──────────────────────────────────────────
   const boxW = 54;
@@ -427,34 +440,26 @@ async function buildReportPDF() {
     (opts.extra || []).forEach(t => { h += measure(t, 9, bodyW); });
     if (notes) h += measure('Notes: ' + notes, 9.5, bodyW) + 2;
     h = Math.max(h, 40) + 10;
-    return Math.min(h, 120); // very long notes: allow page flow
+    return Math.min(h, 130); // very long notes: allow page flow
   }
   function item(it, rank, opts) {
     const nameText = (rank ? rank + '. ' : '') + it.name;
-    const metaText = opts.meta;
     const extra = opts.extra || [];
     const notes = (it.reportNotes || '').trim();
     ensure(itemHeight(it, rank, opts));
 
-    const c = PDF_LEVEL[opts.levelKey] || PDF_LEVEL.LIKELY;
-    doc.setFillColor(c.bg[0], c.bg[1], c.bg[2]);
-    doc.roundedRect(M, y, boxW, 36, 4, 4, 'F');
-    font('bold', 15); setColor(c.fg);
-    doc.text(_pdfSafe(opts.boxNum), M + boxW / 2, y + 17, { align: 'center' });
-    font('bold', 6.5);
-    const lbl = doc.splitTextToSize(_pdfSafe(opts.boxLabel), boxW - 4);
-    lbl.slice(0, 2).forEach((ln, i) => doc.text(ln, M + boxW / 2, y + 26 + i * 7, { align: 'center' }));
+    waScoreBox(doc, F, M, y, opts.levelKey, _pdfSafe(opts.boxNum));
 
     const startY = y;
-    para(nameText, { x: bodyX, width: bodyW, size: 11, style: 'bold', color: PDF_COLORS.text, after: 0 });
-    para(metaText, { x: bodyX, width: bodyW, size: 9, color: PDF_COLORS.muted, after: 0 });
-    extra.forEach(t => para(t, { x: bodyX, width: bodyW, size: 9, color: PDF_COLORS.muted, after: 0 }));
+    para(nameText, { x: bodyX, width: bodyW, size: 11, style: 'bold', color: C.ink, after: 0 });
+    para(opts.meta, { x: bodyX, width: bodyW, size: 9, color: C.muted, after: 0 });
+    extra.forEach(t => para(t, { x: bodyX, width: bodyW, size: 9, color: C.muted, after: 0 }));
     if (notes) {
       y += 2;
-      para('Notes: ' + notes, { x: bodyX, width: bodyW, size: 9.5, color: PDF_COLORS.text, after: 0 });
+      para('Notes: ' + notes, { x: bodyX, width: bodyW, size: 9.5, color: C.ink, after: 0 });
     }
     y = Math.max(y, startY + 40) + 8;
-    doc.setDrawColor(PDF_COLORS.rule[0], PDF_COLORS.rule[1], PDF_COLORS.rule[2]);
+    doc.setDrawColor(C.rule[0], C.rule[1], C.rule[2]);
     doc.setLineWidth(0.5);
     doc.line(M, y - 4, M + W, y - 4);
   }
@@ -462,13 +467,12 @@ async function buildReportPDF() {
   const scoredOpts = r.scored.map(it => ({
     levelKey: it.level,
     boxNum: String(it.score),
-    boxLabel: it.level,
-    meta: `${it.category} · ${it.liText}`,
+    meta: `${catLabel(it.category)}. ${it.liText}.`,
     extra: (it.fromResearch && it.finding) ? ['Research: ' + it.finding] : [],
   }));
   heading('Ranked risks', r.scored.length ? itemHeight(r.scored[0], 1, scoredOpts[0]) : lh(10.5) * 2);
   if (r.scored.length === 0) {
-    para('No hazards have both a likelihood and an impact rating yet.', { color: PDF_COLORS.muted });
+    para('No hazards have both a likelihood and an impact rating yet.', { color: C.muted });
   }
   r.scored.forEach((it, idx) => item(it, idx + 1, scoredOpts[idx]));
 
@@ -477,14 +481,13 @@ async function buildReportPDF() {
     const unratedOpts = r.unrated.map(it => ({
       levelKey: 'LIKELY',
       boxNum: 'L' + it.l,
-      boxLabel: it.likelihoodLabel.toUpperCase(),
-      meta: `${it.category} · Likelihood ${it.l} (${it.likelihoodLabel})${it.confidence ? ' · Confidence: ' + it.confidence : ''}`,
+      meta: `${catLabel(it.category)}. Likelihood ${it.l} (${it.likelihoodLabel}).${it.confidence ? ' Confidence: ' + it.confidence + '.' : ''}`,
       extra: [it.finding ? 'Finding: ' + it.finding : '', it.source ? 'Source: ' + it.source : ''].filter(Boolean),
     }));
     const introText = 'Address research estimated the likelihood of these hazards. They do not have a risk score until their impact is rated.';
-    heading('Identified by research — impact not yet rated',
+    heading('Identified by research, impact not yet rated',
       measure(introText, 9.5, W) + 12 + itemHeight(r.unrated[0], null, unratedOpts[0]));
-    para(introText, { size: 9.5, color: PDF_COLORS.muted, after: 8 });
+    para(introText, { size: 9.5, color: C.muted, after: 8 });
     r.unrated.forEach((it, idx) => item(it, null, unratedOpts[idx]));
   }
 
@@ -497,9 +500,12 @@ async function buildReportPDF() {
       const lines = doc.splitTextToSize(_pdfSafe(clean), W - 14);
       lines.forEach((ln, i) => {
         ensure(lh(10.5));
-        setColor(i === 0 ? PDF_COLORS.amber : PDF_COLORS.text);
-        if (i === 0) { font('bold', 10.5); doc.text('•', M, y + 10.5); font('normal', 10.5); }
-        setColor(PDF_COLORS.text);
+        if (i === 0) {
+          doc.setFillColor(C.amber[0], C.amber[1], C.amber[2]);
+          doc.circle(M + 2, y + 7, 1.5, 'F');
+        }
+        font('normal', 10.5);
+        setColor(C.ink);
         doc.text(ln, M + 14, y + 10.5);
         y += lh(10.5);
       });
@@ -512,26 +518,16 @@ async function buildReportPDF() {
     const rs = d.research;
     heading('Research sources');
     para(`${rs.matchedAddress ? 'Matched address: ' + rs.matchedAddress + '. ' : ''}Likelihood was estimated for ${rs.findingCount} hazards from public data (confidence: ${rs.confidence.High} high, ${rs.confidence.Medium} medium, ${rs.confidence.Low} low${rs.estimatedCount ? '; ' + rs.estimatedCount + ' used a regional fallback estimate' : ''}).`, { size: 9.5 });
-    rs.sources.forEach(src => para('• ' + src, { size: 9, color: PDF_COLORS.muted, after: 1 }));
+    rs.sources.forEach(src => para(src, { size: 9, color: C.muted, after: 1 }));
   }
 
   // ── Footer on every page ──────────────────────────────────
-  const pages = doc.getNumberOfPages();
-  for (let p = 1; p <= pages; p++) {
-    doc.setPage(p);
-    doc.setDrawColor(PDF_COLORS.maroon[0], PDF_COLORS.maroon[1], PDF_COLORS.maroon[2]);
-    doc.setLineWidth(0.75);
-    doc.line(M, PH - 42, M + W, PH - 42);
-    font('normal', 8.5);
-    setColor(PDF_COLORS.muted);
-    doc.text(_pdfSafe(d.footer), M, PH - 28);
-    doc.text(`Page ${p} of ${pages}`, M + W, PH - 28, { align: 'right' });
-  }
+  waFooters(doc, F, 'World Aware Emergency Planning, Boulder, Colorado');
 
   doc.setProperties({
     title: _pdfSafe(r.title),
     subject: 'World Aware Risk Assessment',
-    creator: 'World Aware Risk Assessment Tool v2.0',
+    creator: 'World Aware Risk Assessment Tool v2.1',
   });
   return { doc, filename: reportPdfFilename(d.date) };
 }
@@ -617,7 +613,7 @@ function sharePdf(btnEl) {
   const label = btn ? btn.innerHTML : '';
   if (btn) { btn.disabled = true; btn.textContent = 'Preparing PDF…'; }
   (_pdfBuilding || preparePdf()).then(r => {
-    if (btn) { btn.disabled = false; btn.innerHTML = label; if (window.feather) feather.replace(); }
+    if (btn) { btn.disabled = false; btn.innerHTML = label; }
     if (!r) { alert('Could not create the PDF. Please try again.'); return; }
     if (_canShareFile(r.file)) {
       navigator.share({ files: [r.file], title: r.filename }).catch(err => {

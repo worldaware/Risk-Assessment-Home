@@ -3,7 +3,7 @@
    Service Worker: caches app shell for full offline use.
    ============================================================= */
 
-const CACHE_NAME = 'wa-risk-v2.0.2';  // v2.0: research merged into Home, report view, PDF
+const CACHE_NAME = 'wa-risk-v2.1.0';  // v2.1: World Aware brand pass (fonts, tokens, logo, Lucide sprite, PDF theme)
 
 // App shell files to cache on install
 const APP_SHELL = [
@@ -11,7 +11,26 @@ const APP_SHELL = [
   './index.html',
   './app.js',
   './styles.css',
+  './tokens.css',
+  './fonts.css',
   './manifest.json',
+  // Brand fonts (WOFF2 for the page, TTF for the PDF)
+  './fonts/space-grotesk-latin-500-normal.woff2',
+  './fonts/space-grotesk-latin-700-normal.woff2',
+  './fonts/poppins-latin-400-normal.woff2',
+  './fonts/poppins-latin-400-italic.woff2',
+  './fonts/poppins-latin-500-normal.woff2',
+  './fonts/poppins-latin-600-normal.woff2',
+  './fonts/ttf/SpaceGrotesk-Bold-latin.ttf',
+  './fonts/ttf/Poppins-Regular-latin.ttf',
+  './fonts/ttf/Poppins-SemiBold-latin.ttf',
+  // Logos (screen and PDF)
+  './assets/wa-lockup-full-color.png',
+  './assets/wa-lockup-reversed-cream.png',
+  './assets/wa-mark-full-color.png',
+  './assets/wa-mark-reversed-cream.png',
+  './assets/wa-lockup-full-color-520.png',
+  './assets/wa-lockup-reversed-cream-520.png',
   './icons/icon-192.svg',
   './icons/icon-512.svg',
   './icons/icon-192.png',
@@ -20,6 +39,7 @@ const APP_SHELL = [
   './js/apiConfig.js',
   './js/scoreMapper.js',
   './js/research.js',
+  './js/wa-pdf-theme.js',
   // Report view + offline PDF generation
   './js/report.js',
   './js/vendor/jspdf.umd.min.js',
@@ -64,7 +84,7 @@ self.addEventListener('fetch', event => {
   // Only handle GET requests
   if (event.request.method !== 'GET') return;
 
-  // For external CDN resources (Feather Icons), try network first
+  // For external resources, try network first
   if (url.origin !== self.location.origin) {
     event.respondWith(
       fetch(event.request)

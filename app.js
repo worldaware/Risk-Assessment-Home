@@ -9,22 +9,46 @@
    CONSTANTS & CONFIGURATION
 --------------------------------------------------------------- */
 
+// Bands follow the World Aware risk scale. The keys (CRITICAL, HIGH, MEDIUM, LOW)
+// are what saved data and exports use; only `label` is shown to people.
+// Colors live in tokens.css (.b-critical, .b-high, .b-medium, .b-low).
 const RISK_LEVELS = {
-  CRITICAL: { min: 15, max: 25, label: 'CRITICAL', bg: '#FADBD8', color: '#C0392B' },
-  HIGH:     { min: 10, max: 14, label: 'HIGH',     bg: '#FDEBD0', color: '#E67E22' },
-  MEDIUM:   { min: 6,  max: 9,  label: 'MEDIUM',   bg: '#FEF9E7', color: '#9A7D0A' },
-  LOW:      { min: 1,  max: 5,  label: 'LOW',      bg: '#D5F5E3', color: '#27AE60' },
+  CRITICAL: { key: 'CRITICAL', min: 15, max: 25, label: 'Critical', action: 'Act now',                       cls: 'critical', steps: 4 },
+  HIGH:     { key: 'HIGH',     min: 10, max: 14, label: 'High',     action: 'Write a specific plan',         cls: 'high',     steps: 3 },
+  MEDIUM:   { key: 'MEDIUM',   min: 6,  max: 9,  label: 'Moderate', action: 'Cover in general preparedness', cls: 'medium',   steps: 2 },
+  LOW:      { key: 'LOW',      min: 1,  max: 5,  label: 'Low',      action: 'Monitor',                       cls: 'low',      steps: 1 },
 };
 
-// Category colors (left border / badge)
-const CATEGORY_COLORS = {
-  'Natural Hazards':                   '#1B4F72',
-  'Industrial & CBRN':                 '#4A235A',
-  'Outages & Service Interruptions':   '#1A5276',
-  'Infrastructure Failures':           '#145A32',
-  'Supply Chain':                      '#784212',
-  'Other & Human-Caused':              '#7B241C',
+// Categories differ by name and icon only. Color is reserved for risk.
+const CATEGORY_ICONS = {
+  'Natural Hazards':                   'cloud-lightning',
+  'Industrial & CBRN':                 'factory',
+  'Outages & Service Interruptions':   'plug-zap',
+  'Infrastructure Failures':           'building-2',
+  'Supply Chain':                      'truck',
+  'Other & Human-Caused':              'users',
 };
+const CATEGORY_LABELS = {
+  'Natural Hazards':                   'Natural hazards',
+  'Industrial & CBRN':                 'Industrial and CBRN',
+  'Outages & Service Interruptions':   'Outages and service interruptions',
+  'Infrastructure Failures':           'Infrastructure failures',
+  'Supply Chain':                      'Supply chain',
+  'Other & Human-Caused':              'Other and human-caused',
+};
+function catLabel(name) { return CATEGORY_LABELS[name] || name; }
+
+/** Inline Lucide icon from the sprite in index.html. */
+function ic(name, cls) {
+  return `<svg class="i${cls ? ' ' + cls : ''}" aria-hidden="true" focusable="false"><use href="#i-${name}"/></svg>`;
+}
+
+/** Risk badge: band color, word label and a 4-step meter (never color alone). */
+function riskBadgeHtml(rl) {
+  if (!rl) return '<span class="badge b-unrated">Not rated</span>';
+  const meter = [1, 2, 3, 4].map(n => `<i${n <= rl.steps ? ' class="f"' : ''}></i>`).join('');
+  return `<span class="badge b-${rl.cls}"><span class="meter" aria-hidden="true">${meter}</span>${rl.label}</span>`;
+}
 
 /* ---------------------------------------------------------------
    FULL HAZARD DATA — 62 hazards
@@ -546,7 +570,7 @@ function showScreen(screenId, opts) {
 
   // Hide all screens
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => { n.classList.remove('active'); n.removeAttribute('aria-current'); });
 
   // Show target
   const target = document.getElementById('screen-' + screenId);
@@ -554,9 +578,10 @@ function showScreen(screenId, opts) {
 
   // Update nav
   const navBtn = document.querySelector(`.nav-item[data-screen="${screenId}"]`);
-  if (navBtn) navBtn.classList.add('active');
+  if (navBtn) { navBtn.classList.add('active'); navBtn.setAttribute('aria-current', 'page'); }
 
   currentScreen = screenId;
+  document.body.dataset.screen = screenId;
 
   // Screen-specific initialization
   if (screenId === 'home')       initHomeScreen();
@@ -570,8 +595,6 @@ function showScreen(screenId, opts) {
   if ((screenId === 'report' || screenId === 'results') && typeof preparePdf === 'function') preparePdf();
   if (screenId === 'about')      renderSavedList();
   if (screenId === 'reference')  buildRiskMatrix();
-
-  if (window.feather) feather.replace();
 
   // Scroll to top
   if (!opts.keepScroll) window.scrollTo(0, 0);
@@ -716,16 +739,17 @@ function _syncResearchBanner() {
 
   const banner = document.createElement('div');
   banner.id = 'auto-score-banner';
-  banner.className = 'auto-score-banner';
+  banner.className = 'alert alert-info auto-score-banner';
   banner.innerHTML = `
     <div class="auto-score-banner-inner">
+      ${ic('info')}
       <span class="auto-score-banner-text">
         Research estimated likelihood for <strong>${flagged.length} hazard${flagged.length === 1 ? '' : 's'}</strong>.
         Rate the impact of each for your household to complete your risk scores.
         <span id="auto-score-banner-remaining" class="auto-score-banner-remaining">${unrated > 0 ? `${unrated} still need an impact rating.` : 'All impacts rated.'}</span>
       </span>
-      <button class="btn-small btn-ghost" onclick="showResearchDetails()">Research details</button>
-      <button class="auto-score-banner-close" aria-label="Dismiss" onclick="this.closest('#auto-score-banner').remove()">✕</button>
+      <button class="btn btn-ghost btn-small" onclick="showResearchDetails()">Research details</button>
+      <button class="btn-icon auto-score-banner-close" aria-label="Dismiss" onclick="this.closest('#auto-score-banner').remove()">${ic('x')}</button>
     </div>
   `;
   const header = document.querySelector('.assessment-header');
@@ -759,29 +783,34 @@ function buildHazardList() {
 
   Object.keys(categories).forEach(catName => {
     const hazards = categories[catName];
-    const catColor = CATEGORY_COLORS[catName] || '#333';
+    const slug = slugify(catName);
 
-    // Category section wrapper
+    // Category section (a sheet)
     const section = document.createElement('div');
     section.className = 'category-section';
     section.dataset.category = catName;
 
-    // Category header (collapsible)
-    const header = document.createElement('div');
+    // Category header (collapsible button)
+    const header = document.createElement('button');
+    header.type = 'button';
     header.className = 'category-header';
-    header.style.borderLeftColor = catColor;
+    header.setAttribute('aria-expanded', 'false');
+    header.setAttribute('aria-controls', `cat-rows-${slug}`);
     header.innerHTML = `
-      <div class="cat-header-inner">
-        <span class="cat-badge" style="background:${catColor}">${catName}</span>
-        <span class="cat-count" id="cat-count-${slugify(catName)}">0 scored</span>
-        <i data-feather="chevron-down" class="cat-chevron"></i>
-      </div>
+      <span class="cat-icon">${ic(CATEGORY_ICONS[catName] || 'circle-dashed')}</span>
+      <span class="cat-text">
+        <span class="cat-name">${escHtml(catLabel(catName))}</span>
+        <span class="cat-count" id="cat-count-${slug}">0 scored</span>
+      </span>
+      <span class="cat-strip" id="cat-strip-${slug}" aria-hidden="true"></span>
+      ${ic('chevron-down', 'cat-chevron')}
     `;
     header.addEventListener('click', () => toggleCategory(section));
 
     // Hazard rows container (starts collapsed)
     const rows = document.createElement('div');
     rows.className = 'category-rows collapsed';
+    rows.id = `cat-rows-${slug}`;
 
     hazards.forEach(hazard => {
       rows.appendChild(buildHazardRow(hazard));
@@ -792,8 +821,7 @@ function buildHazardList() {
     container.appendChild(section);
   });
 
-  // Re-render feather icons
-  if (window.feather) feather.replace();
+  Object.keys(categories).forEach(updateCategoryStrip);
 }
 
 /**
@@ -802,14 +830,11 @@ function buildHazardList() {
 function buildHazardRow(hazard) {
   const entry = state.scores[hazard.id] || {};
   const score = calcScore(hazard.id);
-  const rl = score > 0 ? getRiskLevel(score) : null;
-  const catColor = CATEGORY_COLORS[hazard.category] || '#333';
   const isNeighborhood = state.assessmentType === 'neighborhood';
 
   const row = document.createElement('div');
   row.className = 'hazard-row' + (needsImpact(hazard.id) ? ' needs-impact' : '');
   row.id = `hazard-row-${hazard.id}`;
-  row.style.borderLeftColor = catColor;
 
   // Custom hazard name/desc inputs (for hazards 60-62)
   let customNameHtml = '';
@@ -817,25 +842,29 @@ function buildHazardRow(hazard) {
     const cn = state.customNames[hazard.id] || {};
     customNameHtml = `
       <div class="custom-hazard-inputs">
-        <input type="text" class="custom-name-input info-input"
-          placeholder="Custom Hazard ${hazard.customIndex} — enter name"
-          value="${escHtml(cn.name || '')}"
-          onchange="updateCustomName(${hazard.id}, 'name', this.value)"
-          oninput="updateCustomName(${hazard.id}, 'name', this.value)" />
-        <input type="text" class="custom-desc-input info-input"
-          placeholder="Description (optional)"
-          value="${escHtml(cn.description || '')}"
-          onchange="updateCustomName(${hazard.id}, 'description', this.value)"
-          oninput="updateCustomName(${hazard.id}, 'description', this.value)" />
+        <div class="field">
+          <label class="field-label" for="custom-name-${hazard.id}">Custom hazard ${hazard.customIndex} name</label>
+          <input type="text" id="custom-name-${hazard.id}" class="custom-name-input input"
+            placeholder="Enter a hazard name"
+            value="${escHtml(cn.name || '')}"
+            onchange="updateCustomName(${hazard.id}, 'name', this.value)"
+            oninput="updateCustomName(${hazard.id}, 'name', this.value)" />
+        </div>
+        <div class="field">
+          <label class="field-label" for="custom-desc-${hazard.id}">Description <span class="opt">(optional)</span></label>
+          <input type="text" id="custom-desc-${hazard.id}" class="custom-desc-input input"
+            value="${escHtml(cn.description || '')}"
+            onchange="updateCustomName(${hazard.id}, 'description', this.value)"
+            oninput="updateCustomName(${hazard.id}, 'description', this.value)" />
+        </div>
       </div>
     `;
   }
 
-  // Auto-score badge (shown when likelihood was set by Research My Area)
+  // Tag shown while the likelihood still comes from address research
   const isAutoScored = !!(state.scores[hazard.id]?.isAuto);
-  const autoScoreBadgeHtml = isAutoScored
-    ? `<span class="auto-score-badge" id="auto-badge-${hazard.id}">🔍 Auto</span>`
-    : `<span class="auto-score-badge hidden" id="auto-badge-${hazard.id}">🔍 Auto</span>`;
+  const autoScoreBadgeHtml =
+    `<span class="auto-score-badge${isAutoScored ? '' : ' hidden'}" id="auto-badge-${hazard.id}">Research estimate</span>`;
 
   // Hazard name display
   const displayName = hazard.isCustom
@@ -846,36 +875,33 @@ function buildHazardRow(hazard) {
     ? (state.customNames[hazard.id]?.description || 'User-defined custom hazard')
     : hazard.description;
 
-  // Score badge
-  const scoreBadgeHtml = score > 0
-    ? `<span class="score-badge" style="background:${rl.bg};color:${rl.color}">${score} <small>${rl.label}</small></span>`
-    : `<span class="score-badge score-empty">—</span>`;
-
-  // Inputs — household vs neighborhood
+  // Inputs: household vs neighborhood
   let inputsHtml = '';
   if (isNeighborhood) {
     const hh1 = state.hh1Name || 'HH1';
     const hh2 = state.hh2Name || 'HH2';
+    const sub = (a, b) => (parseInt(a) || 0) * (parseInt(b) || 0);
+    const subHtml = n => n > 0 ? `<span class="mini-score">${n}</span>` : '<span class="mini-score empty">Not rated</span>';
     inputsHtml = `
       <div class="inputs-grid">
-        <div class="input-group-label">${escHtml(hh1)}</div>
-        <div class="inputs-row">
-          ${buildStepperHtml(hazard.id, 'l', parseInt(entry.l) || 0, 'Likelihood')}
-          ${buildStepperHtml(hazard.id, 'i', parseInt(entry.i) || 0, 'Impact')}
-          <div class="sub-score" id="sub-score-${hazard.id}-1">
-            ${(parseInt(entry.l)||0) * (parseInt(entry.i)||0) > 0
-              ? `<span class="mini-score">${(parseInt(entry.l)||0) * (parseInt(entry.i)||0)}</span>`
-              : '<span class="mini-score empty">—</span>'}
+        <div class="hh-group">
+          <div class="hh-head">
+            <div class="input-group-label">${escHtml(hh1)}</div>
+            <div class="sub-score" id="sub-score-${hazard.id}-1">${subHtml(sub(entry.l, entry.i))}</div>
+          </div>
+          <div class="inputs-row">
+            ${buildPickerHtml(hazard.id, 'l', parseInt(entry.l) || 0, 'Likelihood')}
+            ${buildPickerHtml(hazard.id, 'i', parseInt(entry.i) || 0, 'Impact')}
           </div>
         </div>
-        <div class="input-group-label">${escHtml(hh2)}</div>
-        <div class="inputs-row">
-          ${buildStepperHtml(hazard.id, 'l2', parseInt(entry.l2) || 0, 'Likelihood')}
-          ${buildStepperHtml(hazard.id, 'i2', parseInt(entry.i2) || 0, 'Impact')}
-          <div class="sub-score" id="sub-score-${hazard.id}-2">
-            ${(parseInt(entry.l2)||0) * (parseInt(entry.i2)||0) > 0
-              ? `<span class="mini-score">${(parseInt(entry.l2)||0) * (parseInt(entry.i2)||0)}</span>`
-              : '<span class="mini-score empty">—</span>'}
+        <div class="hh-group">
+          <div class="hh-head">
+            <div class="input-group-label">${escHtml(hh2)}</div>
+            <div class="sub-score" id="sub-score-${hazard.id}-2">${subHtml(sub(entry.l2, entry.i2))}</div>
+          </div>
+          <div class="inputs-row">
+            ${buildPickerHtml(hazard.id, 'l2', parseInt(entry.l2) || 0, 'Likelihood')}
+            ${buildPickerHtml(hazard.id, 'i2', parseInt(entry.i2) || 0, 'Impact')}
           </div>
         </div>
       </div>
@@ -883,8 +909,8 @@ function buildHazardRow(hazard) {
   } else {
     inputsHtml = `
       <div class="inputs-row">
-        ${buildStepperHtml(hazard.id, 'l', parseInt(entry.l) || 0, 'Likelihood')}
-        ${buildStepperHtml(hazard.id, 'i', parseInt(entry.i) || 0, 'Impact')}
+        ${buildPickerHtml(hazard.id, 'l', parseInt(entry.l) || 0, 'Likelihood')}
+        ${buildPickerHtml(hazard.id, 'i', parseInt(entry.i) || 0, 'Impact')}
       </div>
     `;
   }
@@ -892,25 +918,27 @@ function buildHazardRow(hazard) {
   row.innerHTML = `
     ${customNameHtml}
     <div class="hazard-top">
-      <div class="hazard-name-wrap">
-        <strong class="hazard-name">${escHtml(displayName)}</strong>
-        ${autoScoreBadgeHtml}
-        <button class="desc-toggle" onclick="toggleDesc(${hazard.id})" aria-label="Toggle description">
-          <i data-feather="info" class="desc-icon"></i>
-        </button>
+      <div class="hazard-title">
+        <div class="hazard-name-wrap">
+          <strong class="hazard-name">${escHtml(displayName)}</strong>
+          ${autoScoreBadgeHtml}
+          <button type="button" class="desc-toggle" onclick="toggleDesc(${hazard.id})" aria-label="Toggle description" aria-expanded="false" aria-controls="desc-${hazard.id}">
+            ${ic('info', 'desc-icon')}
+          </button>
+        </div>
+        <div class="hazard-desc hidden" id="desc-${hazard.id}">${escHtml(displayDesc)}</div>
       </div>
-      ${scoreBadgeHtml}
-    </div>
-    <div class="hazard-desc hidden" id="desc-${hazard.id}">
-      <em>${escHtml(displayDesc)}</em>
+      <div class="score-block">${scoreBlockHtml(score)}</div>
     </div>
     <div class="rate-impact-flag" id="rate-impact-${hazard.id}">
-      Research estimated likelihood. <strong>Rate impact</strong> to complete this score.
+      ${ic('info')}
+      <span>Research estimated likelihood. <strong>Rate impact</strong> to finish this score.</span>
     </div>
     ${_researchOriginHtml(hazard.id)}
     ${inputsHtml}
-    <div class="notes-row">
-      <textarea class="notes-input" placeholder="Notes (optional)…"
+    <div class="notes-row field">
+      <label class="field-label" for="notes-${hazard.id}">Notes <span class="opt">(optional)</span></label>
+      <textarea class="notes-input input" id="notes-${hazard.id}"
         onchange="updateNotes(${hazard.id}, this.value)"
         oninput="updateNotes(${hazard.id}, this.value)"
         rows="2">${escHtml(userNotes(entry))}</textarea>
@@ -918,6 +946,12 @@ function buildHazardRow(hazard) {
   `;
 
   return row;
+}
+
+/** Big score number with its risk badge (or the Not rated badge). */
+function scoreBlockHtml(score) {
+  const rl = score > 0 ? getRiskLevel(score) : null;
+  return (rl ? `<span class="score-num">${score}</span>` : '') + riskBadgeHtml(rl);
 }
 
 /** Notes the user wrote (ignores legacy auto-generated research notes). */
@@ -937,46 +971,54 @@ function getResearchOrigin(hazardId) {
 function _researchOriginHtml(hazardId) {
   const o = getResearchOrigin(hazardId);
   if (!o || !state.scores[hazardId]?.l) return '';
-  return `<div class="research-origin">Research: ${escHtml(cleanFindingText(o.finding || ''))}
-    <span class="research-origin-meta">${escHtml(o.source || '')}${o.confidence ? ' · Confidence: ' + escHtml(o.confidence) : ''}</span></div>`;
+  return `<div class="research-origin">${ic('map-pin')}<div><span class="research-origin-text">Research: ${escHtml(cleanFindingText(o.finding || ''))}</span>
+    <span class="research-origin-meta">${escHtml(o.source || '')}${o.confidence ? '. Confidence: ' + escHtml(o.confidence) : ''}</span></div></div>`;
 }
 
 /** Strip emoji / warning glyphs from research finding text. */
 function cleanFindingText(t) {
-  return String(t || '').replace(/[\u2600-\u27BF\uFE0F]|[\uD83C-\uDBFF][\uDC00-\uDFFF]/g, '').replace(/\s+/g, ' ').trim();
+  return String(t || '').replace(/[☀-➿️]|[\uD83C-\uDBFF][\uDC00-\uDFFF]/g, '').replace(/\s+/g, ' ').trim();
 }
 
 /**
- * Build an inline stepper (−  value  +) for a likelihood/impact field.
+ * Build a 1 to 5 picker (segmented control) for a likelihood/impact field.
+ * Picking the selected value again clears it.
  */
-function buildStepperHtml(hazardId, field, currentVal, label) {
+function buildPickerHtml(hazardId, field, currentVal, label) {
+  const isLikelihood = field === 'l' || field === 'l2';
+  const words = isLikelihood ? LIKELIHOOD_LABELS : IMPACT_LABELS;
+  const lid = `pl-${hazardId}-${field}`;
+  const btns = [1, 2, 3, 4, 5].map(n => `<button type="button" class="seg${n === currentVal ? ' on' : ''}" data-val="${n}"
+        aria-pressed="${n === currentVal}" aria-label="${label} ${n}, ${words[n]}"
+        onclick="setScore(${hazardId}, '${field}', ${n})">${n}</button>`).join('');
   return `
-    <div class="stepper" data-hazard="${hazardId}" data-field="${field}">
-      <label class="stepper-label">${label}</label>
-      <div class="stepper-controls">
-        <button class="stepper-btn stepper-minus"
-          onclick="stepperChange(${hazardId}, '${field}', -1)"
-          aria-label="Decrease ${label}">−</button>
-        <span class="stepper-value" id="sv-${hazardId}-${field}">${currentVal || '—'}</span>
-        <button class="stepper-btn stepper-plus"
-          onclick="stepperChange(${hazardId}, '${field}', 1)"
-          aria-label="Increase ${label}">+</button>
+    <div class="stepper picker" data-hazard="${hazardId}" data-field="${field}" role="group" aria-labelledby="${lid}">
+      <div class="picker-head">
+        <span class="stepper-label" id="${lid}">${label}</span>
+        <span class="picker-word" id="sl-${hazardId}-${field}">${_pickerWord(hazardId, field, currentVal)}</span>
       </div>
+      <div class="seg-row">${btns}</div>
+      <div class="picker-caps" aria-hidden="true"><span>${words[1]}</span><span>${words[5]}</span></div>
     </div>
   `;
+}
+
+function _pickerWord(hazardId, field, val) {
+  const words = (field === 'l' || field === 'l2') ? LIKELIHOOD_LABELS : IMPACT_LABELS;
+  if (val > 0) return words[val];
+  if (field === 'i' && needsImpact(hazardId)) return 'Choose 1 to 5';
+  return '';
 }
 
 /* ---------------------------------------------------------------
    SCORING INTERACTIONS
 --------------------------------------------------------------- */
 
-/**
- * Handle stepper button clicks.
- */
-function stepperChange(hazardId, field, delta) {
+/** Set a likelihood/impact value (0 clears it) and refresh the row. */
+function setScore(hazardId, field, value) {
   if (!state.scores[hazardId]) state.scores[hazardId] = {};
   const current = parseInt(state.scores[hazardId][field]) || 0;
-  const next = Math.max(0, Math.min(5, current + delta));
+  const next = Math.max(0, Math.min(5, value === current ? 0 : value));
   state.scores[hazardId][field] = next;
 
   // If user manually adjusts the likelihood, clear the auto-score flag
@@ -984,26 +1026,31 @@ function stepperChange(hazardId, field, delta) {
     state.scores[hazardId].isAuto = false;
   }
 
-  // Update the value display
-  const sv = document.getElementById(`sv-${hazardId}-${field}`);
-  if (sv) sv.textContent = next > 0 ? next : '—';
-
-  // Highlight active stepper value
-  updateStepperUI(hazardId, field, next);
-
-  // Recalculate and update row
   updateRowScore(hazardId);
   autoSave();
 }
 
-/**
- * Visual feedback on stepper value display.
- */
-function updateStepperUI(hazardId, field, val) {
-  const sv = document.getElementById(`sv-${hazardId}-${field}`);
-  if (!sv) return;
-  sv.textContent = val > 0 ? val : '—';
-  sv.className = 'stepper-value' + (val > 0 ? ' has-value' : '');
+/** Step a value up or down by one (kept for callers that adjust by delta). */
+function stepperChange(hazardId, field, delta) {
+  const current = parseInt((state.scores[hazardId] || {})[field]) || 0;
+  const next = Math.max(0, Math.min(5, current + delta));
+  if (next === current) return;
+  if (next === 0) { setScore(hazardId, field, current); return; }   // toggling the selected value clears it
+  setScore(hazardId, field, next);
+}
+
+/** Sync one picker's pressed state and word label with state. */
+function refreshPicker(hazardId, field) {
+  const wrap = document.querySelector(`#hazard-row-${hazardId} .picker[data-field="${field}"]`);
+  if (!wrap) return;
+  const val = parseInt((state.scores[hazardId] || {})[field]) || 0;
+  wrap.querySelectorAll('.seg').forEach(b => {
+    const on = parseInt(b.dataset.val) === val;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+  const word = document.getElementById(`sl-${hazardId}-${field}`);
+  if (word) word.textContent = _pickerWord(hazardId, field, val);
 }
 
 /**
@@ -1014,29 +1061,18 @@ function updateRowScore(hazardId) {
   if (!row) return;
 
   const score = calcScore(hazardId);
-  const rl = score > 0 ? getRiskLevel(score) : null;
 
-  // Sync auto-score badge visibility
+  // Sync auto-score tag visibility
   const autoBadge = document.getElementById(`auto-badge-${hazardId}`);
   if (autoBadge) {
     autoBadge.classList.toggle('hidden', !state.scores[hazardId]?.isAuto);
   }
 
-  // Update main score badge
-  const badge = row.querySelector('.score-badge');
-  if (badge) {
-    if (score > 0 && rl) {
-      badge.style.background = rl.bg;
-      badge.style.color = rl.color;
-      badge.innerHTML = `${score} <small>${rl.label}</small>`;
-      badge.className = 'score-badge';
-    } else {
-      badge.style.background = '';
-      badge.style.color = '';
-      badge.innerHTML = '—';
-      badge.className = 'score-badge score-empty';
-    }
-  }
+  ['l', 'i', 'l2', 'i2'].forEach(f => refreshPicker(hazardId, f));
+
+  // Update main score block
+  const block = row.querySelector('.score-block');
+  if (block) block.innerHTML = scoreBlockHtml(score);
 
   // Neighborhood sub-scores
   if (state.assessmentType === 'neighborhood') {
@@ -1045,8 +1081,8 @@ function updateRowScore(hazardId) {
     const s2 = (parseInt(e.l2)||0) * (parseInt(e.i2)||0);
     const sub1 = document.getElementById(`sub-score-${hazardId}-1`);
     const sub2 = document.getElementById(`sub-score-${hazardId}-2`);
-    if (sub1) sub1.innerHTML = s1 > 0 ? `<span class="mini-score">${s1}</span>` : '<span class="mini-score empty">—</span>';
-    if (sub2) sub2.innerHTML = s2 > 0 ? `<span class="mini-score">${s2}</span>` : '<span class="mini-score empty">—</span>';
+    if (sub1) sub1.innerHTML = s1 > 0 ? `<span class="mini-score">${s1}</span>` : '<span class="mini-score empty">Not rated</span>';
+    if (sub2) sub2.innerHTML = s2 > 0 ? `<span class="mini-score">${s2}</span>` : '<span class="mini-score empty">Not rated</span>';
   }
 
   row.classList.toggle('needs-impact', needsImpact(hazardId));
@@ -1084,7 +1120,7 @@ function updateCustomName(hazardId, field, val) {
   }
   const descEl = document.getElementById(`desc-${hazardId}`);
   if (descEl && field === 'description') {
-    descEl.innerHTML = `<em>${escHtml(val || 'User-defined custom hazard')}</em>`;
+    descEl.textContent = val || 'User-defined custom hazard';
   }
 
   autoSave();
@@ -1100,6 +1136,8 @@ function updateProgress() {
   const total = totalActive();
   const el = document.getElementById('progress-indicator');
   if (el) el.textContent = `${scored} of ${total} hazards scored`;
+  const fill = document.getElementById('progress-fill');
+  if (fill) fill.style.width = (total ? Math.round((scored / total) * 100) : 0) + '%';
 
   // Show float button after 5 scored
   const floatBtn = document.getElementById('float-results-btn');
@@ -1126,6 +1164,22 @@ function updateCategoryCount(catName) {
 
   const el = document.getElementById(`cat-count-${slugify(catName)}`);
   if (el) el.textContent = `${scored} of ${total} scored`;
+  updateCategoryStrip(catName);
+}
+
+/** Distribution strip: one segment per hazard, in band color, highest score first. */
+function updateCategoryStrip(catName) {
+  const el = document.getElementById(`cat-strip-${slugify(catName)}`);
+  if (!el) return;
+  const segs = HAZARD_DATA
+    .filter(h => h.category === catName && !(h.isCustom && !state.customNames[h.id]?.name))
+    .map(h => isScored(h.id) ? calcScore(h.id) : 0)
+    .sort((a, b) => b - a)
+    .map(sc => {
+      const rl = sc > 0 ? getRiskLevel(sc) : null;
+      return `<i${rl ? ` class="b-${rl.cls}"` : ''}></i>`;
+    });
+  el.innerHTML = segs.join('');
 }
 
 /* ---------------------------------------------------------------
@@ -1142,11 +1196,16 @@ function setCategoryOpen(section, open) {
   if (!rows) return;
   rows.classList.toggle('collapsed', !open);
   section.classList.toggle('is-open', open);
+  const btn = section.querySelector('.category-header');
+  if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
 }
 
 function toggleDesc(hazardId) {
   const el = document.getElementById(`desc-${hazardId}`);
-  if (el) el.classList.toggle('hidden');
+  if (!el) return;
+  el.classList.toggle('hidden');
+  const btn = document.querySelector(`#hazard-row-${hazardId} .desc-toggle`);
+  if (btn) btn.setAttribute('aria-expanded', el.classList.contains('hidden') ? 'false' : 'true');
 }
 
 /* ---------------------------------------------------------------
@@ -1154,16 +1213,13 @@ function toggleDesc(hazardId) {
    Print and PDF
 --------------------------------------------------------------- */
 
-const LIKELIHOOD_LABELS = { 1: 'Extremely Unlikely', 2: 'Unlikely', 3: 'Possible', 4: 'Likely', 5: 'Almost Certain' };
+const LIKELIHOOD_LABELS = { 1: 'Extremely unlikely', 2: 'Unlikely', 3: 'Possible', 4: 'Likely', 5: 'Almost certain' };
 const IMPACT_LABELS     = { 1: 'Negligible', 2: 'Minor', 3: 'Moderate', 4: 'Major', 5: 'Catastrophic' };
-const REPORT_FOOTER     = 'Prepared with the World Aware Risk Assessment Tool · beworldaware.com';
+const REPORT_FOOTER     = 'Prepared with the World Aware Risk Assessment Tool, beworldaware.com';
 
-const RISK_BANDS = [
-  { key: 'CRITICAL', label: 'CRITICAL — Immediate action required',          emoji: '🟥' },
-  { key: 'HIGH',     label: 'HIGH — Develop a specific action plan',          emoji: '🟧' },
-  { key: 'MEDIUM',   label: 'MEDIUM — Include in your preparedness planning', emoji: '🟨' },
-  { key: 'LOW',      label: 'LOW — Monitor and maintain basic preparedness',  emoji: '🟩' },
-];
+const RISK_BANDS = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map(k => ({
+  key: k, label: RISK_LEVELS[k].label, action: RISK_LEVELS[k].action,
+}));
 
 function hazardDisplayName(h) {
   return h.isCustom ? (state.customNames[h.id]?.name || `Custom Hazard ${h.customIndex}`) : h.name;
@@ -1196,7 +1252,7 @@ function formatLIText(it) {
     else if (i > 0)     { parts.push(`${names[idx]}: I${i}, likelihood not rated`); }
   });
   if (full === 2) parts.push(`average ${it.score}`);
-  return parts.join(' · ');
+  return parts.join('; ');
 }
 
 /**
@@ -1218,7 +1274,7 @@ function buildReportData() {
       name: hazardDisplayName(h),
       category: h.category,
       score,
-      level: rl ? rl.label : '',
+      level: rl ? rl.key : '',
       rl,
       l: parseInt(e.l) || 0,
       i: parseInt(e.i) || 0,
@@ -1304,7 +1360,7 @@ function buildDefaultSummary(data) {
     const lv = [];
     if (data.counts.CRITICAL) lv.push(`${data.counts.CRITICAL} critical`);
     if (data.counts.HIGH)     lv.push(`${data.counts.HIGH} high`);
-    if (data.counts.MEDIUM)   lv.push(`${data.counts.MEDIUM} medium`);
+    if (data.counts.MEDIUM)   lv.push(`${data.counts.MEDIUM} moderate`);
     if (data.counts.LOW)      lv.push(`${data.counts.LOW} low`);
     parts.push(`This assessment scored ${data.scored.length} hazard${data.scored.length === 1 ? '' : 's'} (${lv.join(', ')}).`);
     parts.push(`The highest-ranked risk is ${data.scored[0].name} with a score of ${data.scored[0].score} out of 25.`);
@@ -1330,19 +1386,21 @@ function renderResults() {
   const metaBits = [data.typeLabel + ' assessment'];
   if (data.location) metaBits.push(escHtml(data.location));
   if (data.dateDisplay) metaBits.push(escHtml(data.dateDisplay));
-  const metaHtml = `<p class="results-meta">${metaBits.join(' · ')}</p>`;
+  const metaHtml = `<p class="results-meta">${metaBits.join('. ')}</p>`;
 
   if (items.length === 0 && data.unrated.length === 0) {
-    summaryEl.innerHTML = metaHtml + '<p class="empty-state">No hazards scored yet. Go to Assessment to begin.</p>';
+    summaryEl.innerHTML = metaHtml + `
+      <div class="empty-card">
+        <h3>No hazards scored yet</h3>
+        <p>Open a category and rate likelihood and impact. Results fill in as you go.</p>
+        <button class="btn btn-primary" onclick="showScreen('assessment')">${ic('clipboard-list')} Start assessing</button>
+      </div>`;
   } else {
-    summaryEl.innerHTML = metaHtml + `<div class="summary-chips">
-         ${counts.CRITICAL > 0 ? `<span class="chip chip-critical">${counts.CRITICAL} Critical</span>` : ''}
-         ${counts.HIGH > 0 ? `<span class="chip chip-high">${counts.HIGH} High</span>` : ''}
-         ${counts.MEDIUM > 0 ? `<span class="chip chip-medium">${counts.MEDIUM} Medium</span>` : ''}
-         ${counts.LOW > 0 ? `<span class="chip chip-low">${counts.LOW} Low</span>` : ''}
-         <span class="chip chip-total">${items.length} total scored</span>
-         ${data.unrated.length > 0 ? `<span class="chip chip-unrated">${data.unrated.length} impact not rated</span>` : ''}
-       </div>`;
+    summaryEl.innerHTML = metaHtml + `
+      <div class="count-tiles" role="group" aria-label="Hazards by risk band">
+        ${RISK_BANDS.map(b => `<div class="count-tile b-${RISK_LEVELS[b.key].cls}${counts[b.key] ? '' : ' is-zero'}"><span class="count-num">${counts[b.key]}</span><span class="count-label">${b.label}</span></div>`).join('')}
+      </div>
+      <p class="summary-chips"><span class="chip chip-total">${items.length} total scored</span>${data.unrated.length > 0 ? `<span class="chip chip-unrated">${data.unrated.length} impact not rated</span>` : ''}</p>`;
   }
 
   const listEl = document.getElementById('results-list');
@@ -1354,61 +1412,56 @@ function renderResults() {
 
     const rl = RISK_LEVELS[band.key];
     html += `
-      <div class="result-band" style="border-left:4px solid ${rl.color}">
-        <div class="band-header" style="background:${rl.bg};color:${rl.color}">
-          ${band.emoji} ${band.label}
+      <section class="result-band band-${rl.cls}" aria-label="${rl.label} risks">
+        <div class="band-header">
+          ${riskBadgeHtml(rl)}
+          <span class="band-action">${rl.action}</span>
+          <span class="band-count">${bandItems.length} ${bandItems.length === 1 ? 'hazard' : 'hazards'}</span>
         </div>
     `;
 
     bandItems.forEach(it => {
-      const catColor  = CATEGORY_COLORS[it.category] || '#333';
       const sourceTag = it.fromResearch
-        ? `<span class="result-source-tag auto">🔍 Research</span>`
-        : `<span class="result-source-tag manual">✏️ Manual</span>`;
+        ? `<span class="result-source-tag auto">${ic('map-pin')} Research</span>`
+        : `<span class="result-source-tag manual">${ic('pencil')} Entered by hand</span>`;
       html += `
         <div class="result-card">
           <div class="result-card-top">
             <div class="result-left">
               <span class="result-name">${escHtml(it.name)}</span>
-              <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;">
-                <span class="result-cat-badge" style="background:${catColor}">${escHtml(it.category)}</span>
-                ${sourceTag}
-              </div>
+              <span class="result-meta-line"><span class="result-cat">${escHtml(catLabel(it.category))}</span>${sourceTag}</span>
               <span class="result-li">${escHtml(it.liText)}</span>
             </div>
-            <div class="result-score" style="background:${it.rl.bg};color:${it.rl.color}">
+            <div class="result-score">
               <span class="result-score-num">${it.score}</span>
-              <span class="result-score-label">${it.rl.label}</span>
+              ${riskBadgeHtml(it.rl)}
             </div>
           </div>
-          ${it.notes ? `<div class="result-notes"><i data-feather="file-text" class="note-icon"></i> ${escHtml(it.notes)}</div>` : ''}
+          ${it.notes ? `<div class="result-notes">${ic('file-text', 'note-icon')}<span>${escHtml(it.notes)}</span></div>` : ''}
         </div>
       `;
     });
 
-    html += `</div>`;
+    html += `</section>`;
   });
 
   if (data.unrated.length > 0) {
     html += `
-      <div class="result-band unrated-band">
+      <section class="result-band unrated-band">
         <div class="band-header unrated-band-header">
-          Identified by research — impact not yet rated
+          <h3>Identified by research, impact not yet rated</h3>
         </div>
         <p class="unrated-intro">Research estimated how likely these are at this address. Rate the impact of each on the Assess screen to give it a full risk score.</p>
     `;
     data.unrated.forEach(it => {
-      const catColor = CATEGORY_COLORS[it.category] || '#333';
       html += `
         <div class="result-card unrated-card">
           <div class="result-card-top">
             <div class="result-left">
               <span class="result-name">${escHtml(it.name)}</span>
-              <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;">
-                <span class="result-cat-badge" style="background:${catColor}">${escHtml(it.category)}</span>
-              </div>
+              <span class="result-meta-line"><span class="result-cat">${escHtml(catLabel(it.category))}</span></span>
               ${it.finding ? `<span class="unrated-finding">${escHtml(it.finding)}</span>` : ''}
-              ${it.source ? `<span class="unrated-source">${escHtml(it.source)}${it.confidence ? ' · Confidence: ' + escHtml(it.confidence) : ''}</span>` : ''}
+              ${it.source ? `<span class="unrated-source">${escHtml(it.source)}${it.confidence ? '. Confidence: ' + escHtml(it.confidence) : ''}</span>` : ''}
             </div>
             <div class="result-score result-likelihood">
               <span class="result-score-num">L${it.l}</span>
@@ -1420,13 +1473,12 @@ function renderResults() {
     });
     html += `
         <div class="unrated-cta">
-          <button class="btn-small btn-primary" onclick="showScreen('assessment')">Rate impact</button>
+          <button class="btn btn-primary btn-small" onclick="showScreen('assessment')">Rate impact</button>
         </div>
-      </div>`;
+      </section>`;
   }
 
   listEl.innerHTML = html;
-  if (window.feather) feather.replace();
 }
 
 /* ---------------------------------------------------------------
@@ -1454,7 +1506,7 @@ function shareResults() {
 function fallbackCopy(text) {
   if (navigator.clipboard) {
     navigator.clipboard.writeText(text).then(() => {
-      alert('Results copied to clipboard!');
+      alert('Results copied to clipboard.');
     }).catch(() => {
       showTextExportDialog(text);
     });
@@ -1464,19 +1516,19 @@ function fallbackCopy(text) {
 }
 
 function showTextExportDialog(text) {
-  const ta = document.createElement('textarea');
-  ta.value = text;
-  ta.style.cssText = 'position:fixed;top:10%;left:5%;width:90%;height:70%;z-index:9999;padding:12px;font-size:13px;border:2px solid #E8650A;border-radius:8px;';
   const overlay = document.createElement('div');
-  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9998;display:flex;align-items:center;justify-content:center;';
-  const closeBtn = document.createElement('button');
-  closeBtn.textContent = '✕ Close';
-  closeBtn.style.cssText = 'position:fixed;top:6%;right:6%;z-index:10000;background:#E8650A;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-weight:bold;';
-  closeBtn.onclick = () => { overlay.remove(); ta.remove(); closeBtn.remove(); };
+  overlay.className = 'dialog-overlay export-overlay';
+  overlay.innerHTML = `
+    <div class="dialog-box export-box" role="dialog" aria-modal="true" aria-labelledby="export-title">
+      <h3 id="export-title">Copy your results</h3>
+      <textarea class="input export-text" readonly aria-label="Results text"></textarea>
+      <div class="dialog-buttons"><button class="btn btn-primary export-close">Close</button></div>
+    </div>`;
+  const ta = overlay.querySelector('textarea');
+  ta.value = text;
+  overlay.querySelector('.export-close').onclick = () => overlay.remove();
   document.body.appendChild(overlay);
-  document.body.appendChild(ta);
-  document.body.appendChild(closeBtn);
-  ta.select();
+  ta.focus(); ta.select();
 }
 
 function buildTextSummary() {
@@ -1501,7 +1553,7 @@ function buildTextSummary() {
   RISK_BANDS.forEach(band => {
     const bandItems = data.scored.filter(it => it.level === band.key);
     if (bandItems.length === 0) return;
-    out += `\n── ${band.key} ──\n`;
+    out += `\n── ${RISK_LEVELS[band.key].label.toUpperCase()} ──\n`;
     bandItems.forEach(it => {
       out += `  [${it.score}] ${it.name}  (${it.category})\n       ${it.liText}\n`;
       const notes = (edits.notes && edits.notes[it.id] !== undefined) ? edits.notes[it.id] : it.notes;
@@ -1547,23 +1599,51 @@ function buildTextSummary() {
 
 function buildRiskMatrix() {
   const tbody = document.getElementById('risk-matrix-body');
-  if (!tbody || tbody.children.length > 0) return; // already built
+  if (!tbody) return;
+  tbody.innerHTML = '';
+
+  // Which scored hazards land in which likelihood x impact cell
+  const landed = {};
+  const addAt = (l, i, name) => {
+    if (!(l > 0 && i > 0)) return;
+    (landed[l + 'x' + i] = landed[l + 'x' + i] || []).push(name);
+  };
+  HAZARD_DATA.forEach(h => {
+    if (h.isCustom && !state.customNames[h.id]?.name) return;
+    const e = state.scores[h.id];
+    if (!e) return;
+    const name = hazardDisplayName(h);
+    addAt(parseInt(e.l) || 0, parseInt(e.i) || 0, name);
+    if (state.assessmentType === 'neighborhood') addAt(parseInt(e.l2) || 0, parseInt(e.i2) || 0, name);
+  });
+
+  const readout = document.getElementById('matrix-readout');
+  const idle = 'Select a cell to read its score. A dot marks cells that hold hazards you have scored.';
 
   for (let l = 5; l >= 1; l--) {
     const tr = document.createElement('tr');
     const th = document.createElement('th');
     th.textContent = l;
+    th.scope = 'row';
     th.className = 'matrix-label';
     tr.appendChild(th);
 
     for (let i = 1; i <= 5; i++) {
       const score = l * i;
       const rl = getRiskLevel(score);
+      const names = landed[l + 'x' + i] || [];
+      const sentence = `Likelihood ${l} (${LIKELIHOOD_LABELS[l]}) × impact ${i} (${IMPACT_LABELS[i]}) = ${score}, ${rl.label}.` +
+        (names.length ? ' ' + names.join(', ') + '.' : '');
       const td = document.createElement('td');
-      td.textContent = score;
-      td.style.background = rl ? rl.bg : '#fff';
-      td.style.color = rl ? rl.color : '#333';
-      td.className = 'matrix-cell';
+      td.className = `matrix-cell b-${rl.cls}`;
+      td.tabIndex = 0;
+      td.setAttribute('aria-label', sentence);
+      td.innerHTML = `<span class="mc-score">${score}</span>${names.length ? '<span class="mc-dot" aria-hidden="true"></span>' : ''}`;
+      const show = () => { if (readout) readout.textContent = sentence; };
+      td.addEventListener('focus', show);
+      td.addEventListener('mouseenter', show);
+      td.addEventListener('click', show);
+      td.addEventListener('mouseleave', () => { if (readout && document.activeElement !== td) readout.textContent = idle; });
       tr.appendChild(td);
     }
     tbody.appendChild(tr);
@@ -1630,6 +1710,7 @@ function renderSavedList() {
 
   if (keys.length === 0) {
     container.innerHTML = '<p class="empty-state">No saved assessments yet.</p>';
+    const hs = document.getElementById('home-saved-list'); if (hs) hs.classList.add('hidden');
     return;
   }
 
@@ -1645,11 +1726,11 @@ function renderSavedList() {
       <div class="saved-item">
         <div class="saved-item-info">
           <strong>${escHtml(s.location)}</strong>
-          <span class="saved-meta">${s.type === 'neighborhood' ? 'Neighborhood' : 'Household'} · ${s.scored} hazards · ${d.toLocaleDateString()}</span>
+          <span class="saved-meta">${s.type === 'neighborhood' ? 'Neighborhood' : 'Household'}. ${s.scored} hazards scored. ${d.toLocaleDateString()}</span>
         </div>
         <div class="saved-item-actions">
-          <button class="btn-small btn-primary" onclick="loadAssessment('${k}')">Load</button>
-          <button class="btn-small btn-danger" onclick="deleteAssessment('${k}')">Delete</button>
+          <button class="btn btn-secondary btn-small" onclick="loadAssessment('${k}')">Load</button>
+          <button class="btn btn-danger btn-small" onclick="deleteAssessment('${k}')">Delete</button>
         </div>
       </div>
     `;
@@ -1686,7 +1767,7 @@ function exportJSON() {
         name: h.isCustom ? state.customNames[h.id]?.name : h.name,
         category: h.category,
         score: calcScore(h.id),
-        riskLevel: getRiskLevel(calcScore(h.id))?.label || '',
+        riskLevel: getRiskLevel(calcScore(h.id))?.key || '',
         likelihood: state.scores[h.id]?.l || 0,
         impact: state.scores[h.id]?.i || 0,
         notes: state.scores[h.id]?.notes || '',
@@ -1710,7 +1791,7 @@ function exportJSON() {
 --------------------------------------------------------------- */
 
 function clearAllData() {
-  showConfirm('Clear ALL assessment data and saved assessments? This cannot be undone.', () => {
+  showConfirm('Clear all assessment data and saved assessments? This cannot be undone.', () => {
     try {
       localStorage.removeItem('wa_current_state');
       localStorage.removeItem('wa_saves');
@@ -1878,9 +1959,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // Render saved assessments on home screen
   renderSavedList();
 
-  // Initialize Feather icons
-  if (window.feather) feather.replace();
-
   // Set default date field
   const dateField = document.getElementById('field-date');
   if (dateField && !dateField.value) {
@@ -1899,6 +1977,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (typeof renderReportView === 'function') renderReportView();
   });
 
-  console.log('World Aware Risk Assessment v2.0 loaded.');
+  console.log('World Aware Risk Assessment v2.1 loaded.');
   console.log(`${HAZARD_DATA.length} hazards loaded.`);
 });
