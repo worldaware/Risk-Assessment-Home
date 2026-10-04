@@ -1093,29 +1093,7 @@ button:active, .btn-primary:active, .btn-secondary:active { opacity: 0.85; }
   justify-content: flex-end;
 }
 
-/* ── Screen 6 — Research My Area ────────────────────────── */
-
-.research-header {
-  background: var(--dark-navy);
-  padding: 12px 16px 16px;
-  position: sticky;
-  top: 0;
-  z-index: 50;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.25);
-}
-.research-header-top {
-  margin-bottom: 6px;
-}
-.research-title {
-  font-size: 1.1rem;
-  color: #fff;
-  margin-bottom: 4px;
-}
-.research-subtitle {
-  font-size: 0.82rem;
-  color: rgba(255,255,255,0.7);
-  line-height: 1.4;
-}
+/* ── Home — address entry & area research (was Screen 6) ── */
 
 .research-privacy {
   background: #EAF4FB;
@@ -1657,112 +1635,6 @@ button:active, .btn-primary:active, .btn-secondary:active { opacity: 0.85; }
   }
 }
 
-/* ============================================================
-   PRINT STYLESHEET — for PDF export of results
-============================================================ */
-
-@media print {
-  /* Hide everything except results */
-  .install-banner,
-  .bottom-nav,
-  .assessment-header,
-  .float-results-btn,
-  .results-header .btn-icon,
-  .results-actions,
-  #screen-home,
-  #screen-assessment,
-  #screen-reference,
-  #screen-about,
-  #screen-research,
-  #confirm-dialog,
-  .auto-score-banner,
-  .research-report-link {
-    display: none !important;
-  }
-
-  body {
-    background: #fff;
-    font-size: 11pt;
-    color: #000;
-    margin: 0;
-    padding: 0;
-  }
-
-  #app {
-    max-width: 100%;
-    padding: 0;
-    margin: 0;
-    box-shadow: none;
-    border: none;
-  }
-
-  /* Force results screen visible */
-  #screen-results {
-    display: block !important;
-  }
-
-  /* Print header */
-  .results-header {
-    background: #fff;
-    color: #000;
-    border-bottom: 2px solid #E8650A;
-    padding: 8px 0 6px;
-    position: static;
-    page-break-after: avoid;
-  }
-  .results-header h2 {
-    color: #000;
-    font-size: 14pt;
-  }
-
-  .results-summary {
-    padding: 8px 0 4px;
-  }
-
-  .results-list {
-    padding: 0;
-  }
-
-  .result-band {
-    page-break-inside: avoid;
-    box-shadow: none;
-    border: 1px solid #ddd;
-    margin-bottom: 10px;
-  }
-
-  .result-card {
-    page-break-inside: avoid;
-  }
-
-  .result-cat-badge {
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
-  }
-
-  .band-header,
-  .result-score,
-  .chip {
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
-  }
-
-  /* Print footer */
-  .results-list::after {
-    content: "World Aware Risk Assessment · beworldaware.com";
-    display: block;
-    text-align: center;
-    font-size: 9pt;
-    color: #888;
-    margin-top: 20px;
-    padding-top: 10px;
-    border-top: 1px solid #ddd;
-  }
-
-  @page {
-    margin: 1.5cm;
-  }
-}
-
 /* =============================================================
    MANUAL LOOKUP CARDS (Research My Area)
    ============================================================= */
@@ -1904,4 +1776,422 @@ button:active, .btn-primary:active, .btn-secondary:active { opacity: 0.85; }
 
 .manual-score-confirm.hidden {
   display: none;
+}
+
+
+/* =============================================================
+   v2.0 — HOME ADDRESS CARD
+   ============================================================= */
+.home-container-tail { padding-top: 0; }
+
+.home-address-card {
+  margin: 0 12px 8px;
+  border: 1px solid var(--gray-border);
+  border-top: 4px solid var(--orange);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  scroll-margin-top: 12px;
+}
+.address-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 16px 16px 4px;
+}
+.address-card-title {
+  font-size: 1.1rem;
+  color: var(--dark-navy);
+}
+.address-type-pill {
+  font-size: 0.7rem;
+  font-weight: bold;
+  color: var(--dark-navy);
+  background: var(--gray-light);
+  border: 1px solid var(--gray-border);
+  padding: 3px 9px;
+  border-radius: 20px;
+  white-space: nowrap;
+}
+.address-card-sub {
+  padding: 0 16px 12px;
+  font-size: 0.85rem;
+  color: var(--gray-text);
+  line-height: 1.5;
+}
+.home-address-card .research-privacy { margin: 0; }
+.home-address-card .research-input-section { padding: 16px; }
+.home-address-card .research-loading { padding: 16px; }
+.home-address-card .research-results { padding: 0 0 8px; }
+
+.btn-block,
+.home-address-card .btn-large.btn-block {
+  width: 100%;
+  max-width: none;
+  flex: none;
+}
+
+.btn-link {
+  background: none;
+  border: none;
+  color: var(--dark-navy);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  font-weight: bold;
+  font-size: 0.88rem;
+  padding: 10px 4px;
+  min-height: 44px;
+  justify-content: center;
+  align-self: center;
+}
+.btn-link:hover { color: var(--orange); }
+
+.report-actions-top {
+  border-top: none;
+  border-bottom: 1px solid var(--gray-border);
+  margin-top: 0;
+  padding: 16px;
+}
+.report-actions-note {
+  font-size: 0.8rem;
+  color: var(--gray-text);
+  text-align: center;
+  line-height: 1.45;
+}
+.report-actions .btn-link { width: auto; }
+
+/* =============================================================
+   v2.0 — ASSESS: research flags
+   ============================================================= */
+.category-section.is-open .cat-chevron { transform: rotate(180deg); }
+
+.auto-score-banner-text { flex: 1 1 220px; line-height: 1.45; }
+.auto-score-banner-remaining { display: block; font-weight: bold; color: var(--orange); margin-top: 2px; }
+
+.rate-impact-flag { display: none; }
+.hazard-row.needs-impact {
+  background: #FFF8EC;
+  box-shadow: inset 0 0 0 2px #F4C27A;
+}
+.hazard-row.needs-impact .rate-impact-flag {
+  display: block;
+  margin: 6px 0 2px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--orange);
+  color: #fff;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+.hazard-row.needs-impact .stepper[data-field="i"] .stepper-controls,
+.hazard-row.needs-impact .stepper[data-field="i2"] .stepper-controls {
+  outline: 2px solid var(--orange);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+.research-origin {
+  font-size: 0.74rem;
+  color: var(--gray-text);
+  line-height: 1.4;
+  margin: 4px 0 2px;
+}
+.research-origin-meta { display: block; color: #888; font-size: 0.7rem; }
+
+/* =============================================================
+   v2.0 — RESULTS
+   ============================================================= */
+.results-meta {
+  font-size: 0.8rem;
+  color: var(--gray-text);
+  margin-bottom: 8px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.chip-unrated { background: #F7EDD8; color: #4D0000; }
+.result-li { font-size: 0.72rem; color: var(--gray-text); }
+
+.unrated-band { border-left: 4px solid #B97A14; }
+.unrated-band-header { background: #F7EDD8; color: #4D0000; }
+.unrated-intro {
+  font-size: 0.78rem;
+  color: var(--gray-text);
+  padding: 8px 14px;
+  background: #fff;
+  line-height: 1.45;
+}
+.unrated-finding { font-size: 0.78rem; color: var(--dark-navy); line-height: 1.4; overflow-wrap: anywhere; }
+.unrated-source { font-size: 0.7rem; color: #888; line-height: 1.35; overflow-wrap: anywhere; }
+.result-likelihood { background: #F7EDD8; color: #4D0000; }
+.result-likelihood .result-score-num { font-size: 1.15rem; }
+.unrated-cta { padding: 10px 14px 12px; background: #fff; border-top: 1px solid rgba(0,0,0,0.06); }
+
+/* =============================================================
+   v2.0 — REPORT VIEW (screen-report)
+   Brand: Maroon #4D0000, Amber #B97A14, Cream #F7EDD8, Forest #2F4A3C
+   ============================================================= */
+.report-toolbar {
+  background: var(--dark-navy);
+  color: #fff;
+  padding: 10px 14px 12px;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+.report-toolbar-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.report-toolbar-top h2 { font-size: 1rem; color: #fff; }
+.report-toolbar .btn-icon { color: #fff; }
+.report-toolbar-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.report-toolbar-actions .btn-small { min-height: 40px; }
+.btn-ghost-light {
+  background: transparent;
+  color: #fff;
+  border: 1px solid rgba(255,255,255,0.45);
+}
+.btn-ghost-light:hover { background: rgba(255,255,255,0.1); }
+.report-toolbar-hint {
+  font-size: 0.72rem;
+  color: rgba(255,255,255,0.7);
+  margin-top: 8px;
+  line-height: 1.4;
+}
+
+.report-doc {
+  --rd-maroon: #4D0000;
+  --rd-amber:  #B97A14;
+  --rd-cream:  #F7EDD8;
+  --rd-forest: #2F4A3C;
+  background: #fff;
+  color: #222;
+  margin: 12px;
+  padding: 20px 16px 24px;
+  border: 1px solid #E6DAC0;
+  border-radius: 6px;
+  box-shadow: var(--shadow);
+  font-family: var(--font);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.rd-brand {
+  font-size: 0.72rem;
+  font-weight: bold;
+  letter-spacing: 0.12em;
+  color: var(--rd-maroon);
+  border-bottom: 3px solid var(--rd-maroon);
+  padding-bottom: 6px;
+  margin-bottom: 14px;
+}
+.rd-brand span {
+  font-weight: normal;
+  letter-spacing: 0.02em;
+  color: #777;
+  margin-left: 6px;
+}
+.rd-title {
+  font-size: 1.45rem;
+  color: var(--rd-maroon);
+  margin-bottom: 6px;
+  line-height: 1.2;
+}
+.rd-prepared { font-size: 0.9rem; margin-bottom: 12px; }
+.rd-label {
+  font-size: 0.7rem;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--rd-amber);
+  margin-right: 6px;
+}
+.rd-meta {
+  background: var(--rd-cream);
+  border-left: 3px solid var(--rd-amber);
+  padding: 10px 12px;
+  display: grid;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.rd-meta div { display: grid; grid-template-columns: 7.5em 1fr; gap: 8px; }
+.rd-meta dt {
+  font-size: 0.7rem;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6b5a3a;
+  padding-top: 2px;
+}
+.rd-meta dd { font-size: 0.88rem; }
+
+.rd-section { margin-top: 20px; }
+.rd-section h2 {
+  font-size: 1.02rem;
+  color: var(--rd-maroon);
+  border-bottom: 1px solid var(--rd-amber);
+  padding-bottom: 4px;
+  margin-bottom: 10px;
+}
+.rd-section-intro { font-size: 0.82rem; color: #666; margin-bottom: 10px; }
+.rd-summary { font-size: 0.92rem; }
+.rd-counts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.rd-count {
+  font-size: 0.72rem;
+  font-weight: bold;
+  padding: 3px 9px;
+  border-radius: 20px;
+}
+.rd-count-total { background: #eee; color: #444; }
+.rd-count-unrated { background: var(--rd-cream); color: var(--rd-maroon); }
+
+.rd-level-critical { background: var(--critical-bg); color: var(--critical-color); }
+.rd-level-high     { background: var(--high-bg);     color: #B05A14; }
+.rd-level-medium   { background: var(--medium-bg);   color: var(--medium-color); }
+.rd-level-low      { background: var(--low-bg);      color: #1E8449; }
+
+.rd-list { list-style: none; display: flex; flex-direction: column; }
+.rd-item {
+  display: flex;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid #EEE4CF;
+}
+.rd-item:last-child { border-bottom: none; }
+.rd-score {
+  flex: 0 0 58px;
+  height: 52px;
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+.rd-score-num { font-size: 1.3rem; font-weight: bold; line-height: 1; }
+.rd-score-label { font-size: 0.55rem; font-weight: bold; letter-spacing: 0.04em; margin-top: 3px; line-height: 1.1; padding: 0 2px; }
+.rd-score-likelihood { background: var(--rd-cream); color: var(--rd-maroon); }
+.rd-score-likelihood .rd-score-num { font-size: 1.05rem; }
+.rd-item-body { flex: 1; min-width: 0; }
+.rd-item-name { font-weight: bold; font-size: 0.95rem; }
+.rd-rank { color: var(--rd-amber); }
+.rd-item-meta { font-size: 0.76rem; color: #666; margin-top: 2px; }
+.rd-item-finding { font-size: 0.8rem; color: var(--rd-forest); margin-top: 4px; }
+.rd-item-source { font-size: 0.72rem; color: #888; margin-top: 2px; }
+.rd-notes { font-size: 0.85rem; margin-top: 6px; }
+.rd-empty { font-size: 0.88rem; color: #777; }
+.rd-actions-text { min-height: 4.5em; font-size: 0.92rem; }
+.rd-sources p { font-size: 0.82rem; margin-bottom: 6px; }
+.rd-sources ul { font-size: 0.76rem; color: #666; padding-left: 18px; }
+.rd-footer {
+  margin-top: 24px;
+  padding-top: 10px;
+  border-top: 2px solid var(--rd-maroon);
+  font-size: 0.74rem;
+  color: #666;
+  text-align: center;
+}
+
+/* Editable regions (screen only) */
+.rd-editable {
+  white-space: pre-wrap;
+  border-radius: 4px;
+  outline: 1px dashed #D9C79F;
+  outline-offset: 2px;
+  min-height: 1.4em;
+  cursor: text;
+  transition: background 0.15s, outline-color 0.15s;
+}
+.rd-editable.rd-inline { display: inline-block; min-width: 10em; }
+.rd-editable:hover { background: #FFFBF2; }
+.rd-editable:focus {
+  outline: 2px solid var(--rd-amber);
+  background: #FFFBF2;
+}
+.rd-editable.is-empty::before {
+  content: attr(data-placeholder);
+  color: #AAA;
+  font-style: italic;
+  font-weight: normal;
+  pointer-events: none;
+}
+
+@media (min-width: 640px) {
+  .report-doc { margin: 16px; padding: 32px 36px; }
+  .rd-title { font-size: 1.7rem; }
+}
+
+/* =============================================================
+   PRINT — prints ONLY the report document (#report-doc)
+   The report is re-rendered on beforeprint, so print works from
+   any screen and includes the user's edits.
+   ============================================================= */
+@media print {
+  @page { size: auto; margin: 1.6cm 1.5cm; }
+
+  html, body {
+    background: #fff !important;
+    color: #000;
+    font-size: 10.5pt;
+    margin: 0;
+    padding: 0;
+  }
+
+  .install-banner,
+  .bottom-nav,
+  #confirm-dialog,
+  .report-toolbar,
+  .screen:not(#screen-report) {
+    display: none !important;
+  }
+
+  #app {
+    max-width: none;
+    padding: 0;
+    margin: 0;
+    box-shadow: none;
+    border: none;
+    min-height: 0;
+  }
+
+  #screen-report {
+    display: block !important;
+    animation: none;
+  }
+
+  .report-doc {
+    margin: 0;
+    padding: 0;
+    border: none;
+    box-shadow: none;
+    border-radius: 0;
+    font-size: 10.5pt;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .rd-title { font-size: 20pt; }
+  .rd-section h2 { font-size: 13pt; break-after: avoid; page-break-after: avoid; }
+  .rd-item { break-inside: avoid; page-break-inside: avoid; }
+  .rd-header, .rd-meta { break-inside: avoid; page-break-inside: avoid; }
+  .rd-footer { break-inside: avoid; }
+
+  /* Editing affordances never print */
+  .rd-editable,
+  .rd-editable:focus,
+  .rd-editable:hover {
+    outline: none !important;
+    background: transparent !important;
+    min-height: 0;
+  }
+  .rd-editable.is-empty::before { content: none !important; }
+  .rd-editable.is-empty { display: none !important; }
+  .rd-prepared.is-empty-line,
+  .rd-actions.is-empty-section { display: none !important; }
 }

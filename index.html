@@ -49,15 +49,15 @@
 
         <p class="home-intro">
           Identify, score, and prioritize the disaster risks facing your household
-          and neighborhood. Takes 10–15 minutes. Your data stays on your device.
+          and neighborhood. Takes 10–15 minutes. Your assessment is saved on this device.
         </p>
 
         <div class="home-buttons">
-          <button class="btn-primary btn-large" onclick="startAssessment('household')">
+          <button class="btn-primary btn-large" id="start-household-btn" onclick="startAssessment('household')">
             <i data-feather="home"></i>
             Start Household Assessment
           </button>
-          <button class="btn-secondary btn-large" onclick="startAssessment('neighborhood')">
+          <button class="btn-secondary btn-large" id="start-neighborhood-btn" onclick="startAssessment('neighborhood')">
             <i data-feather="map"></i>
             Start Neighborhood Assessment
           </button>
@@ -66,7 +66,60 @@
         <p class="home-program-text">
           Part of the World Aware Neighborhood Resiliency Program
         </p>
+      </div>
 
+      <!-- Address entry + area research (formerly the Research screen) -->
+      <div id="home-address-card" class="home-address-card">
+        <div class="address-card-head">
+          <h2 class="address-card-title">Start with your address</h2>
+          <span id="address-type-pill" class="address-type-pill">Household assessment</span>
+        </div>
+        <p class="address-card-sub">
+          We check public hazard data for this address and estimate how likely each hazard is.
+          You then rate the impact for your situation.
+        </p>
+
+        <div class="research-privacy">
+          <strong>Privacy:</strong> Your address is sent to public mapping and government data services
+          (OpenStreetMap, FCC, FEMA, USGS, EPA, NOAA), some through third-party relay servers.
+          World Aware does not receive, store, or log your address. Your results stay in this browser.
+        </div>
+
+        <!-- Address input section -->
+        <div id="research-input-section" class="research-input-section">
+          <div class="research-input-wrap">
+            <label class="research-input-label" for="research-address-input">Street address</label>
+            <input
+              type="text"
+              id="research-address-input"
+              class="research-address-input"
+              placeholder="123 Main Street, Boulder CO 80302"
+              autocomplete="street-address"
+              inputmode="text"
+            />
+          </div>
+          <button class="btn-primary btn-large btn-block" id="research-run-btn" onclick="startResearch()">
+            <i data-feather="search"></i> Research This Address
+          </button>
+          <p class="research-input-hint">Include city and state (or ZIP) for best results. U.S. addresses only.</p>
+          <button class="btn-link" id="skip-research-btn" onclick="skipResearch()">
+            Skip — assess without an address lookup
+          </button>
+        </div>
+
+        <!-- Loading state -->
+        <div id="research-loading" class="research-loading hidden">
+          <div id="research-steps-list" class="research-steps-list"></div>
+          <p class="research-timing">This usually takes 10–20 seconds…</p>
+        </div>
+
+        <!-- Results / report -->
+        <div id="research-results" class="research-results hidden">
+          <div id="research-report-content"></div>
+        </div>
+      </div>
+
+      <div class="home-container home-container-tail">
         <!-- Quick nav to saved assessments -->
         <div id="home-saved-list" class="home-saved hidden">
           <h3>Saved Assessments</h3>
@@ -144,10 +197,13 @@
 
       <!-- Action buttons -->
       <div class="results-actions">
-        <button class="btn-primary" onclick="shareResults()">
+        <button class="btn-primary" id="results-report-btn" onclick="showScreen('report')">
+          <i data-feather="file-text"></i> View / Edit Report
+        </button>
+        <button class="btn-secondary" id="results-share-btn" onclick="shareResults()">
           <i data-feather="share-2"></i> Share / Export
         </button>
-        <button class="btn-secondary" onclick="window.print()">
+        <button class="btn-secondary" id="results-print-btn" onclick="printReport()">
           <i data-feather="printer"></i> Print / Save as PDF
         </button>
         <button class="btn-ghost" onclick="showScreen('assessment')">
@@ -267,60 +323,40 @@
       </div>
 
       <div class="about-version">
-        <p>World Aware Risk Assessment v1.0</p>
+        <p>World Aware Risk Assessment v2.0</p>
         <p>Data stored locally on your device. No account required.</p>
       </div>
     </section>
 
     <!-- ========================================================
-         SCREEN 6 — RESEARCH MY AREA
+         SCREEN 6 — REPORT (editable, printable, PDF)
     ======================================================== -->
-    <section id="screen-research" class="screen">
-
-      <!-- Header -->
-      <div class="research-header">
-        <div class="research-header-top">
-          <span class="logo-text logo-small">WORLD AWARE</span>
+    <section id="screen-report" class="screen">
+      <div class="report-toolbar">
+        <div class="report-toolbar-top">
+          <button class="btn-icon" onclick="showScreen('results')" aria-label="Back to Results">
+            <i data-feather="arrow-left"></i>
+          </button>
+          <h2>Report</h2>
+          <button class="btn-icon" onclick="showScreen('home')" aria-label="Home">
+            <i data-feather="home"></i>
+          </button>
         </div>
-        <h2 class="research-title">🔍 Research My Area</h2>
-        <p class="research-subtitle">Enter an address and we'll automatically score your area's hazards using public government data.</p>
-      </div>
-
-      <!-- Privacy notice -->
-      <div class="research-privacy">
-        <strong>Privacy:</strong> Your address is sent directly to U.S. government APIs (FEMA, USGS, EPA, NOAA). World Aware does not receive, store, or log your address. All data stays in your browser.
-      </div>
-
-      <!-- Address input section -->
-      <div id="research-input-section" class="research-input-section">
-        <div class="research-input-wrap">
-          <label class="research-input-label" for="research-address-input">Street Address</label>
-          <input
-            type="text"
-            id="research-address-input"
-            class="research-address-input"
-            placeholder="123 Main Street, Boulder CO 80302"
-            autocomplete="street-address"
-            inputmode="text"
-          />
+        <div class="report-toolbar-actions">
+          <button class="btn-primary btn-small" id="report-print-btn" onclick="printReport()">
+            <i data-feather="printer"></i> Print
+          </button>
+          <button class="btn-primary btn-small" id="report-pdf-btn" onclick="downloadReportPDF()">
+            <i data-feather="download"></i> Download PDF
+          </button>
+          <button class="btn-ghost-light btn-small" id="report-reset-btn" onclick="resetReportEdits()">
+            <i data-feather="rotate-ccw"></i> Reset edits
+          </button>
         </div>
-        <button class="btn-primary btn-large" id="research-run-btn" onclick="startResearch()">
-          🔍 Research This Address
-        </button>
-        <p class="research-input-hint">Include city and state (or ZIP) for best results. U.S. addresses only.</p>
+        <p class="report-toolbar-hint">Tap any text with a dotted outline to edit it. Edits are saved on this device.</p>
       </div>
 
-      <!-- Loading state -->
-      <div id="research-loading" class="research-loading hidden">
-        <div id="research-steps-list" class="research-steps-list"></div>
-        <p class="research-timing">⏱ This usually takes 10–20 seconds…</p>
-      </div>
-
-      <!-- Results / report -->
-      <div id="research-results" class="research-results hidden">
-        <div id="research-report-content"></div>
-      </div>
-
+      <article id="report-doc" class="report-doc"></article>
     </section>
 
   </div><!-- end #app -->
@@ -340,10 +376,6 @@
     <button class="nav-item" onclick="showScreen('results')" data-screen="results">
       <i data-feather="bar-chart-2"></i>
       <span>Results</span>
-    </button>
-    <button class="nav-item" onclick="showScreen('research')" data-screen="research">
-      <i data-feather="search"></i>
-      <span>Research</span>
     </button>
     <button class="nav-item" onclick="showScreen('reference')" data-screen="reference">
       <i data-feather="book-open"></i>
@@ -372,6 +404,7 @@
   <script src="js/apiConfig.js"></script>
   <script src="js/scoreMapper.js"></script>
   <script src="js/research.js"></script>
+  <script src="js/report.js"></script>
 
   <!-- App Script -->
   <script src="app.js"></script>
