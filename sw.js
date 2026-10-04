@@ -3,7 +3,7 @@
    Service Worker: caches app shell for full offline use.
    ============================================================= */
 
-const CACHE_NAME = 'wa-risk-v1.5.0';  // bumped: multi-proxy cascade
+const CACHE_NAME = 'wa-risk-v2.0.2';  // v2.0: research merged into Home, report view, PDF
 
 // App shell files to cache on install
 const APP_SHELL = [
@@ -20,6 +20,9 @@ const APP_SHELL = [
   './js/apiConfig.js',
   './js/scoreMapper.js',
   './js/research.js',
+  // Report view + offline PDF generation
+  './js/report.js',
+  './js/vendor/jspdf.umd.min.js',
 ];
 
 /* ── Install: cache app shell ──────────────────────────────── */
@@ -81,16 +84,33 @@ self.addEventListener('fetch', event => {
     return;
   }
 
+  // Page navigations: network-first so a new release shows up on the next
+  // load; fall back to the cached shell when offline.
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      fetch(event.request)
+        .then(response => {
+          if (response && response.status === 200) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+          }
+          return response;
+        })
+        .catch(() => caches.match(event.request).then(r => r || caches.match('./index.html')))
+    );
+    return;
+  }
+
   // For local app files: cache-first strategy
   event.respondWith(
     caches.match(event.request).then(cachedResponse => {
       if (cachedResponse) {
         // Serve from cache; refresh cache in background
-        const fetchPromise = fetch(event.request).then(networkResponse => {
+        fetch(event.request).then(networkResponse => {
           if (networkResponse && networkResponse.status === 200) {
-            caches.open(CACHE_NAME).then(cache => cache.put(event.request, networkResponse.clone()));
+            const clone = networkResponse.clone();
+            caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
           }
-          return networkResponse;
         }).catch(() => {/* network unavailable — that's OK */});
 
         return cachedResponse;

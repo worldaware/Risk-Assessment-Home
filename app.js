@@ -365,25 +365,44 @@ const HAZARD_DATA = [
    APP STATE
 --------------------------------------------------------------- */
 
+/** Today's date (YYYY-MM-DD) in the user's local time zone, not UTC. */
+function localToday() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function _newAssessmentId() {
+  return 'a' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+
+/**
+ * Fresh default state. Used on first load, as the base that saved states
+ * are merged onto (so older saved states gain any new fields), and on reset.
+ */
+function defaultState() {
+  return {
+    assessmentId:   _newAssessmentId(), // scopes report edits to this assessment
+    assessmentType: 'household',   // 'household' | 'neighborhood'
+    location: '',
+    date: localToday(),
+    householdSize: '',
+    hh1Name: 'Household 1',
+    hh2Name: 'Household 2',
+    scores: {},     // { hazardId: { l: 0, i: 0, notes: '', l2: 0, i2: 0, isAuto: bool } }
+    customNames: {  // custom hazard names/desc
+      60: { name: '', description: '' },
+      61: { name: '', description: '' },
+      62: { name: '', description: '' },
+    },
+    // Research My Area — persisted research report
+    researchAddress:   '',
+    researchReport:    null,   // { geocoded, findings[], timestamp }
+    autoScoreOrigins:  {},     // { hazardId: { source, finding, confidence } }
+  };
+}
+
 // State object — single source of truth
-let state = {
-  assessmentType: 'household',   // 'household' | 'neighborhood'
-  location: '',
-  date: new Date().toISOString().split('T')[0],
-  householdSize: '',
-  hh1Name: 'Household 1',
-  hh2Name: 'Household 2',
-  scores: {},     // { hazardId: { l: 0, i: 0, notes: '', l2: 0, i2: 0, isAuto: bool } }
-  customNames: {  // custom hazard names/desc
-    60: { name: '', description: '' },
-    61: { name: '', description: '' },
-    62: { name: '', description: '' },
-  },
-  // Research My Area — persisted research report
-  researchAddress:   '',
-  researchReport:    null,   // { geocoded, findings[], timestamp }
-  autoScoreOrigins:  {},     // { hazardId: { source, finding, confidence } }
-};
+let state = defaultState();
 
 /* ---------------------------------------------------------------
    UTILITY FUNCTIONS
@@ -434,7 +453,11 @@ function isScored(hazardId) {
   if (!entry) return false;
   const l = parseInt(entry.l) || 0;
   const i = parseInt(entry.i) || 0;
-  return l > 0 && i > 0;
+  if (l > 0 && i > 0) return true;
+  if (state.assessmentType === 'neighborhood') {
+    return (parseInt(entry.l2) || 0) > 0 && (parseInt(entry.i2) || 0) > 0;
+  }
+  return false;
 }
 
 /**
@@ -461,7 +484,11 @@ function totalActive() {
  * Save current state to localStorage (auto-save).
  */
 function autoSave() {
-  localStorage.setItem('wa_current_state', JSON.stringify(state));
+  try {
+    localStorage.setItem('wa_current_state', JSON.stringify(state));
+  } catch (e) {
+    console.warn('Could not save state', e);
+  }
   updateProgress();
 }
 
@@ -469,18 +496,41 @@ function autoSave() {
  * Load state from localStorage.
  */
 function loadCurrentState() {
-  const saved = localStorage.getItem('wa_current_state');
+  let saved = null;
+  try {
+    saved = localStorage.getItem('wa_current_state');
+  } catch (e) {
+    console.warn('localStorage unavailable', e);
+  }
+  let needsSave = !saved;
   if (saved) {
     try {
       const parsed = JSON.parse(saved);
-      state = Object.assign(state, parsed);
+      // Pre-v2 states have no assessmentId; the one generated below must be
+      // saved right away or report edits keyed to it are lost on reload.
+      if (!parsed || !parsed.assessmentId) needsSave = true;
+      state = normalizeState(parsed);
     } catch (e) {
       console.warn('Could not parse saved state', e);
+      needsSave = true;
     }
   }
-  // Never persist research results between sessions
-  state.researchAddress = '';
-  state.researchReport  = null;
+  if (needsSave) {
+    try {
+      localStorage.setItem('wa_current_state', JSON.stringify(state));
+    } catch (e) { /* storage unavailable */ }
+  }
+}
+
+/** Merge a (possibly older) saved state onto current defaults. */
+function normalizeState(parsed) {
+  const base = defaultState();
+  const merged = Object.assign(base, parsed || {});
+  merged.scores           = merged.scores || {};
+  merged.customNames      = Object.assign(defaultState().customNames, merged.customNames || {});
+  merged.autoScoreOrigins = merged.autoScoreOrigins || {};
+  if (!merged.assessmentId) merged.assessmentId = _newAssessmentId();
+  return merged;
 }
 
 /* ---------------------------------------------------------------
@@ -489,7 +539,11 @@ function loadCurrentState() {
 
 let currentScreen = 'home';
 
-function showScreen(screenId) {
+function showScreen(screenId, opts) {
+  opts = opts || {};
+  // The Research screen was merged into Home (v2.0)
+  if (screenId === 'research') screenId = 'home';
+
   // Hide all screens
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
@@ -505,13 +559,63 @@ function showScreen(screenId) {
   currentScreen = screenId;
 
   // Screen-specific initialization
-  if (screenId === 'results')   renderResults();
-  if (screenId === 'about')     renderSavedList();
-  if (screenId === 'reference') buildRiskMatrix();
-  if (screenId === 'research' && typeof initResearchScreen === 'function') initResearchScreen();
+  if (screenId === 'home')       initHomeScreen();
+  if (screenId === 'assessment') initAssessmentUI();
+  if (screenId === 'results')    renderResults();
+  if (screenId === 'report' && typeof renderReportView === 'function') {
+    renderReportView();
+  }
+  // Build the PDF ahead of time so the PDF / Share tap can open the iPhone
+  // share sheet instantly (iPhone ignores share requests made after a delay).
+  if ((screenId === 'report' || screenId === 'results') && typeof preparePdf === 'function') preparePdf();
+  if (screenId === 'about')      renderSavedList();
+  if (screenId === 'reference')  buildRiskMatrix();
+
+  if (window.feather) feather.replace();
 
   // Scroll to top
-  window.scrollTo(0, 0);
+  if (!opts.keepScroll) window.scrollTo(0, 0);
+}
+
+function initHomeScreen() {
+  _syncAddressTypePill();
+  if (typeof initResearchScreen === 'function') initResearchScreen();
+}
+
+function _syncAddressTypePill() {
+  const pill = document.getElementById('address-type-pill');
+  if (pill) {
+    pill.textContent = state.assessmentType === 'neighborhood'
+      ? 'Neighborhood assessment' : 'Household assessment';
+  }
+}
+
+/** Scroll Home to the address card and focus the right control. */
+function focusAddressEntry() {
+  const card  = document.getElementById('home-address-card');
+  const input = document.getElementById('research-address-input');
+  const inputVisible = input && input.offsetParent !== null;
+  const target = inputVisible ? input : document.getElementById('research-continue-btn');
+  if (card) card.scrollIntoView({ block: 'start' });
+  if (target) {
+    try { target.focus({ preventScroll: true }); } catch (e) { target.focus(); }
+  }
+}
+
+/** Skip the address lookup and go straight to the assessment. */
+function skipResearch() {
+  const input = document.getElementById('research-address-input');
+  const typed = input ? (input.value || '').trim() : '';
+  if (typed) state.location = typed;
+  if (!state.date) state.date = localToday();
+  autoSave();
+  showScreen('assessment');
+}
+
+/** From the Assess screen, go back to the research details on Home. */
+function showResearchDetails() {
+  showScreen('home');
+  focusAddressEntry();
 }
 
 function goHome() {
@@ -523,14 +627,15 @@ function goHome() {
 --------------------------------------------------------------- */
 
 function startAssessment(type) {
-  state.assessmentType = type;
+  state.assessmentType = type === 'neighborhood' ? 'neighborhood' : 'household';
   // Default date to today if not set
   if (!state.date) {
-    state.date = new Date().toISOString().split('T')[0];
+    state.date = localToday();
   }
   autoSave();
-  showScreen('assessment');
-  initAssessmentUI();
+  // v2.0: both start buttons lead to the address entry on Home
+  showScreen('home');
+  focusAddressEntry();
 }
 
 /**
@@ -553,38 +658,85 @@ function initAssessmentUI() {
 
   // Restore field values
   document.getElementById('field-location').value = state.location || '';
-  document.getElementById('field-date').value = state.date || new Date().toISOString().split('T')[0];
+  document.getElementById('field-date').value = state.date || localToday();
   document.getElementById('field-household-size').value = state.householdSize || '';
   document.getElementById('hh1-name').value = state.hh1Name || 'Household 1';
   document.getElementById('hh2-name').value = state.hh2Name || 'Household 2';
+
+  // Remember which categories were open so a rebuild doesn't collapse them
+  const openCats = new Set(
+    [...document.querySelectorAll('#hazard-list .category-section')]
+      .filter(sec => !sec.querySelector('.category-rows')?.classList.contains('collapsed'))
+      .map(sec => sec.dataset.category)
+  );
 
   // Build hazard list
   buildHazardList();
   updateProgress();
 
-  // Show/refresh "View Research Report" link if auto-scores exist
-  _syncResearchReportLink();
+  // Open categories that hold research findings still needing an impact rating
+  getResearchFlaggedIds()
+    .filter(id => needsImpact(id))
+    .forEach(id => { const c = getCategoryForHazard(id); if (c) openCats.add(c); });
+  document.querySelectorAll('#hazard-list .category-section').forEach(sec => {
+    if (openCats.has(sec.dataset.category)) setCategoryOpen(sec, true);
+  });
+
+  _syncResearchBanner();
 }
 
-function _syncResearchReportLink() {
-  const existing = document.getElementById('research-report-link');
-  const hasAutoScores = Object.values(state.scores).some(s => s?.isAuto);
-  if (!hasAutoScores) {
-    if (existing) existing.remove();
-    return;
-  }
-  if (existing) return; // already shown
-  const link = document.createElement('div');
-  link.id = 'research-report-link';
-  link.className = 'research-report-link';
-  link.innerHTML = `
-    <button class="btn-small btn-ghost" onclick="showScreen('research')">
-      🔍 View Research Report
-    </button>
-    <span>Likelihood scores pre-populated from government data. Set Impact to score.</span>
+/**
+ * IDs of hazards whose likelihood came from address research
+ * (still auto, or originally researched and since adjusted).
+ */
+function getResearchFlaggedIds() {
+  const ids = new Set();
+  Object.keys(state.scores || {}).forEach(k => { if (state.scores[k]?.isAuto) ids.add(parseInt(k)); });
+  Object.keys(state.autoScoreOrigins || {}).forEach(k => ids.add(parseInt(k)));
+  return [...ids].filter(id => (parseInt(state.scores[id]?.l) || 0) > 0).sort((a, b) => a - b);
+}
+
+/** A research-flagged hazard with a likelihood but no impact yet. */
+function needsImpact(hazardId) {
+  const e = state.scores[hazardId];
+  if (!e) return false;
+  const flagged = !!e.isAuto || !!(state.autoScoreOrigins || {})[hazardId];
+  return flagged && (parseInt(e.l) || 0) > 0 && !((parseInt(e.i) || 0) > 0);
+}
+
+function _syncResearchBanner() {
+  const old = document.getElementById('auto-score-banner');
+  if (old) old.remove();
+  const legacy = document.getElementById('research-report-link');
+  if (legacy) legacy.remove();
+
+  const flagged = getResearchFlaggedIds();
+  if (flagged.length === 0) return;
+  const unrated = flagged.filter(id => needsImpact(id)).length;
+
+  const banner = document.createElement('div');
+  banner.id = 'auto-score-banner';
+  banner.className = 'auto-score-banner';
+  banner.innerHTML = `
+    <div class="auto-score-banner-inner">
+      <span class="auto-score-banner-text">
+        Research estimated likelihood for <strong>${flagged.length} hazard${flagged.length === 1 ? '' : 's'}</strong>.
+        Rate the impact of each for your household to complete your risk scores.
+        <span id="auto-score-banner-remaining" class="auto-score-banner-remaining">${unrated > 0 ? `${unrated} still need an impact rating.` : 'All impacts rated.'}</span>
+      </span>
+      <button class="btn-small btn-ghost" onclick="showResearchDetails()">Research details</button>
+      <button class="auto-score-banner-close" aria-label="Dismiss" onclick="this.closest('#auto-score-banner').remove()">✕</button>
+    </div>
   `;
   const header = document.querySelector('.assessment-header');
-  if (header) header.insertAdjacentElement('afterend', link);
+  if (header) header.insertAdjacentElement('afterend', banner);
+}
+
+function _updateResearchBannerCount() {
+  const el = document.getElementById('auto-score-banner-remaining');
+  if (!el) return;
+  const unrated = getResearchFlaggedIds().filter(id => needsImpact(id)).length;
+  el.textContent = unrated > 0 ? `${unrated} still need an impact rating.` : 'All impacts rated.';
 }
 
 /* ---------------------------------------------------------------
@@ -655,7 +807,7 @@ function buildHazardRow(hazard) {
   const isNeighborhood = state.assessmentType === 'neighborhood';
 
   const row = document.createElement('div');
-  row.className = 'hazard-row';
+  row.className = 'hazard-row' + (needsImpact(hazard.id) ? ' needs-impact' : '');
   row.id = `hazard-row-${hazard.id}`;
   row.style.borderLeftColor = catColor;
 
@@ -752,16 +904,46 @@ function buildHazardRow(hazard) {
     <div class="hazard-desc hidden" id="desc-${hazard.id}">
       <em>${escHtml(displayDesc)}</em>
     </div>
+    <div class="rate-impact-flag" id="rate-impact-${hazard.id}">
+      Research estimated likelihood. <strong>Rate impact</strong> to complete this score.
+    </div>
+    ${_researchOriginHtml(hazard.id)}
     ${inputsHtml}
     <div class="notes-row">
       <textarea class="notes-input" placeholder="Notes (optional)…"
         onchange="updateNotes(${hazard.id}, this.value)"
         oninput="updateNotes(${hazard.id}, this.value)"
-        rows="2">${escHtml(entry.notes || '')}</textarea>
+        rows="2">${escHtml(userNotes(entry))}</textarea>
     </div>
   `;
 
   return row;
+}
+
+/** Notes the user wrote (ignores legacy auto-generated research notes). */
+function userNotes(entry) {
+  const n = (entry && entry.notes) || '';
+  return n.startsWith('[Auto-scored from:') ? '' : n;
+}
+
+/** Look up research source info for a hazard, if any. */
+function getResearchOrigin(hazardId) {
+  const o = (state.autoScoreOrigins || {})[hazardId];
+  if (o) return o;
+  const f = (state.researchReport?.findings || []).find(x => x.hazardId === hazardId);
+  return f ? { source: f.source, finding: f.finding, confidence: f.confidence } : null;
+}
+
+function _researchOriginHtml(hazardId) {
+  const o = getResearchOrigin(hazardId);
+  if (!o || !state.scores[hazardId]?.l) return '';
+  return `<div class="research-origin">Research: ${escHtml(cleanFindingText(o.finding || ''))}
+    <span class="research-origin-meta">${escHtml(o.source || '')}${o.confidence ? ' · Confidence: ' + escHtml(o.confidence) : ''}</span></div>`;
+}
+
+/** Strip emoji / warning glyphs from research finding text. */
+function cleanFindingText(t) {
+  return String(t || '').replace(/[\u2600-\u27BF\uFE0F]|[\uD83C-\uDBFF][\uDC00-\uDFFF]/g, '').replace(/\s+/g, ' ').trim();
 }
 
 /**
@@ -867,6 +1049,9 @@ function updateRowScore(hazardId) {
     if (sub2) sub2.innerHTML = s2 > 0 ? `<span class="mini-score">${s2}</span>` : '<span class="mini-score empty">—</span>';
   }
 
+  row.classList.toggle('needs-impact', needsImpact(hazardId));
+  _updateResearchBannerCount();
+
   updateProgress();
   updateCategoryCount(getCategoryForHazard(hazardId));
 }
@@ -949,12 +1134,14 @@ function updateCategoryCount(catName) {
 
 function toggleCategory(section) {
   const rows = section.querySelector('.category-rows');
-  const chevron = section.querySelector('.cat-chevron');
-  rows.classList.toggle('collapsed');
-  if (chevron) {
-    chevron.style.transform = rows.classList.contains('collapsed') ? '' : 'rotate(180deg)';
-  }
-  if (window.feather) feather.replace();
+  setCategoryOpen(section, rows.classList.contains('collapsed'));
+}
+
+function setCategoryOpen(section, open) {
+  const rows = section.querySelector('.category-rows');
+  if (!rows) return;
+  rows.classList.toggle('collapsed', !open);
+  section.classList.toggle('is-open', open);
 }
 
 function toggleDesc(hazardId) {
@@ -963,60 +1150,206 @@ function toggleDesc(hazardId) {
 }
 
 /* ---------------------------------------------------------------
+   REPORT DATA — single source for Results, Share, Report view,
+   Print and PDF
+--------------------------------------------------------------- */
+
+const LIKELIHOOD_LABELS = { 1: 'Extremely Unlikely', 2: 'Unlikely', 3: 'Possible', 4: 'Likely', 5: 'Almost Certain' };
+const IMPACT_LABELS     = { 1: 'Negligible', 2: 'Minor', 3: 'Moderate', 4: 'Major', 5: 'Catastrophic' };
+const REPORT_FOOTER     = 'Prepared with the World Aware Risk Assessment Tool · beworldaware.com';
+
+const RISK_BANDS = [
+  { key: 'CRITICAL', label: 'CRITICAL — Immediate action required',          emoji: '🟥' },
+  { key: 'HIGH',     label: 'HIGH — Develop a specific action plan',          emoji: '🟧' },
+  { key: 'MEDIUM',   label: 'MEDIUM — Include in your preparedness planning', emoji: '🟨' },
+  { key: 'LOW',      label: 'LOW — Monitor and maintain basic preparedness',  emoji: '🟩' },
+];
+
+function hazardDisplayName(h) {
+  return h.isCustom ? (state.customNames[h.id]?.name || `Custom Hazard ${h.customIndex}`) : h.name;
+}
+
+function formatReportDate(iso) {
+  if (!iso) return '';
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) return iso;
+  const d = new Date(+m[1], +m[2] - 1, +m[3]);
+  return d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+}
+
+/**
+ * Plain-text likelihood × impact line for a scored hazard.
+ * Neighborhood mode lists each household that rated it, plus the average
+ * when both did (the score is that average).
+ */
+function formatLIText(it) {
+  if (state.assessmentType !== 'neighborhood') {
+    return `Likelihood ${it.l} (${LIKELIHOOD_LABELS[it.l] || ''}) × Impact ${it.i} (${IMPACT_LABELS[it.i] || ''})`;
+  }
+  const names = [state.hh1Name || 'Household 1', state.hh2Name || 'Household 2'];
+  const pairs = [[it.l, it.i], [it.l2, it.i2]];
+  const parts = [];
+  let full = 0;
+  pairs.forEach(([l, i], idx) => {
+    if (l > 0 && i > 0) { parts.push(`${names[idx]}: L${l} × I${i} = ${l * i}`); full++; }
+    else if (l > 0)     { parts.push(`${names[idx]}: L${l}, impact not rated`); }
+    else if (i > 0)     { parts.push(`${names[idx]}: I${i}, likelihood not rated`); }
+  });
+  if (full === 2) parts.push(`average ${it.score}`);
+  return parts.join(' · ');
+}
+
+/**
+ * Build the complete report model from current state.
+ * Everything that displays or exports results reads from this.
+ */
+function buildReportData() {
+  const isNeighborhood = state.assessmentType === 'neighborhood';
+  const active = HAZARD_DATA.filter(h => !(h.isCustom && !state.customNames[h.id]?.name));
+  const researchIds = new Set(getResearchFlaggedIds());
+
+  const scored = active.filter(h => isScored(h.id)).map(h => {
+    const e = state.scores[h.id] || {};
+    const score = calcScore(h.id);
+    const rl = getRiskLevel(score);
+    const origin = researchIds.has(h.id) ? getResearchOrigin(h.id) : null;
+    return {
+      id: h.id,
+      name: hazardDisplayName(h),
+      category: h.category,
+      score,
+      level: rl ? rl.label : '',
+      rl,
+      l: parseInt(e.l) || 0,
+      i: parseInt(e.i) || 0,
+      l2: parseInt(e.l2) || 0,
+      i2: parseInt(e.i2) || 0,
+      notes: userNotes(e),
+      isAuto: !!e.isAuto,
+      fromResearch: researchIds.has(h.id),
+      source: origin?.source || '',
+      confidence: origin?.confidence || '',
+      finding: origin ? cleanFindingText(origin.finding) : '',
+    };
+  }).sort((a, b) => b.score - a.score || a.id - b.id);
+  scored.forEach(it => { it.liText = formatLIText(it); });
+
+  const unrated = active
+    .filter(h => researchIds.has(h.id) && !isScored(h.id))
+    .map(h => {
+      const e = state.scores[h.id] || {};
+      const origin = getResearchOrigin(h.id) || {};
+      const l = parseInt(e.l) || 0;
+      return {
+        id: h.id,
+        name: hazardDisplayName(h),
+        category: h.category,
+        l,
+        likelihoodLabel: LIKELIHOOD_LABELS[l] || '',
+        notes: userNotes(e),
+        source: origin.source || '',
+        confidence: origin.confidence || '',
+        finding: cleanFindingText(origin.finding || ''),
+      };
+    })
+    .sort((a, b) => b.l - a.l || a.id - b.id);
+
+  const counts = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 };
+  scored.forEach(it => { if (it.level) counts[it.level]++; });
+
+  // Research summary
+  let research = null;
+  const rr = state.researchReport;
+  if (rr && Array.isArray(rr.findings)) {
+    const used = rr.findings.filter(f => f.scoreAssigned !== null && f.scoreAssigned !== undefined);
+    const conf = { High: 0, Medium: 0, Low: 0 };
+    used.forEach(f => { if (conf[f.confidence] !== undefined) conf[f.confidence]++; });
+    const sources = [...new Set(used.map(f => f.source).filter(Boolean))];
+    research = {
+      address: state.researchAddress || '',
+      matchedAddress: rr.geocoded?.displayAddress || '',
+      county: rr.geocoded?.county || '',
+      stateAbbr: rr.geocoded?.stateAbbr || '',
+      timestamp: rr.timestamp || '',
+      findingCount: used.length,
+      estimatedCount: rr.findings.filter(f => f.status === 'estimated').length,
+      unavailableCount: rr.findings.filter(f => f.status === 'error').length,
+      confidence: conf,
+      sources,
+    };
+  }
+
+  const location = state.location || state.researchAddress || rr?.geocoded?.displayAddress || '';
+
+  return {
+    typeKey: state.assessmentType,
+    typeLabel: isNeighborhood ? 'Neighborhood' : 'Household',
+    location,
+    date: state.date || localToday(),
+    dateDisplay: formatReportDate(state.date || localToday()),
+    householdSize: state.householdSize || '',
+    hhNames: isNeighborhood ? [state.hh1Name || 'Household 1', state.hh2Name || 'Household 2'] : null,
+    scored,
+    unrated,
+    counts,
+    research,
+    footer: REPORT_FOOTER,
+  };
+}
+
+/** Default plain-language summary paragraph for a report. */
+function buildDefaultSummary(data) {
+  const parts = [];
+  if (data.scored.length) {
+    const lv = [];
+    if (data.counts.CRITICAL) lv.push(`${data.counts.CRITICAL} critical`);
+    if (data.counts.HIGH)     lv.push(`${data.counts.HIGH} high`);
+    if (data.counts.MEDIUM)   lv.push(`${data.counts.MEDIUM} medium`);
+    if (data.counts.LOW)      lv.push(`${data.counts.LOW} low`);
+    parts.push(`This assessment scored ${data.scored.length} hazard${data.scored.length === 1 ? '' : 's'} (${lv.join(', ')}).`);
+    parts.push(`The highest-ranked risk is ${data.scored[0].name} with a score of ${data.scored[0].score} out of 25.`);
+  } else {
+    parts.push('No hazards have a full risk score yet.');
+  }
+  if (data.unrated.length) {
+    parts.push(`Address research estimated likelihood for ${data.unrated.length} more hazard${data.unrated.length === 1 ? '' : 's'} whose impact has not been rated yet.`);
+  }
+  return parts.join(' ');
+}
+
+/* ---------------------------------------------------------------
    RESULTS SCREEN
 --------------------------------------------------------------- */
 
 function renderResults() {
-  // Collect all scored hazards
-  const scored = HAZARD_DATA.filter(h => {
-    if (h.isCustom && !state.customNames[h.id]?.name) return false;
-    return isScored(h.id);
-  });
-
-  // Attach score and metadata
-  const items = scored.map(h => {
-    const score = calcScore(h.id);
-    const rl = getRiskLevel(score);
-    const displayName = h.isCustom ? (state.customNames[h.id]?.name || `Custom ${h.customIndex}`) : h.name;
-    const notes = state.scores[h.id]?.notes || '';
-    return { hazard: h, score, rl, displayName, notes };
-  });
-
-  // Sort descending
-  items.sort((a, b) => b.score - a.score);
-
-  // Summary counts
-  const counts = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 };
-  items.forEach(it => { if (it.rl) counts[it.rl.label]++; });
+  const data = buildReportData();
+  const items = data.scored;
+  const counts = data.counts;
 
   const summaryEl = document.getElementById('results-summary');
-  summaryEl.innerHTML = items.length === 0
-    ? '<p class="empty-state">No hazards scored yet. Go to Assessment to begin.</p>'
-    : `<div class="summary-chips">
+  const metaBits = [data.typeLabel + ' assessment'];
+  if (data.location) metaBits.push(escHtml(data.location));
+  if (data.dateDisplay) metaBits.push(escHtml(data.dateDisplay));
+  const metaHtml = `<p class="results-meta">${metaBits.join(' · ')}</p>`;
+
+  if (items.length === 0 && data.unrated.length === 0) {
+    summaryEl.innerHTML = metaHtml + '<p class="empty-state">No hazards scored yet. Go to Assessment to begin.</p>';
+  } else {
+    summaryEl.innerHTML = metaHtml + `<div class="summary-chips">
          ${counts.CRITICAL > 0 ? `<span class="chip chip-critical">${counts.CRITICAL} Critical</span>` : ''}
          ${counts.HIGH > 0 ? `<span class="chip chip-high">${counts.HIGH} High</span>` : ''}
          ${counts.MEDIUM > 0 ? `<span class="chip chip-medium">${counts.MEDIUM} Medium</span>` : ''}
          ${counts.LOW > 0 ? `<span class="chip chip-low">${counts.LOW} Low</span>` : ''}
          <span class="chip chip-total">${items.length} total scored</span>
+         ${data.unrated.length > 0 ? `<span class="chip chip-unrated">${data.unrated.length} impact not rated</span>` : ''}
        </div>`;
-
-  // Results list
-  const listEl = document.getElementById('results-list');
-  if (items.length === 0) {
-    listEl.innerHTML = '';
-    return;
   }
 
-  const bands = [
-    { key: 'CRITICAL', label: 'CRITICAL — Immediate action required', emoji: '🟥' },
-    { key: 'HIGH',     label: 'HIGH — Develop a specific action plan', emoji: '🟧' },
-    { key: 'MEDIUM',   label: 'MEDIUM — Include in your preparedness planning', emoji: '🟨' },
-    { key: 'LOW',      label: 'LOW — Monitor and maintain basic preparedness', emoji: '🟩' },
-  ];
-
+  const listEl = document.getElementById('results-list');
   let html = '';
-  bands.forEach(band => {
-    const bandItems = items.filter(it => it.rl && it.rl.label === band.key);
+
+  RISK_BANDS.forEach(band => {
+    const bandItems = items.filter(it => it.level === band.key);
     if (bandItems.length === 0) return;
 
     const rl = RISK_LEVELS[band.key];
@@ -1028,20 +1361,20 @@ function renderResults() {
     `;
 
     bandItems.forEach(it => {
-      const catColor  = CATEGORY_COLORS[it.hazard.category] || '#333';
-      const isAuto    = !!(state.scores[it.hazard.id]?.isAuto);
-      const sourceTag = isAuto
-        ? `<span class="result-source-tag auto">🔍 Auto</span>`
+      const catColor  = CATEGORY_COLORS[it.category] || '#333';
+      const sourceTag = it.fromResearch
+        ? `<span class="result-source-tag auto">🔍 Research</span>`
         : `<span class="result-source-tag manual">✏️ Manual</span>`;
       html += `
         <div class="result-card">
           <div class="result-card-top">
             <div class="result-left">
-              <span class="result-name">${escHtml(it.displayName)}</span>
+              <span class="result-name">${escHtml(it.name)}</span>
               <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;">
-                <span class="result-cat-badge" style="background:${catColor}">${escHtml(it.hazard.category)}</span>
+                <span class="result-cat-badge" style="background:${catColor}">${escHtml(it.category)}</span>
                 ${sourceTag}
               </div>
+              <span class="result-li">${escHtml(it.liText)}</span>
             </div>
             <div class="result-score" style="background:${it.rl.bg};color:${it.rl.color}">
               <span class="result-score-num">${it.score}</span>
@@ -1055,6 +1388,42 @@ function renderResults() {
 
     html += `</div>`;
   });
+
+  if (data.unrated.length > 0) {
+    html += `
+      <div class="result-band unrated-band">
+        <div class="band-header unrated-band-header">
+          Identified by research — impact not yet rated
+        </div>
+        <p class="unrated-intro">Research estimated how likely these are at this address. Rate the impact of each on the Assess screen to give it a full risk score.</p>
+    `;
+    data.unrated.forEach(it => {
+      const catColor = CATEGORY_COLORS[it.category] || '#333';
+      html += `
+        <div class="result-card unrated-card">
+          <div class="result-card-top">
+            <div class="result-left">
+              <span class="result-name">${escHtml(it.name)}</span>
+              <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;">
+                <span class="result-cat-badge" style="background:${catColor}">${escHtml(it.category)}</span>
+              </div>
+              ${it.finding ? `<span class="unrated-finding">${escHtml(it.finding)}</span>` : ''}
+              ${it.source ? `<span class="unrated-source">${escHtml(it.source)}${it.confidence ? ' · Confidence: ' + escHtml(it.confidence) : ''}</span>` : ''}
+            </div>
+            <div class="result-score result-likelihood">
+              <span class="result-score-num">L${it.l}</span>
+              <span class="result-score-label">${escHtml(it.likelihoodLabel)}</span>
+            </div>
+          </div>
+        </div>
+      `;
+    });
+    html += `
+        <div class="unrated-cta">
+          <button class="btn-small btn-primary" onclick="showScreen('assessment')">Rate impact</button>
+        </div>
+      </div>`;
+  }
 
   listEl.innerHTML = html;
   if (window.feather) feather.replace();
@@ -1072,7 +1441,11 @@ function shareResults() {
     navigator.share({
       title: 'World Aware Risk Assessment Results',
       text: text,
-    }).catch(() => fallbackCopy(text));
+    }).catch(err => {
+      // User cancelled the share sheet: do nothing
+      if (err && err.name === 'AbortError') return;
+      fallbackCopy(text);
+    });
   } else {
     fallbackCopy(text);
   }
@@ -1107,47 +1480,64 @@ function showTextExportDialog(text) {
 }
 
 function buildTextSummary() {
-  const date = state.date || new Date().toISOString().split('T')[0];
-  const loc = state.location || 'Not specified';
-  const type = state.assessmentType === 'neighborhood' ? 'Neighborhood' : 'Household';
+  const data = buildReportData();
+  const edits = (typeof getReportEdits === 'function') ? getReportEdits() : {};
+  const rule = '='.repeat(40);
 
   let out = `WORLD AWARE RISK ASSESSMENT RESULTS\n`;
-  out += `beworldaware.com\n`;
-  out += `${'='.repeat(40)}\n`;
-  out += `Type: ${type}\n`;
-  out += `Location: ${loc}\n`;
-  out += `Date: ${date}\n`;
-  out += `${'='.repeat(40)}\n\n`;
+  if (edits.title) out += `${edits.title}\n`;
+  out += `${rule}\n`;
+  out += `Type: ${data.typeLabel}\n`;
+  out += `Location: ${data.location || 'Not specified'}\n`;
+  out += `Date: ${data.dateDisplay || data.date}\n`;
+  if (data.householdSize) out += `Household size: ${data.householdSize}\n`;
+  if (data.hhNames) out += `Households: ${data.hhNames.join(' & ')}\n`;
+  if (edits.preparedFor) out += `Prepared for: ${edits.preparedFor}\n`;
+  out += `${rule}\n`;
 
-  const scored = HAZARD_DATA.filter(h => {
-    if (h.isCustom && !state.customNames[h.id]?.name) return false;
-    return isScored(h.id);
-  });
-  const items = scored.map(h => {
-    const score = calcScore(h.id);
-    return {
-      name: h.isCustom ? (state.customNames[h.id]?.name || '') : h.name,
-      score,
-      rl: getRiskLevel(score),
-      notes: state.scores[h.id]?.notes || '',
-      cat: h.category,
-    };
-  }).sort((a, b) => b.score - a.score);
+  const summary = edits.summary || buildDefaultSummary(data);
+  if (summary) out += `\n${summary}\n`;
 
-  const bands = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
-  bands.forEach(band => {
-    const bandItems = items.filter(it => it.rl && it.rl.label === band);
+  RISK_BANDS.forEach(band => {
+    const bandItems = data.scored.filter(it => it.level === band.key);
     if (bandItems.length === 0) return;
-    out += `\n── ${band} ──\n`;
+    out += `\n── ${band.key} ──\n`;
     bandItems.forEach(it => {
-      out += `  [${it.score}] ${it.name}  (${it.cat})\n`;
-      if (it.notes) out += `       Notes: ${it.notes}\n`;
+      out += `  [${it.score}] ${it.name}  (${it.category})\n       ${it.liText}\n`;
+      const notes = (edits.notes && edits.notes[it.id] !== undefined) ? edits.notes[it.id] : it.notes;
+      if (notes) out += `       Notes: ${notes}\n`;
     });
   });
 
-  out += `\n${'='.repeat(40)}\n`;
-  out += `Generated by World Aware Risk Assessment Tool\n`;
-  out += `beworldaware.com\n`;
+  if (data.unrated.length) {
+    out += `\n── IDENTIFIED BY RESEARCH — IMPACT NOT YET RATED ──\n`;
+    data.unrated.forEach(it => {
+      out += `  ${it.name}  (${it.category})  Likelihood ${it.l} – ${it.likelihoodLabel}\n`;
+      if (it.finding) out += `       Finding: ${it.finding}\n`;
+      if (it.source)  out += `       Source: ${it.source}${it.confidence ? ' (confidence: ' + it.confidence + ')' : ''}\n`;
+      const notes = (edits.notes && edits.notes[it.id] !== undefined) ? edits.notes[it.id] : it.notes;
+      if (notes) out += `       Notes: ${notes}\n`;
+    });
+  }
+
+  if (!data.scored.length && !data.unrated.length) {
+    out += `\nNo hazards scored yet.\n`;
+  }
+
+  if (edits.actions) {
+    out += `\n── ACTION ITEMS ──\n${edits.actions}\n`;
+  }
+
+  if (data.research) {
+    const r = data.research;
+    out += `\n── RESEARCH SOURCES ──\n`;
+    if (r.matchedAddress) out += `Matched address: ${r.matchedAddress}\n`;
+    out += `Likelihood estimated for ${r.findingCount} hazards (confidence: ${r.confidence.High} high, ${r.confidence.Medium} medium, ${r.confidence.Low} low).\n`;
+    r.sources.forEach(src => { out += `  - ${src}\n`; });
+  }
+
+  out += `\n${rule}\n`;
+  out += `${data.footer}\n`;
   return out;
 }
 
@@ -1197,7 +1587,12 @@ function saveAssessment() {
     state: JSON.parse(JSON.stringify(state)),
   };
   saves[id] = summary;
-  localStorage.setItem('wa_saves', JSON.stringify(saves));
+  try {
+    localStorage.setItem('wa_saves', JSON.stringify(saves));
+  } catch (e) {
+    alert('Could not save: storage is unavailable or full.');
+    return;
+  }
   renderSavedList();
   alert(`Assessment saved: ${new Date(timestamp).toLocaleString()}`);
 }
@@ -1214,9 +1609,8 @@ function loadAssessment(id) {
   const saves = getSavedAssessments();
   const save = saves[id];
   if (!save) return;
-  state = save.state;
+  state = normalizeState(save.state);
   autoSave();
-  initAssessmentUI();
   showScreen('assessment');
 }
 
@@ -1224,7 +1618,7 @@ function deleteAssessment(id) {
   showConfirm('Delete this saved assessment? This cannot be undone.', () => {
     const saves = getSavedAssessments();
     delete saves[id];
-    localStorage.setItem('wa_saves', JSON.stringify(saves));
+    try { localStorage.setItem('wa_saves', JSON.stringify(saves)); } catch (e) { /* ignore */ }
     renderSavedList();
   });
 }
@@ -1273,7 +1667,7 @@ function exportJSON() {
   const data = {
     exportedAt: new Date().toISOString(),
     tool: 'World Aware Risk Assessment',
-    version: '1.0',
+    version: '2.0',
     assessmentType: state.assessmentType,
     location: state.location,
     date: state.date,
@@ -1317,22 +1711,14 @@ function exportJSON() {
 
 function clearAllData() {
   showConfirm('Clear ALL assessment data and saved assessments? This cannot be undone.', () => {
-    localStorage.removeItem('wa_current_state');
-    localStorage.removeItem('wa_saves');
+    try {
+      localStorage.removeItem('wa_current_state');
+      localStorage.removeItem('wa_saves');
+      localStorage.removeItem('wa_report_edits');
+    } catch (e) { /* storage unavailable */ }
     // Reset state
-    state = {
-      assessmentType: 'household',
-      location: '',
-      date: new Date().toISOString().split('T')[0],
-      householdSize: '',
-      hh1Name: 'Household 1',
-      hh2Name: 'Household 2',
-      scores: {},
-      customNames: { 60: { name: '', description: '' }, 61: { name: '', description: '' }, 62: { name: '', description: '' } },
-      researchAddress:  '',
-      researchReport:   null,
-      autoScoreOrigins: {},
-    };
+    state = defaultState();
+    if (typeof resetResearchUI === 'function') resetResearchUI();
     renderSavedList();
     showScreen('home');
     alert('All data cleared.');
@@ -1438,9 +1824,21 @@ document.addEventListener('DOMContentLoaded', () => {
 --------------------------------------------------------------- */
 
 if ('serviceWorker' in navigator) {
+  // When a new service worker takes over (new version deployed), reload once
+  // so the page runs the matching app files instead of a stale mix.
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloadingForSW = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloadingForSW) return;
+    reloadingForSW = true;
+    window.location.reload();
+  });
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('./sw.js')
-      .then(reg => console.log('SW registered:', reg.scope))
+      .then(reg => {
+        console.log('SW registered:', reg.scope);
+        reg.update().catch(() => {});
+      })
       .catch(err => console.warn('SW registration failed:', err));
   });
 }
@@ -1486,7 +1884,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Set default date field
   const dateField = document.getElementById('field-date');
   if (dateField && !dateField.value) {
-    dateField.value = state.date || new Date().toISOString().split('T')[0];
+    dateField.value = state.date || localToday();
   }
 
   // Handle URL shortcut parameters (from manifest shortcuts)
@@ -1496,6 +1894,11 @@ document.addEventListener('DOMContentLoaded', () => {
     startAssessment(startParam);
   }
 
-  console.log('World Aware Risk Assessment v1.0 loaded.');
+  // Printing from any screen prints the report document
+  window.addEventListener('beforeprint', () => {
+    if (typeof renderReportView === 'function') renderReportView();
+  });
+
+  console.log('World Aware Risk Assessment v2.0 loaded.');
   console.log(`${HAZARD_DATA.length} hazards loaded.`);
 });

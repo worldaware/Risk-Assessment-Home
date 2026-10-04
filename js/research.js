@@ -183,6 +183,17 @@ async function directFetch(url) {
  * Try Nominatim first; fall back to Census via allorigins proxy.
  * Then enrich with county FIPS from the FCC Area API.
  */
+function _geoError(code, message) {
+  const e = new Error(message);
+  e.code = code;
+  return e;
+}
+
+const GEOCODE_MESSAGES = {
+  NOT_FOUND:   'Address not found — check the spelling or skip to assess without a lookup.',
+  UNREACHABLE: 'Couldn\u2019t reach the address lookup service — try again or skip.',
+};
+
 async function _geocode(address) {
   console.log('[Geocode] Starting for address:', address);
 
@@ -196,6 +207,7 @@ async function _geocode(address) {
   console.log('[Geocode] Nominatim URL:', nominatimUrl);
 
   let nominatimOk = false;
+  let nominatimEmpty = false; // service answered but found nothing
   try {
     const ctrl  = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), API_CONFIG.TIMEOUT_MS);
@@ -213,6 +225,7 @@ async function _geocode(address) {
     console.log('[Geocode] Nominatim raw response:', results);
 
     if (!results || results.length === 0) {
+      nominatimEmpty = true;
       throw new Error('no results');
     }
 
@@ -245,13 +258,15 @@ async function _geocode(address) {
       censusData = await fetchWithProxyCascade(censusUrl, API_CONFIG.TIMEOUT_MS);
       console.log('[Geocode] Census raw response:', censusData);
     } catch (censusErr) {
-      console.error('[Geocode] Census fallback also failed:', censusErr.message);
-      throw new Error('Could not reach geocoding service. Check your internet connection and try again.');
+      console.warn('[Geocode] Census fallback also failed:', censusErr.message);
+      // If the primary geocoder answered with no match, the address itself is the problem
+      if (nominatimEmpty) throw _geoError('NOT_FOUND', 'Address not found');
+      throw _geoError('UNREACHABLE', 'Could not reach geocoding service');
     }
 
     const matches = censusData?.result?.addressMatches;
     if (!matches || matches.length === 0) {
-      throw new Error('Address not found. Double-check the street address, city, and state.');
+      throw _geoError('NOT_FOUND', 'Address not found');
     }
 
     const m  = matches[0];
@@ -270,7 +285,7 @@ async function _geocode(address) {
 
   /* Validate we have usable coordinates */
   if (!lat || !lng || isNaN(lat) || isNaN(lng)) {
-    throw new Error('Address not found. Double-check the street address, city, and state.');
+    throw _geoError('NOT_FOUND', 'Address not found');
   }
 
   /* ── FIPS LOOKUP: FCC Area API ───────────────────────── */
@@ -911,6 +926,9 @@ async function startResearch() {
   if (_research.isRunning) return;
   _research.isRunning = true;
 
+  const staleErr = document.getElementById('research-error');
+  if (staleErr) staleErr.classList.add('hidden');
+
   // Reset state
   _research.address    = address;
   _research.geocoded   = null;
@@ -933,12 +951,9 @@ async function startResearch() {
   } catch (err) {
     _setStep('geocode', 'error');
     _research.isRunning = false;
-    console.error('[Research] Geocoding failed:', err.message);
-    _showResearchError(
-      err.message.includes('not found') || err.message.includes('Double-check')
-        ? 'Address not found. Double-check the street address, city, and state.'
-        : 'Could not reach geocoding service. Check your internet connection and try again.'
-    );
+    console.warn('[Research] Geocoding failed:', err.message);
+    // Anything that is not a confirmed "no match" (timeouts, HTTP/network errors) is unreachable
+    _showResearchError(err.code === 'NOT_FOUND' ? GEOCODE_MESSAGES.NOT_FOUND : GEOCODE_MESSAGES.UNREACHABLE);
     return;
   }
 
@@ -993,61 +1008,78 @@ async function startResearch() {
  * the existing score already carries isAuto=true.
  */
 function applyResearchScores() {
-  if (!_research.hasResults) return;
+  if (!_research.hasResults) {
+    // Nothing researched: behave like "skip"
+    if (typeof skipResearch === 'function') skipResearch();
+    return;
+  }
 
   // Include both 'success' and 'estimated' (fallback) findings
   const successFindings = _research.findings.filter(
     f => (f.status === 'success' || f.status === 'estimated') && f.scoreAssigned !== null
   );
 
-  // STEP 1: Show assessment screen FIRST so DOM is active before buildHazardList runs
-  showScreen('assessment');
-
-  // STEP 2: Write scores to state
+  // STEP 1: Write likelihood scores to state. Impact is never invented:
+  // the user rates impact on the Assess screen.
+  const applied = [];
   successFindings.forEach(f => {
     if (!state.scores[f.hazardId]) state.scores[f.hazardId] = {};
     const entry = state.scores[f.hazardId];
-    // Only skip if user manually entered a score (not auto)
+    // Only skip if user manually entered a likelihood (not auto)
     if (entry.l > 0 && !entry.isAuto) return;
+    applied.push(f);
     entry.l      = f.scoreAssigned;
     entry.isAuto = true;
-    const autoNote =
-      `[Auto-scored from: ${f.source}]\n` +
-      `Finding: ${f.finding}\n` +
-      `Confidence: ${f.confidence}`;
-    entry.notes = autoNote;
+    // Clear legacy auto-generated notes; research details live in autoScoreOrigins
+    if (typeof entry.notes === 'string' && entry.notes.startsWith('[Auto-scored from:')) entry.notes = '';
   });
 
-  // STEP 3: Persist metadata to state
+  // STEP 2: Persist research metadata and the researched address
   state.researchAddress = _research.address;
+  state.location        = _research.address || _research.geocoded?.displayAddress || state.location;
   state.researchReport  = {
     geocoded:  _research.geocoded,
     findings:  _research.findings,
     timestamp: new Date().toISOString(),
   };
   state.autoScoreOrigins = {};
-  successFindings.forEach(f => {
+  applied.forEach(f => {
     state.autoScoreOrigins[f.hazardId] = {
       source: f.source, finding: f.finding, confidence: f.confidence,
     };
   });
 
-  // STEP 4: Save and rebuild UI (screen is now active, DOM ready)
+  // STEP 3: Save, then open Assess (showScreen builds the hazard list,
+  // expands research categories and shows the "rate impact" banner)
   autoSave();
-  initAssessmentUI();
-  _expandScoredCategories(successFindings.map(f => f.hazardId));
-  _showAutoScoreBanner(successFindings.length);
+  showScreen('assessment');
 }
 
 /**
  * Remove all auto-scores from state (keep manual scores intact).
  */
 function clearAutoScores() {
+  // Research likelihoods the user has not changed still carry isAuto=true;
+  // changing a likelihood by hand clears isAuto, so those values are kept.
+  const autoIds = Object.keys(state.scores).filter(id => state.scores[id]?.isAuto && (parseInt(state.scores[id].l) || 0) > 0);
+  if (autoIds.length === 0 && !state.researchReport) {
+    _clearAutoScoresNow();
+    return;
+  }
+  const msg = autoIds.length
+    ? `Research a different address? This removes the ${autoIds.length} likelihood estimate${autoIds.length === 1 ? '' : 's'} from the current address research. Impact ratings, notes, and any likelihood you changed yourself are kept.`
+    : 'Research a different address? This clears the current research results. Your own ratings and notes are kept.';
+  showConfirm(msg, _clearAutoScoresNow);
+}
+
+function _clearAutoScoresNow() {
   Object.keys(state.scores).forEach(id => {
     if (state.scores[id]?.isAuto) {
       state.scores[id].l      = 0;
       state.scores[id].isAuto = false;
-      state.scores[id].notes  = '';
+      if (typeof state.scores[id].notes === 'string' && state.scores[id].notes.startsWith('[Auto-scored from:')) {
+        state.scores[id].notes = '';
+      }
     }
   });
   state.researchReport    = null;
@@ -1055,48 +1087,21 @@ function clearAutoScores() {
   state.autoScoreOrigins  = {};
   autoSave();
 
-  // Rebuild hazard list to remove badges
-  if (typeof buildHazardList === 'function') buildHazardList();
+  resetResearchUI();
   updateProgress();
+}
 
+/** Reset the Home research panel to an empty address form. */
+function resetResearchUI() {
+  _research.address    = '';
+  _research.geocoded   = null;
+  _research.findings   = [];
+  _research.hasResults = false;
   _showSection('input');
-  document.getElementById('research-address-input').value = '';
-}
-
-function _expandScoredCategories(hazardIds) {
-  const scoredCats = new Set(
-    HAZARD_DATA.filter(h => hazardIds.includes(h.id)).map(h => h.category)
-  );
-  document.querySelectorAll('.category-section').forEach(section => {
-    const catName = section.dataset.category;
-    if (!scoredCats.has(catName)) return;
-    const rows    = section.querySelector('.category-rows');
-    const chevron = section.querySelector('.cat-chevron');
-    if (rows && rows.classList.contains('collapsed')) {
-      rows.classList.remove('collapsed');
-      if (chevron) chevron.style.transform = 'rotate(180deg)';
-    }
-  });
-  if (window.feather) feather.replace();
-}
-
-function _showAutoScoreBanner(count) {
-  // Remove any existing banner first
-  const old = document.getElementById('auto-score-banner');
-  if (old) old.remove();
-
-  const banner = document.createElement('div');
-  banner.id = 'auto-score-banner';
-  banner.className = 'auto-score-banner';
-  banner.innerHTML = `
-    <div class="auto-score-banner-inner">
-      <span>🔍 <strong>${count} hazards</strong> pre-scored from government data. Review and set Impact scores to complete.</span>
-      <button class="btn-small btn-ghost" onclick="showScreen('research')">View Report</button>
-      <button class="auto-score-banner-close" onclick="this.closest('#auto-score-banner').remove()">✕</button>
-    </div>
-  `;
-  const header = document.querySelector('.assessment-header');
-  if (header) header.insertAdjacentElement('afterend', banner);
+  const input = document.getElementById('research-address-input');
+  if (input) input.value = '';
+  const errEl = document.getElementById('research-error');
+  if (errEl) errEl.classList.add('hidden');
 }
 
 /* ---------------------------------------------------------------
@@ -1325,7 +1330,7 @@ function _renderReport() {
       <div class="report-address-icon">📍</div>
       <div class="report-address-info">
         <strong>${escHtml(geo.displayAddress)}</strong>
-        <span>${geo.lat.toFixed(5)}, ${geo.lng.toFixed(5)} | ${escHtml(geo.county)} County, ${geo.stateAbbr}</span>
+        <span>${Number(geo.lat).toFixed(5)}, ${Number(geo.lng).toFixed(5)} | ${escHtml(String(geo.county || '').replace(/ County$/i, ''))} County, ${escHtml(geo.stateAbbr || '')}</span>
         ${geo.zip ? `<span>ZIP: ${geo.zip}  · County FIPS: ${geo.fips5 || 'N/A'}</span>` : ''}
       </div>
     </div>
@@ -1334,11 +1339,23 @@ function _renderReport() {
     <div class="report-summary-banner">
       <div class="report-summary-icon">📊</div>
       <div>
-        <strong>We auto-scored ${successful.length} hazards</strong> from government data.<br>
+        <strong>Likelihood estimated for ${successful.length} hazards</strong> from public data.<br>
         <span class="report-summary-sub">${failed.length > 0 ? `${failed.length} source${failed.length > 1 ? 's' : ''} unavailable · ` : ''}${manualCount} hazards require your input.</span>
       </div>
     </div>
 
+    <!-- Primary next step -->
+    <div class="report-actions report-actions-top">
+      <button class="btn-primary btn-large btn-block" id="research-continue-btn" onclick="applyResearchScores()">
+        Continue to Assessment →
+      </button>
+      <p class="report-actions-note">Likelihood estimates are added to your assessment. You rate the impact for your household.</p>
+      <button class="btn-link" id="research-restart-btn" onclick="clearAutoScores()">
+        Research a different address
+      </button>
+    </div>
+
+    <div class="research-details">
     <!-- API availability note -->
     <p class="report-aq-note">
       💨 For real-time air quality, visit <strong>airnow.gov</strong> and enter your address for current AQI.
@@ -1346,7 +1363,7 @@ function _renderReport() {
   `;
 
   // ── AUTO-SCORED HAZARDS ─────────────────────────────────────
-  html += `<h3 class="report-section-heading">✅ Auto-Scored Hazards (${successful.length})</h3>`;
+  html += `<h3 class="report-section-heading">✅ Likelihood Estimated (${successful.length})</h3>`;
 
   if (successful.length > 0) {
     // Group by category
@@ -1402,22 +1419,10 @@ function _renderReport() {
 
   html += `</div>`;
 
-  // ── ACTION BUTTONS ────────────────────────────────────────
-  html += `
-    <div class="report-actions">
-      <button class="btn-primary btn-large" onclick="applyResearchScores()">
-        ✅ Apply These Scores to My Assessment
-      </button>
-      <button class="btn-secondary" onclick="showScreen('assessment')">
-        📋 Review Assessment First
-      </button>
-      <button class="btn-ghost btn-small" onclick="clearAutoScores()">
-        🗑️ Clear &amp; Start Over
-      </button>
-    </div>
-  `;
+  html += `</div>`; // end .research-details
 
   container.innerHTML = html;
+  if (window.feather) feather.replace();
 }
 
 function _buildFindingCard(f) {
@@ -1487,8 +1492,26 @@ function _likelihoodLabel(score) {
 --------------------------------------------------------------- */
 
 function initResearchScreen() {
-  // Always show the input form — results only appear after user clicks the button
-  _showSection('input');
+  // Restore a previously completed research run (persisted in state)
+  if (!_research.isRunning && !_research.hasResults &&
+      typeof state !== 'undefined' && state.researchReport &&
+      state.researchReport.geocoded && Array.isArray(state.researchReport.findings)) {
+    _research.address    = state.researchAddress || '';
+    _research.geocoded   = state.researchReport.geocoded;
+    _research.findings   = state.researchReport.findings;
+    _research.hasResults = true;
+    const input = document.getElementById('research-address-input');
+    if (input && !input.value) input.value = _research.address;
+  }
+
+  if (_research.isRunning) {
+    _showSection('loading');
+  } else if (_research.hasResults) {
+    _showSection('results');
+    _renderReport();
+  } else {
+    _showSection('input');
+  }
 
   // Bind Enter key on address input
   const addrInput = document.getElementById('research-address-input');
@@ -1498,8 +1521,4 @@ function initResearchScreen() {
     });
     addrInput._researchBound = true;
   }
-
-  // Remove any stale error message
-  const errEl = document.getElementById('research-error');
-  if (errEl) errEl.classList.add('hidden');
 }
