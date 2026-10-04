@@ -60,6 +60,7 @@ function resetReportEdits() {
     delete all[state.assessmentId];
     _writeAllReportEdits(all);
     renderReportView();
+    if (typeof preparePdf === 'function') preparePdf();
   });
 }
 
@@ -234,6 +235,7 @@ function _bindReportEditing(doc) {
     timer = setTimeout(() => _saveReportEdit(key, val), 250);
     // Save immediately too, so nothing is lost if the page closes
     _saveReportEdit(key, val);
+    if (typeof invalidatePdf === 'function') invalidatePdf();
   });
 
   // Paste as plain text only
@@ -254,52 +256,6 @@ function _bindReportEditing(doc) {
       el.blur();
     }
   });
-}
-
-/* ---------------------------------------------------------------
-   PRINT
---------------------------------------------------------------- */
-
-/**
- * iPhone/iPad home-screen web apps (standalone mode) ignore window.print().
- * There we hand the PDF to the share sheet, which offers Print.
- */
-function _isIOSHomeScreenApp() {
-  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-  const standalone = window.navigator.standalone === true ||
-    (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
-  return isIOS && standalone;
-}
-
-function printReport() {
-  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
-  if (currentScreen !== 'report') showScreen('report');
-  else renderReportView();
-
-  if (_isIOSHomeScreenApp() || typeof window.print !== 'function') {
-    _printViaShareSheet();
-    return;
-  }
-  // Call print() directly inside the tap handler. Mobile browsers (Safari in
-  // particular) silently ignore print() called from a timer or after an await.
-  window.print();
-}
-
-async function _printViaShareSheet() {
-  try {
-    const { doc, filename } = await buildReportPDF();
-    const file = new File([doc.output('blob')], filename, { type: 'application/pdf' });
-    if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      await navigator.share({ files: [file], title: filename });
-    } else {
-      doc.save(filename);
-    }
-  } catch (err) {
-    if (err && err.name === 'AbortError') return; // user closed the share sheet
-    console.error('Print fallback failed', err);
-    alert('Printing is not available here. Use Download PDF, then print the PDF.');
-  }
 }
 
 /* ---------------------------------------------------------------
@@ -580,18 +536,100 @@ async function buildReportPDF() {
   return { doc, filename: reportPdfFilename(d.date) };
 }
 
-async function downloadReportPDF() {
-  const btn = document.getElementById('report-pdf-btn');
-  const label = btn ? btn.innerHTML : '';
-  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
-  if (btn) { btn.disabled = true; btn.textContent = 'Preparing PDF…'; }
-  try {
-    const { doc, filename } = await buildReportPDF();
-    doc.save(filename);
-  } catch (err) {
-    console.error('PDF generation failed', err);
-    alert('Could not create the PDF. You can use Print and choose "Save as PDF" instead.');
-  } finally {
-    if (btn) { btn.disabled = false; btn.innerHTML = label; }
-  }
+/* ---------------------------------------------------------------
+   PDF / SHARE — the single export button (Results and Report screens).
+   iPhone only opens the share sheet if navigator.share() is called right
+   inside the tap, so the PDF is built ahead of time and kept ready; the
+   tap then shares the ready file with no waiting. The share sheet offers
+   Print, Save to Files, Mail, Messages, etc. Where sharing files isn't
+   supported (most desktop browsers), the PDF downloads instead.
+--------------------------------------------------------------- */
+
+let _pdfReady = null;      // { file, filename, blob } for the current report
+let _pdfBuilding = null;   // in-flight build promise
+let _pdfStaleTimer = null;
+
+async function _buildPdfFile() {
+  const { doc, filename } = await buildReportPDF();
+  const blob = doc.output('blob');
+  let file = null;
+  try { file = new File([blob], filename, { type: 'application/pdf' }); } catch (_) {}
+  return { file, filename, blob };
 }
+
+/** (Re)build the ready-to-share PDF. Call when the report data or edits change. */
+function preparePdf() {
+  const build = _buildPdfFile().then(r => {
+    if (_pdfBuilding === build) { _pdfReady = r; _pdfBuilding = null; }
+    return r;
+  }).catch(err => {
+    if (_pdfBuilding === build) _pdfBuilding = null;
+    console.error('PDF preparation failed', err);
+    return null;
+  });
+  _pdfReady = null;
+  _pdfBuilding = build;
+  return build;
+}
+
+/** Mark the ready PDF out of date and rebuild shortly (used while typing edits). */
+function invalidatePdf() {
+  _pdfReady = null;
+  clearTimeout(_pdfStaleTimer);
+  _pdfStaleTimer = setTimeout(preparePdf, 600);
+}
+
+function _canShareFile(file) {
+  try { return !!(file && navigator.canShare && navigator.share && navigator.canShare({ files: [file] })); }
+  catch (_) { return false; }
+}
+
+function _downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.rel = 'noopener';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+function _shareOrDownload(r) {
+  if (_canShareFile(r.file)) {
+    return navigator.share({ files: [r.file], title: r.filename }).catch(err => {
+      if (err && err.name === 'AbortError') return;            // user closed the sheet
+      _downloadBlob(r.blob, r.filename);                      // share blocked: save instead
+    });
+  }
+  _downloadBlob(r.blob, r.filename);
+  return Promise.resolve();
+}
+
+function sharePdf(btnEl) {
+  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+  // Typing in the report may have a rebuild pending: flush it now.
+  if (_pdfStaleTimer && !_pdfReady && !_pdfBuilding) { clearTimeout(_pdfStaleTimer); preparePdf(); }
+
+  // Fast path: PDF already built, share synchronously inside the tap.
+  if (_pdfReady) { _shareOrDownload(_pdfReady); return; }
+
+  // Slow path: still building. Show progress, then try; if iPhone refuses the
+  // share sheet because the tap "expired", ask for one more tap.
+  const btn = btnEl || null;
+  const label = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Preparing PDF…'; }
+  (_pdfBuilding || preparePdf()).then(r => {
+    if (btn) { btn.disabled = false; btn.innerHTML = label; if (window.feather) feather.replace(); }
+    if (!r) { alert('Could not create the PDF. Please try again.'); return; }
+    if (_canShareFile(r.file)) {
+      navigator.share({ files: [r.file], title: r.filename }).catch(err => {
+        if (err && err.name === 'AbortError') return;
+        if (btn) { btn.innerHTML = label; }
+        alert('Your PDF is ready. Tap PDF / Share again to open it.');
+      });
+    } else {
+      _downloadBlob(r.blob, r.filename);
+    }
+  });
+}
+
+// Back-compat name (older markup / tests)
+function downloadReportPDF() { sharePdf(document.getElementById('report-pdf-btn')); }

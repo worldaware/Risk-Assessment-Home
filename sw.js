@@ -3,7 +3,7 @@
    Service Worker: caches app shell for full offline use.
    ============================================================= */
 
-const CACHE_NAME = 'wa-risk-v2.0.1';  // v2.0: research merged into Home, report view, PDF
+const CACHE_NAME = 'wa-risk-v2.0.2';  // v2.0: research merged into Home, report view, PDF
 
 // App shell files to cache on install
 const APP_SHELL = [

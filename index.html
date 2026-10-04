@@ -197,14 +197,14 @@
 
       <!-- Action buttons -->
       <div class="results-actions">
-        <button class="btn-primary" id="results-report-btn" onclick="showScreen('report')">
+        <button class="btn-primary" id="results-pdf-btn" onclick="sharePdf(this)">
+          <i data-feather="share"></i> PDF / Share
+        </button>
+        <button class="btn-secondary" id="results-report-btn" onclick="showScreen('report')">
           <i data-feather="file-text"></i> View / Edit Report
         </button>
         <button class="btn-secondary" id="results-share-btn" onclick="shareResults()">
-          <i data-feather="share-2"></i> Share / Export
-        </button>
-        <button class="btn-secondary" id="results-print-btn" onclick="printReport()">
-          <i data-feather="printer"></i> Print / Save as PDF
+          <i data-feather="message-square"></i> Share Text Summary
         </button>
         <button class="btn-ghost" onclick="showScreen('assessment')">
           <i data-feather="edit-2"></i> Back to Assessment
@@ -343,11 +343,8 @@
           </button>
         </div>
         <div class="report-toolbar-actions">
-          <button class="btn-primary btn-small" id="report-print-btn" onclick="printReport()">
-            <i data-feather="printer"></i> Print
-          </button>
-          <button class="btn-primary btn-small" id="report-pdf-btn" onclick="downloadReportPDF()">
-            <i data-feather="download"></i> Download PDF
+          <button class="btn-primary btn-small" id="report-pdf-btn" onclick="sharePdf(this)">
+            <i data-feather="share"></i> PDF / Share
           </button>
           <button class="btn-ghost-light btn-small" id="report-reset-btn" onclick="resetReportEdits()">
             <i data-feather="rotate-ccw"></i> Reset edits

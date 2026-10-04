@@ -564,10 +564,10 @@ function showScreen(screenId, opts) {
   if (screenId === 'results')    renderResults();
   if (screenId === 'report' && typeof renderReportView === 'function') {
     renderReportView();
-    // Preload the PDF library so PDF/print-fallback taps stay within the tap's
-    // permission window on iPhone (a slow first load can expire it).
-    if (typeof _loadJsPDF === 'function') _loadJsPDF().catch(() => {});
   }
+  // Build the PDF ahead of time so the PDF / Share tap can open the iPhone
+  // share sheet instantly (iPhone ignores share requests made after a delay).
+  if ((screenId === 'report' || screenId === 'results') && typeof preparePdf === 'function') preparePdf();
   if (screenId === 'about')      renderSavedList();
   if (screenId === 'reference')  buildRiskMatrix();
 
