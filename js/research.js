@@ -87,17 +87,25 @@ let _research = {
   findings:   [],   // { hazardId, hazardName, category, scoreAssigned, source, finding, confidence, status, isOverridden }
   stepStatuses: {}, // stepId → 'pending' | 'running' | 'success' | 'error'
   hasResults: false,
+  runId:      0,    // bumped on every start/reset so a stale run cannot write results
 };
+
+/** Abandon any lookup in flight. Its late results are ignored. */
+function cancelResearch() {
+  _research.runId += 1;
+  _research.isRunning = false;
+}
 
 /* Research step definitions (UI order) */
 const STEPS = [
-  { id: 'geocode',    label: 'Geocoding address' },
+  { id: 'geocode',    label: 'Finding the address' },
   { id: 'flood',      label: 'Checking flood zones (FEMA)' },
   { id: 'earthquake', label: 'Checking earthquake hazard (USGS)' },
-  { id: 'wildfire',   label: 'Checking wildfire risk (USFS)' },
-  { id: 'weather',    label: 'Checking severe weather patterns (NOAA)' },
-  { id: 'epa',        label: 'Checking industrial facilities (EPA TRI)' },
-  { id: 'airquality', label: 'Assessing air quality risk' },
+  { id: 'wildfire',   label: 'Checking wildfire hazard (Forest Service)' },
+  { id: 'weather',    label: 'Confirming the state for weather estimates (NWS)' },
+  { id: 'drought',    label: 'Checking drought conditions (Drought Monitor)' },
+  { id: 'epa',        label: 'Checking for industrial sites nearby (EPA)' },
+  { id: 'airquality', label: 'Estimating smoke and air quality risk' },
   { id: 'landslide',  label: 'Checking landslide susceptibility (USGS)' },
 ];
 
@@ -128,17 +136,28 @@ async function fetchWithProxyCascade(targetUrl, timeoutMs) {
   for (const proxy of proxies) {
     const wrappedUrl = proxy.url + encodeURIComponent(targetUrl);
     try {
-      const fetchPromise = fetch(wrappedUrl);
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Timeout')), totalTimeout)
-      );
-      const response = await Promise.race([fetchPromise, timeoutPromise]);
+      // Abort the underlying request on timeout instead of letting it run on;
+      // no referrer so the relay never learns which page sent it.
+      const ctrl  = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), totalTimeout);
+      let response;
+      try {
+        response = await fetch(wrappedUrl, { signal: ctrl.signal, referrerPolicy: 'no-referrer' });
+      } finally {
+        clearTimeout(timer);
+      }
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
 
       const result = await proxy.extract(response);
+      // Relays wrap upstream errors in HTTP 200. An ArcGIS/REST error object
+      // is a failure, not an empty result.
+      if (result === null || result === undefined) throw new Error('Empty body from relay');
+      if (result && typeof result === 'object' && result.error) {
+        throw new Error(`Upstream error ${result.error.code || ''} ${result.error.message || ''}`.trim());
+      }
       console.log('[Proxy success]', proxy.name, '<-', targetUrl);
       return result;
     } catch (err) {
@@ -161,15 +180,35 @@ async function proxyFetch(url) {
 }
 
 /**
- * Direct fetch with User-Agent — for APIs that support CORS natively
+ * Direct fetch — for APIs that support CORS natively
  * (USGS earthquake, NOAA weather.gov, FCC).
+ * No custom User-Agent: browsers set their own, and a custom one forces a
+ * CORS preflight that some of these services reject.
  */
 async function directFetch(url) {
-  const resp = await fetch(url, {
-    headers: { 'User-Agent': 'WorldAwareRiskApp/1.0 (beworldaware.com)' },
-  });
+  const ctrl  = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), API_CONFIG.TIMEOUT_MS);
+  let resp;
+  try {
+    resp = await fetch(url, { signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
   if (!resp.ok) throw new Error('HTTP ' + resp.status);
-  return resp.json();
+  const data = await resp.json();
+  if (data && typeof data === 'object' && data.error) {
+    throw new Error(`Upstream error ${data.error.code || ''} ${data.error.message || ''}`.trim());
+  }
+  return data;
+}
+
+/**
+ * Round a coordinate to 4 decimals (about 11 m) before it leaves the browser
+ * for any third-party relay. Flood, wildfire and landslide polygons are far
+ * coarser than this, so nothing is lost.
+ */
+function _coarse(n) {
+  return Number(Number(n).toFixed(4));
 }
 
 /* ---------------------------------------------------------------
@@ -213,10 +252,7 @@ async function _geocode(address) {
     const timer = setTimeout(() => ctrl.abort(), API_CONFIG.TIMEOUT_MS);
     const resp  = await fetch(nominatimUrl, {
       signal:  ctrl.signal,
-      headers: {
-        'Accept-Language': 'en',
-        'User-Agent': 'WorldAwareRiskApp/1.0 (beworldaware.com)',
-      },
+      headers: { 'Accept-Language': 'en' },
     });
     clearTimeout(timer);
 
@@ -233,7 +269,8 @@ async function _geocode(address) {
     lat          = parseFloat(r.lat);
     lng          = parseFloat(r.lon);
     zip          = r.address?.postcode || '';
-    stateAbbr    = r.address?.state_code || r.address?.ISO3166_2_lvl4?.split('-')[1] || '';
+    // Nominatim's key is "ISO3166-2-lvl4" (hyphens), value like "US-CO"
+    stateAbbr    = r.address?.['ISO3166-2-lvl4']?.split('-')[1] || '';
     county       = r.address?.county || r.address?.city || r.address?.town || '';
     city         = r.address?.city   || r.address?.town || r.address?.village || '';
     displayAddress = r.display_name || address;
@@ -329,6 +366,13 @@ async function _geocode(address) {
     console.warn('[Geocode] FCC FIPS lookup failed (non-fatal):', fccErr.message);
   }
 
+  // Third-party strings are rendered and used in URLs: keep only the shapes we expect.
+  zip        = /^\d{5}/.test(String(zip || '')) ? String(zip).slice(0, 5) : '';
+  fips5      = /^\d{5}$/.test(String(fips5 || '')) ? String(fips5) : '';
+  stateFips  = fips5 ? fips5.slice(0, 2) : '';
+  countyFips = fips5 ? fips5.slice(2) : '';
+  stateAbbr  = /^[A-Z]{2}$/i.test(String(stateAbbr || '')) ? String(stateAbbr).toUpperCase() : '';
+
   const result = {
     lat, lng, zip, stateAbbr,
     county:        county || '',
@@ -352,15 +396,17 @@ const _QUAKE_HIGH_STATES = new Set([
   'CA','AK','WA','OR','NV','UT','HI'
 ]);
 
+const FALLBACK_PREFIX = 'This source did not respond, so this is a placeholder.';
+
 function _floodFallback() {
-  return { score: 2, finding: 'API unavailable — baseline flood risk assumed', confidence: 'Low', isFallback: true };
+  return { score: 2, finding: `${FALLBACK_PREFIX} Check your flood zone at msc.fema.gov.`, confidence: 'Low', isFallback: true };
 }
 function _quakeFallback(stateAbbr) {
   const s = (stateAbbr || '').toUpperCase();
   const score = _QUAKE_HIGH_STATES.has(s) ? 4 : 1;
   return {
     score,
-    finding: `API unavailable — state heuristic (${s || 'unknown'}): ${score === 4 ? 'High seismic state' : 'Low seismic state'}`,
+    finding: `${FALLBACK_PREFIX} Statewide estimate for ${s || 'an unknown state'}: ${score === 4 ? 'higher seismic activity' : 'lower seismic activity'}.`,
     confidence: 'Low', isFallback: true,
   };
 }
@@ -369,13 +415,13 @@ function _wildfireFallback(stateAbbr) {
   let score, findingText;
   if (s === 'CO') {
     score       = 4;
-    findingText = 'API unavailable — Colorado is a high wildfire risk state (heuristic)';
+    findingText = `${FALLBACK_PREFIX} Colorado-wide estimate, not specific to this address. Ask your fire district for a home assessment.`;
   } else if (_WILDFIRE_HIGH_STATES.has(s)) {
     score       = 3;
-    findingText = `API unavailable — state heuristic (${s}): Elevated wildfire state`;
+    findingText = `${FALLBACK_PREFIX} Statewide estimate for ${s}: elevated wildfire activity.`;
   } else {
     score       = 1;
-    findingText = `API unavailable — state heuristic (${s || 'unknown'}): Low wildfire state`;
+    findingText = `${FALLBACK_PREFIX} Statewide estimate for ${s || 'an unknown state'}: lower wildfire activity.`;
   }
   return {
     score,
@@ -384,7 +430,7 @@ function _wildfireFallback(stateAbbr) {
   };
 }
 function _landslideFallback() {
-  return { score: 1, finding: 'API unavailable — minimal landslide risk assumed', confidence: 'Low', isFallback: true };
+  return { score: 1, finding: `${FALLBACK_PREFIX} Minimal landslide risk assumed.`, confidence: 'Low', isFallback: true };
 }
 
 /* ---------------------------------------------------------------
@@ -401,7 +447,8 @@ function _parseNFHLFeatures(feats) {
   const attrs = feats[0]?.attributes || {};
   return {
     zone:    (attrs.FLD_ZONE || attrs.FLD_ZONE_NO || '').trim().toUpperCase(),
-    subtype: (attrs.ZONE_SUBTYPE || '').trim().toUpperCase(),
+    // NFHL layer 28 names this field ZONE_SUBTY; older code asked for ZONE_SUBTYPE
+    subtype: (attrs.ZONE_SUBTY || attrs.ZONE_SUBTYPE || '').trim().toUpperCase(),
     sfha:    attrs.SFHA_TF === 'T' || attrs.SFHA_TF === true,
   };
 }
@@ -411,18 +458,21 @@ async function _callFloodAPI(lat, lng, countyFips) {
   const BASE = 'https://hazards.fema.gov/gis/nfhl/rest/services/public/NFHL/MapServer/28/query';
   const pointParams =
     `&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects` +
-    `&outFields=FLD_ZONE,ZONE_SUBTYPE,SFHA_TF&returnGeometry=false&f=json`;
+    `&outFields=FLD_ZONE,ZONE_SUBTY,SFHA_TF&returnGeometry=false&f=json`;
   const femaMapUrl = `https://msc.fema.gov/portal/search#${encodeURIComponent(lat + ',' + lng)}`;
+  const cLat = _coarse(lat), cLng = _coarse(lng);
 
   // ── Method A: NFHL point query ───────────────────────────
   try {
-    const urlA = `${BASE}?geometry=${lng},${lat}${pointParams}`;
+    const urlA = `${BASE}?geometry=${cLng},${cLat}${pointParams}`;
     const dataA = await proxyFetch(urlA);
     const parsed = _parseNFHLFeatures(dataA?.features);
     if (parsed && parsed.zone) {
       const r = mapFloodZoneToScore(parsed.zone, parsed.subtype);
-      console.log('[FEMA Flood] Success via Method A — Zone:', parsed.zone, 'Score:', r.score);
-      return { ...r, femaMapUrl, confidence: 'High' };
+      if (r.score !== null) {
+        console.log('[FEMA Flood] Success via Method A — Zone:', parsed.zone, 'Score:', r.score);
+        return { ...r, femaMapUrl, confidence: 'High' };
+      }
     }
   } catch (e) {
     console.warn('[FEMA Flood] Method A failed:', e.message);
@@ -432,13 +482,15 @@ async function _callFloodAPI(lat, lng, countyFips) {
   try {
     const urlB =
       `https://msc.fema.gov/arcgis/rest/services/NFHL_National_Clip/NFHL_National_Clip/MapServer/28/query` +
-      `?geometry=${lng},${lat}${pointParams}`;
+      `?geometry=${cLng},${cLat}${pointParams}`;
     const dataB = await proxyFetch(urlB);
     const parsed = _parseNFHLFeatures(dataB?.features);
     if (parsed && parsed.zone) {
       const r = mapFloodZoneToScore(parsed.zone, parsed.subtype);
-      console.log('[FEMA Flood] Success via Method B — Zone:', parsed.zone, 'Score:', r.score);
-      return { ...r, femaMapUrl, confidence: 'High' };
+      if (r.score !== null) {
+        console.log('[FEMA Flood] Success via Method B — Zone:', parsed.zone, 'Score:', r.score);
+        return { ...r, femaMapUrl, confidence: 'High' };
+      }
     }
   } catch (e) {
     console.warn('[FEMA Flood] Method B failed:', e.message);
@@ -449,7 +501,7 @@ async function _callFloodAPI(lat, lng, countyFips) {
     const d = 0.01;
     const urlC =
       `${BASE}?where=1%3D1` +
-      `&geometry=${lng - d},${lat - d},${lng + d},${lat + d}` +
+      `&geometry=${cLng - d},${cLat - d},${cLng + d},${cLat + d}` +
       `&geometryType=esriGeometryEnvelope&inSR=4326&spatialRel=esriSpatialRelIntersects` +
       `&outFields=FLD_ZONE&returnGeometry=false&f=json`;
     const dataC = await proxyFetch(urlC);
@@ -461,15 +513,19 @@ async function _callFloodAPI(lat, lng, countyFips) {
       zones.forEach(z => { freq[z] = (freq[z] || 0) + 1; });
       const zone  = Object.keys(freq).sort((a, b) => freq[b] - freq[a])[0] || '';
       const r = mapFloodZoneToScore(zone, '');
-      console.log('[FEMA Flood] Success via Method C — Zone:', zone, 'Score:', r.score);
-      return { ...r, femaMapUrl, confidence: 'Medium' };
+      if (r.score !== null) {
+        console.log('[FEMA Flood] Success via Method C — Zone:', zone, 'Score:', r.score);
+        return { ...r, finding: `${r.finding} (most common zone within about 1 km, not this parcel)`, femaMapUrl, confidence: 'Medium' };
+      }
     }
   } catch (e) {
     console.warn('[FEMA Flood] Method C failed:', e.message);
   }
 
   // ── Method D: FEMA National Risk Index (CORS-friendly) ────
-  if (countyFips) {
+  // NRI needs the full 5-digit state+county FIPS; the 3-digit county part
+  // alone is shared by about twenty counties.
+  if (countyFips && /^\d{5}$/.test(countyFips)) {
     try {
       const urlD = `https://hazards.fema.gov/nri/api/county?fips=${countyFips}`;
       const datD = await directFetch(urlD);
@@ -483,20 +539,15 @@ async function _callFloodAPI(lat, lng, countyFips) {
         else if (rfld >= 10) { score = 2; finding = `NRI: Low riverine flood risk (score ${rfld.toFixed(0)}/100)`; }
         else                 { score = 1; finding = `NRI: Very low riverine flood risk (score ${rfld.toFixed(0)}/100)`; }
         console.log('[FEMA Flood] Success via Method D — NRI score:', rfld, 'Likelihood:', score);
-        return { score, finding, femaMapUrl, confidence: 'Medium' };
+        return { score, finding: `${finding} — county-wide index, not this parcel`, femaMapUrl, confidence: 'Low' };
       }
     } catch (e) {
       console.warn('[FEMA Flood] Method D failed:', e.message);
     }
   }
 
-  // ── All methods failed ────────────────────────────────────
-  console.warn('[FEMA Flood] All methods failed — returning low-confidence default');
-  return {
-    score: 2,
-    finding: 'No FEMA flood zone data retrieved. Check msc.fema.gov manually.',
-    femaMapUrl, confidence: 'Low',
-  };
+  // ── All methods failed: report failure so the caller marks it Estimated ──
+  throw new Error('No FEMA flood zone data retrieved');
 }
 
 /* ---------------------------------------------------------------
@@ -511,7 +562,10 @@ async function _callEarthquakeAPI(lat, lng) {
     `&riskCategory=III&siteClass=D&title=query`;
 
   const data = await directFetch(url);
-  const pga = data?.data?.pga;
+  // The NEHRP-2020 service wraps its payload as { request, response: { data } }
+  // and names the value "pgam" (site-modified peak ground acceleration).
+  const d   = data?.response?.data ?? data?.data;
+  const pga = d?.pgam ?? d?.pga;
   if (pga === undefined || pga === null) throw new Error('No PGA data returned');
   const result = mapPGAToScore(pga);
   console.log('[USGS Earthquake] Result:', result);
@@ -526,27 +580,18 @@ async function _callEarthquakeAPI(lat, lng) {
 async function _callWildfireAPI(lat, lng) {
   console.log('[USFS Wildfire] Starting fetch for', lat, lng);
   const url =
-    `${API_CONFIG.USFS_WILDFIRE}?geometry=${lng},${lat}` +
+    `${API_CONFIG.USFS_WILDFIRE}?geometry=${_coarse(lng)},${_coarse(lat)}` +
     `&geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects` +
     `&outFields=WHP_Label,WHP_Category&returnGeometry=false&f=json`;
 
-  let data;
-  try {
-    data = await proxyFetch(url);
-  } catch (err) {
-    console.warn('[USFS Wildfire] proxyFetch failed, returning null for fallback:', err.message);
-    return null;
-  }
+  // Any failure here throws, so _tracked marks the step as failed and
+  // _compileFindings applies the state fallback with an honest "Estimated" tag.
+  const data  = await proxyFetch(url);
+  const feats = Array.isArray(data?.features) ? data.features : [];
+  if (feats.length === 0) throw new Error('No USFS WHP polygon at this location');
 
-  const feats = data?.features || [];
-
-  let result;
-  if (feats.length === 0) {
-    result = { score: 4, finding: 'No USFS WHP polygon at this location — Colorado default applied', confidence: 'Medium' };
-  } else {
-    const attrs = feats[0]?.attributes || {};
-    result = mapWHPToScore(attrs.WHP_Label || '', attrs.WHP_Category);
-  }
+  const attrs  = feats[0]?.attributes || {};
+  const result = mapWHPToScore(attrs.WHP_Label || '', attrs.WHP_Category);
   console.log('[USFS Wildfire] Result:', result);
   return result;
 }
@@ -576,13 +621,17 @@ async function _callWeatherAPI(lat, lng) {
    Route: proxy-first (Drought Monitor blocks browser CORS)
 --------------------------------------------------------------- */
 
-function _mostRecentTuesdayStr() {
-  const today = new Date();
+function _mostRecentTuesdayStr(now) {
+  // Drought Monitor maps are dated Tuesday and published Thursday, so the
+  // most recent published map is the Tuesday at least two days back.
+  const today = now ? new Date(now) : new Date();
   const dow   = today.getDay();
-  const back  = (dow - 2 + 7) % 7;
-  const d     = new Date(today);
-  d.setDate(today.getDate() - back);
-  return d.toISOString().split('T')[0];
+  let back    = (dow - 2 + 7) % 7;
+  if (back < 2) back += 7;
+  const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - back);
+  const pad = n => String(n).padStart(2, '0');
+  // Local-date formatting: toISOString() would shift evening dates to UTC's next day
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 async function _callDroughtAPI(fips5) {
@@ -652,16 +701,16 @@ async function _callEPAAPI(zip) {
 async function _callLandslideAPI(lat, lng) {
   console.log('[USGS Landslide] Starting fetch for', lat, lng);
   const url =
-    `${API_CONFIG.USGS_LANDSLIDE}?geometry=${lng},${lat}` +
+    `${API_CONFIG.USGS_LANDSLIDE}?geometry=${_coarse(lng)},${_coarse(lat)}` +
     `&geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects` +
     `&outFields=*&returnGeometry=false&f=json`;
 
   const data = await proxyFetch(url);
-  const feats = data?.features || [];
+  const feats = Array.isArray(data?.features) ? data.features : [];
 
   let result;
   if (feats.length === 0) {
-    result = { score: 1, finding: 'No USGS landslide susceptibility data for this location', confidence: 'Low' };
+    throw new Error('No USGS landslide susceptibility polygon at this location');
   } else {
     const attrs = feats[0]?.attributes || {};
     const level =
@@ -729,18 +778,20 @@ function _compileFindings(apiResults, geocoded) {
    * Add a finding. If result is null (API failed), apply a fallback score
    * from `fallbackFn` and mark it as estimated — never leave score null.
    */
-  function addFinding(hazardId, hazardName, category, _apiKey, result, source, fallbackFn) {
+  function addFinding(hazardId, hazardName, category, _apiKey, result, source, fallbackFn, extras) {
     if (!result) {
       const fb = fallbackFn ? fallbackFn() : null;
       if (fb) {
         findings.push({
           hazardId, hazardName, category,
           scoreAssigned: fb.score,
-          source,
-          finding: `Estimated (data unavailable): ${fb.finding}`,
+          // An estimate is a World Aware placeholder, not the named data source
+          source: `World Aware placeholder (${source} did not respond)`,
+          finding: fb.finding,
           confidence: 'Low',
           status: 'estimated',
           isOverridden: false,
+          ...(extras || {}),
         });
       } else {
         findings.push({
@@ -767,10 +818,14 @@ function _compileFindings(apiResults, geocoded) {
 
   // ── FLOOD ─────────────────────────────────────────────────
   const floodSrc = 'FEMA National Flood Hazard Layer (NFHL) / National Risk Index';
-  // Carry femaMapUrl through so _buildFindingCard can show the FIRM link
-  const floodWithUrl = flood ? { ...flood } : null;
-  addFinding(H_ID.FLOOD_RIVERINE, 'Flood (riverine)', 'Natural Hazards', 'flood', floodWithUrl, floodSrc, _floodFallback);
-  addFinding(H_ID.FLASH_FLOOD,    'Flash Flood',      'Natural Hazards', 'flood', floodWithUrl, floodSrc, _floodFallback);
+  // Carry femaMapUrl through so _buildFindingCard can show the FIRM link,
+  // including on the placeholder path where the user most needs it.
+  const femaMapUrl = (geocoded.lat && geocoded.lng)
+    ? `https://msc.fema.gov/portal/search#${encodeURIComponent(geocoded.lat + ',' + geocoded.lng)}`
+    : null;
+  const floodWithUrl = flood ? { ...flood, femaMapUrl: flood.femaMapUrl || femaMapUrl } : null;
+  addFinding(H_ID.FLOOD_RIVERINE, 'Flood (riverine)', 'Natural Hazards', 'flood', floodWithUrl, floodSrc, _floodFallback, { femaMapUrl });
+  addFinding(H_ID.FLASH_FLOOD,    'Flash Flood',      'Natural Hazards', 'flood', floodWithUrl, floodSrc, _floodFallback, { femaMapUrl });
 
   // ── EARTHQUAKE ────────────────────────────────────────────
   addFinding(H_ID.EARTHQUAKE, 'Earthquake', 'Natural Hazards',
@@ -787,23 +842,28 @@ function _compileFindings(apiResults, geocoded) {
   // WUI sub-note: also drives AQ
   const whpScore = wildfire?.score || 2;
 
-  // Air quality — derived
+  // Air quality — derived. If either input was a placeholder, so is this.
   const epaHigh  = epa?.highHazardCount || 0;
   const aqResult = _deriveAirQualityScore(whpScore, epaHigh, stateAbbr);
+  const aqDerivedFromData = !!(wildfire && epa);
   findings.push({
     hazardId: H_ID.AIR_QUALITY, hazardName: 'Air Quality Crisis', category: 'Industrial & CBRN',
     scoreAssigned: aqResult.score,
-    source: 'Derived from USFS wildfire hazard, EPA TRI industrial proximity, and regional patterns',
-    finding:    aqResult.finding,
-    confidence: aqResult.confidence,
-    status: 'success', isOverridden: false,
+    source: aqDerivedFromData
+      ? 'Derived from USFS wildfire hazard and EPA TRI industrial proximity'
+      : 'World Aware placeholder (wildfire or industrial data did not respond)',
+    finding:    aqDerivedFromData ? aqResult.finding : `${FALLBACK_PREFIX} ${aqResult.finding}`,
+    confidence: aqDerivedFromData ? aqResult.confidence : 'Low',
+    status: aqDerivedFromData ? 'success' : 'estimated', isOverridden: false,
   });
 
   // ── WEATHER HEURISTICS ────────────────────────────────────
+  // These six scores come from a hand-written state table in scoreMapper.js.
+  // The NWS call only confirms the state. Say so; do not cite NOAA for them.
   const weatherNote = stateAbbr
-    ? `State: ${stateAbbr} — regional historical patterns`
-    : 'Regional historical patterns (state lookup)';
-  const weatherSrc = 'NOAA NWS regional patterns and state-level historical hazard data';
+    ? `Statewide estimate for ${stateAbbr}, not specific to this address.`
+    : 'Regional estimate; state could not be confirmed.';
+  const weatherSrc = 'World Aware state-level rule of thumb (not NOAA data)';
 
   const weatherMap = [
     { id: H_ID.SEVERE_THUNDERSTORM, name: 'Severe Thunderstorm', key: 'severeThunderstorm' },
@@ -820,23 +880,23 @@ function _compileFindings(apiResults, geocoded) {
       hazardId: id, hazardName: name, category: 'Natural Hazards',
       scoreAssigned: score,
       source: weatherSrc,
-      finding: `State-based heuristic (${stateAbbr || 'unknown'}): ${score === 4 ? 'Likely' : score === 3 ? 'Possible' : 'Unlikely'} ${weatherNote}`,
-      confidence: stateAbbr ? 'Medium' : 'Low',
-      status: 'success', isOverridden: false,
+      finding: `${score === 4 ? 'Likely' : score === 3 ? 'Possible' : 'Unlikely'}. ${weatherNote}`,
+      confidence: 'Low',
+      status: 'estimated', isOverridden: false,
     });
   });
 
   // ── DROUGHT ───────────────────────────────────────────────
   addFinding(H_ID.DROUGHT, 'Drought', 'Natural Hazards',
-    'drought', drought, 'NOAA Drought Monitor — county-level drought conditions',
-    () => ({ score: 2, finding: 'API unavailable — moderate drought risk assumed as baseline', confidence: 'Low', isFallback: true }));
+    'drought', drought, 'US Drought Monitor — county-level drought conditions',
+    () => ({ score: 2, finding: `${FALLBACK_PREFIX} Colorado moves in and out of drought most years; check droughtmonitor.unl.edu.`, confidence: 'Low', isFallback: true }));
 
   // ── EPA TRI — Chemical + Wastewater ──────────────────────
   const epaChemResult = epa ? { score: epa.chemScore, finding: epa.finding, confidence: epa.confidence } : null;
   addFinding(H_ID.CHEMICAL_PLANT, 'Chemical Plant / Refinery Release', 'Industrial & CBRN',
     'epa', epaChemResult,
     'EPA Toxics Release Inventory (TRI) — regulated industrial facilities in ZIP code',
-    () => ({ score: 2, finding: 'API unavailable — industrial proximity unknown', confidence: 'Low', isFallback: true }));
+    () => ({ score: 2, finding: `${FALLBACK_PREFIX} Industrial proximity unknown.`, confidence: 'Low', isFallback: true }));
 
   if (epa) {
     const potw = epa.potwCount > 0;
@@ -901,8 +961,13 @@ function _renderStepItem(stepId, status) {
  *     always has 7 fulfilled slots — one per API)
  */
 function _tracked(stepId, apiPromise) {
-  return withTimeout(apiPromise, 8000, stepId)
+  // Relay calls can take up to TIMEOUT_MS + PROXY_EXTRA_MS per relay, so the
+  // outer cap has to be larger than one relay attempt or nothing ever lands.
+  const cap = API_CONFIG.TIMEOUT_MS + API_CONFIG.PROXY_EXTRA_MS + 3000;
+  return withTimeout(apiPromise, cap, stepId)
     .then(result => {
+      // A null/undefined result is a failure, not a success with no data
+      if (result === null || result === undefined) throw new Error('no result');
       _setStep(stepId, 'success');
       return result;
     })
@@ -925,6 +990,7 @@ async function startResearch() {
 
   if (_research.isRunning) return;
   _research.isRunning = true;
+  const run = ++_research.runId;
 
   const staleErr = document.getElementById('research-error');
   if (staleErr) staleErr.classList.add('hidden');
@@ -945,10 +1011,12 @@ async function startResearch() {
   let geocoded;
   try {
     geocoded = await withTimeout(_geocode(address), 15000, 'Geocoding');
+    if (run !== _research.runId) return;   // user moved on while we waited
     _research.geocoded = geocoded;
     _setStep('geocode', 'success');
     console.log('[Research] Geocoding complete:', geocoded);
   } catch (err) {
+    if (run !== _research.runId) return;
     _setStep('geocode', 'error');
     _research.isRunning = false;
     console.warn('[Research] Geocoding failed:', err.message);
@@ -958,7 +1026,7 @@ async function startResearch() {
   }
 
   // ── STEPS 1–7: PARALLEL API CALLS (spinners update independently) ──
-  ['flood','earthquake','wildfire','weather','epa','airquality','landslide']
+  ['flood','earthquake','wildfire','weather','drought','epa','airquality','landslide']
     .forEach(id => _setStep(id, 'running'));
 
   const { lat, lng, zip, fips5, countyFips } = geocoded;
@@ -973,24 +1041,33 @@ async function startResearch() {
       _tracked('earthquake', _callEarthquakeAPI(lat, lng)),
       _tracked('wildfire',   _callWildfireAPI(lat, lng)),
       _tracked('weather',    _callWeatherAPI(lat, lng)),
-      _tracked('weather',    _callDroughtAPI(fips5)),   // shares weather step display
+      _tracked('drought',    _callDroughtAPI(fips5)),
       _tracked('epa',        _callEPAAPI(zip)),
       _tracked('landslide',  _callLandslideAPI(lat, lng)),
     ]);
 
-  // Air quality is always derivable — mark success after others settle
-  _setStep('airquality', 'success');
+  if (run !== _research.runId) return;   // cancelled while the lookups ran
+
+  // Air quality is derived from wildfire and EPA; it is only a real result when both are
+  _setStep('airquality', (wildfire && epa) ? 'success' : 'error');
 
   console.log('[Research] All API calls settled. Results:', {
     flood, earthquake, wildfire, weather, drought, epa, landslide
   });
 
   // ── COMPILE FINDINGS ──────────────────────────────────────
-  _research.findings = _compileFindings(
-    { flood, earthquake, wildfire, weather, drought, epa, landslide },
-    geocoded
-  );
-  _research.hasResults = true;
+  try {
+    _research.findings = _compileFindings(
+      { flood, earthquake, wildfire, weather, drought, epa, landslide },
+      geocoded
+    );
+    _research.hasResults = true;
+  } catch (err) {
+    console.warn('[Research] Could not compile findings:', err.message);
+    _research.isRunning = false;
+    _showResearchError('Something went wrong while reading the results. Try again, or skip the lookup.');
+    return;
+  }
 
   // ── SHOW RESULTS (always — even if all APIs failed) ───────
   _research.isRunning = false;
@@ -1030,6 +1107,9 @@ function applyResearchScores() {
     applied.push(f);
     entry.l      = f.scoreAssigned;
     entry.isAuto = true;
+    // Placeholders stay editable like any auto score, but are flagged so the
+    // Results screen and the PDF never present them as researched data.
+    entry.isEstimate = (f.status === 'estimated');
     // Clear legacy auto-generated notes; research details live in autoScoreOrigins
     if (typeof entry.notes === 'string' && entry.notes.startsWith('[Auto-scored from:')) entry.notes = '';
   });
@@ -1046,6 +1126,7 @@ function applyResearchScores() {
   applied.forEach(f => {
     state.autoScoreOrigins[f.hazardId] = {
       source: f.source, finding: f.finding, confidence: f.confidence,
+      status: f.status,
     };
   });
 
@@ -1093,6 +1174,7 @@ function _clearAutoScoresNow() {
 
 /** Reset the Home research panel to an empty address form. */
 function resetResearchUI() {
+  cancelResearch();
   _research.address    = '';
   _research.geocoded   = null;
   _research.findings   = [];
@@ -1183,6 +1265,11 @@ function _showResearchError(msg) {
   errEl.innerHTML = `${ic('circle-alert')}<p></p>`;
   errEl.querySelector('p').textContent = msg;
   errEl.classList.remove('hidden');
+  // The alert renders below the fold on a phone; bring it into view and
+  // move focus so screen readers and keyboard users land on it too.
+  errEl.setAttribute('tabindex', '-1');
+  try { errEl.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) { /* older browsers */ }
+  errEl.focus({ preventScroll: true });
 }
 
 /* ---------------------------------------------------------------
@@ -1214,7 +1301,12 @@ function applyManualScore(hazardId, score, source) {
   if (!state.scores[hazardId]) state.scores[hazardId] = {};
   state.scores[hazardId].l     = score;
   state.scores[hazardId].isAuto = false;
-  state.scores[hazardId].notes = `Source: ${source} — manual lookup`;
+  // Keep anything the user already wrote; add the source once.
+  const sourceLine = `Source: ${source} — manual lookup`;
+  const existing   = typeof state.scores[hazardId].notes === 'string' ? state.scores[hazardId].notes : '';
+  state.scores[hazardId].notes = existing.includes(sourceLine)
+    ? existing
+    : (existing.trim() ? `${existing.trim()}\n${sourceLine}` : sourceLine);
   if (typeof autoSave === 'function') autoSave();
 
   // Highlight the selected button and dim others in this card
@@ -1318,13 +1410,26 @@ function _renderReport() {
 
   const geo        = _research.geocoded;
   const findings   = _research.findings;
-  // 'estimated' = fallback score used; show alongside success
+  // 'estimated' = placeholder used; shown alongside success but counted separately
   const successful = findings.filter(f => f.status === 'success' || f.status === 'estimated');
+  const fromData   = findings.filter(f => f.status === 'success');
+  const estimated  = findings.filter(f => f.status === 'estimated');
   const failed     = findings.filter(f => f.status === 'error');
 
-  // How many hazards in total that could be auto-scored
-  const autoHazardCount = Object.keys(H_ID).length; // 16
-  const manualCount     = Object.keys(MANUAL_REASONS).length;
+  const manualCount = Object.keys(MANUAL_REASONS).length;
+
+  // Street name and city only: this card is often on a projector in a workshop.
+  const countyLabel = geo.county ? `${escHtml(String(geo.county).replace(/ County$/i, ''))} County` : '';
+  const placeLine   = [countyLabel, escHtml(geo.stateAbbr || '')].filter(Boolean).join(', ');
+
+  const summaryHead = fromData.length > 0
+    ? `<strong>Public data found for ${fromData.length} hazard${fromData.length === 1 ? '' : 's'}.</strong>`
+    : `<strong>No public data sources responded.</strong>`;
+  const summarySub  = [
+    estimated.length > 0 ? `${estimated.length} ${estimated.length === 1 ? 'is a' : 'are'} rough placeholder${estimated.length === 1 ? '' : 's'} because a source did not respond.` : '',
+    failed.length > 0 ? `${failed.length} could not be scored.` : '',
+    `${manualCount} need your judgment.`,
+  ].filter(Boolean).join(' ');
 
   let html = `
     <!-- Confirmed address -->
@@ -1332,17 +1437,16 @@ function _renderReport() {
       <div class="report-address-icon">${ic('map-pin')}</div>
       <div class="report-address-info">
         <strong>${escHtml(geo.displayAddress)}</strong>
-        <span>${Number(geo.lat).toFixed(5)}, ${Number(geo.lng).toFixed(5)} | ${escHtml(String(geo.county || '').replace(/ County$/i, ''))} County, ${escHtml(geo.stateAbbr || '')}</span>
-        ${geo.zip ? `<span>ZIP: ${geo.zip}  · County FIPS: ${geo.fips5 || 'N/A'}</span>` : ''}
+        ${placeLine ? `<span>${placeLine}</span>` : ''}
       </div>
     </div>
 
     <!-- Summary banner -->
-    <div class="alert alert-info report-summary-banner">
-      ${ic('chart-column')}
+    <div class="alert ${fromData.length > 0 ? 'alert-info' : 'alert-warning'} report-summary-banner">
+      ${ic(fromData.length > 0 ? 'chart-column' : 'triangle-alert')}
       <div>
-        <strong>Likelihood estimated for ${successful.length} hazards</strong> from public data.<br>
-        <span class="report-summary-sub">${failed.length > 0 ? `${failed.length} source${failed.length > 1 ? 's' : ''} unavailable. ` : ''}${manualCount} hazards require your input.</span>
+        ${summaryHead}<br>
+        <span class="report-summary-sub">${summarySub}</span>
       </div>
     </div>
 
@@ -1365,7 +1469,7 @@ function _renderReport() {
   `;
 
   // ── AUTO-SCORED HAZARDS ─────────────────────────────────────
-  html += `<h3 class="report-section-heading">${ic('circle-check')} Likelihood estimated (${successful.length})</h3>`;
+  html += `<h3 class="report-section-heading">${ic('circle-check')} Likelihood filled in (${successful.length})</h3>`;
 
   if (successful.length > 0) {
     // Group by category
@@ -1399,8 +1503,8 @@ function _renderReport() {
   }
 
   // ── MANUAL HAZARDS ────────────────────────────────────────
-  html += `<h3 class="report-section-heading">${ic('pencil')} Needs your input (${Object.keys(MANUAL_REASONS).length} hazards)</h3>
-  <p class="report-manual-intro">These hazards cannot be scored from public APIs. Guidance below.</p>
+  html += `<h3 class="report-section-heading">${ic('pencil')} Needs your judgment (${Object.keys(MANUAL_REASONS).length} hazards)</h3>
+  <p class="report-manual-intro">No public map covers these. You know them better than any database does. Most take a few seconds; skip any that do not apply.</p>
   <div class="report-manual-list">`;
 
   // Only show hazards that aren't already in the auto-scored list
@@ -1433,8 +1537,8 @@ function _buildFindingCard(f) {
   const scoreLabel = _likelihoodLabel(f.scoreAssigned);
 
   const scoredBadge = f.status === 'estimated'
-    ? `<span class="auto-scored-badge is-estimated">Estimated</span>`
-    : `<span class="auto-scored-badge">Auto-scored</span>`;
+    ? `<span class="auto-scored-badge is-estimated">Rough estimate</span>`
+    : `<span class="auto-scored-badge">From public data</span>`;
   const overrideBadge = f.isOverridden
     ? `<span class="override-badge">Overridden</span>` : '';
   const errorHtml = f.status === 'error'
@@ -1459,7 +1563,7 @@ function _buildFindingCard(f) {
       <div class="finding-details">
         <div class="finding-detail-row"><span class="finding-detail-key">Source</span> <span>${escHtml(f.source)}</span></div>
         <div class="finding-detail-row"><span class="finding-detail-key">Finding</span> <span>${escHtml(cleanFindingText(f.finding))}</span></div>
-        <div class="finding-detail-row"><span class="finding-detail-key">Confidence</span> <span class="confidence-${(f.confidence||'').toLowerCase()}">${f.confidence}</span></div>
+        <div class="finding-detail-row"><span class="finding-detail-key">Confidence</span> <span class="confidence-${String(f.confidence || '').toLowerCase().replace(/[^a-z]/g, '')}">${escHtml(String(f.confidence || ''))}</span></div>
       </div>
       ${f.femaMapUrl ? `
       <a href="${escHtml(f.femaMapUrl)}" target="_blank" rel="noopener" class="btn btn-secondary btn-small manual-action-btn">
@@ -1468,14 +1572,17 @@ function _buildFindingCard(f) {
       <p class="manual-action-note">Verify at msc.fema.gov. Enter your address for the official FIRM panel for your parcel.</p>
       ` : ''}
       <button class="btn btn-ghost btn-small finding-override-btn" onclick="_overrideScore(${f.hazardId})">
-        ${ic('pencil')} Override score
+        ${ic('pencil')} Change this
       </button>` : errorHtml}
     </div>
   `;
 }
 
 function _likelihoodLabel(score) {
-  const labels = { 1: 'Unlikely', 2: 'Low', 3: 'Possible', 4: 'Likely', 5: 'Almost certain' };
+  // Same words as the Guide and the Assess pickers (LIKELIHOOD_LABELS in app.js)
+  const labels = (typeof LIKELIHOOD_LABELS !== 'undefined')
+    ? LIKELIHOOD_LABELS
+    : { 1: 'Extremely unlikely', 2: 'Unlikely', 3: 'Possible', 4: 'Likely', 5: 'Almost certain' };
   return labels[score] || '';
 }
 

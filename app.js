@@ -5,6 +5,10 @@
 
 'use strict';
 
+// Single source of truth for the version shown in About, the JSON export and the console.
+// Keep sw.js CACHE_NAME in step with it when shipping.
+const APP_VERSION = '2.2.0';
+
 /* ---------------------------------------------------------------
    CONSTANTS & CONFIGURATION
 --------------------------------------------------------------- */
@@ -445,7 +449,9 @@ function getRiskLevel(score) {
 
 /**
  * Calculate the score for a hazard entry in state.
- * In neighborhood mode, returns the average of HH1 and HH2.
+ * In neighborhood mode, returns the higher of HH1 and HH2: averaging hid a
+ * Critical for one home behind a Low for the other, and produced scores
+ * (7, 11, 13) that no single household can reach on the 5x5 grid.
  */
 function calcScore(hazardId) {
   const entry = state.scores[hazardId];
@@ -459,11 +465,8 @@ function calcScore(hazardId) {
     const i2 = parseInt(entry.i2) || 0;
     const s1 = l * i;
     const s2 = l2 * i2;
-    // Average of both scores (only if both have data)
-    if (s1 > 0 && s2 > 0) return Math.round((s1 + s2) / 2);
-    if (s1 > 0) return s1;
-    if (s2 > 0) return s2;
-    return 0;
+    // Worst case of the two (only counts households that have data)
+    return Math.max(s1, s2);
   }
 
   return l * i;
@@ -596,9 +599,36 @@ function showScreen(screenId, opts) {
   if (screenId === 'about')      renderSavedList();
   if (screenId === 'reference')  buildRiskMatrix();
 
-  // Scroll to top
-  if (!opts.keepScroll) window.scrollTo(0, 0);
+  // Scroll: restore the saved position when returning to a screen (so a peek
+  // at Results does not send the user back to the top of a 30-screen list),
+  // otherwise start at the top.
+  if (!opts.keepScroll) {
+    const saved = _screenScroll[screenId];
+    window.scrollTo(0, opts.restoreScroll && saved ? saved : 0);
+  }
+
+  // Orientation for screen readers and the browser tab: name the screen and
+  // move focus to its heading.
+  document.title = `${SCREEN_TITLES[screenId] || 'Risk Assessment'} | World Aware Risk Assessment`;
+  if (target && !opts.keepFocus) {
+    const heading = target.querySelector('h1, h2');
+    if (heading) {
+      heading.setAttribute('tabindex', '-1');
+      try { heading.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
+    }
+  }
 }
+
+const SCREEN_TITLES = {
+  home: 'Home', assessment: 'Assess', results: 'Results',
+  report: 'Report', reference: 'Guide', about: 'About',
+};
+
+// Last scroll position per screen, captured before leaving it
+const _screenScroll = {};
+document.addEventListener('scroll', () => {
+  _screenScroll[currentScreen] = window.scrollY;
+}, { passive: true });
 
 function initHomeScreen() {
   _syncAddressTypePill();
@@ -620,13 +650,18 @@ function focusAddressEntry() {
   const inputVisible = input && input.offsetParent !== null;
   const target = inputVisible ? input : document.getElementById('research-continue-btn');
   if (card) card.scrollIntoView({ block: 'start' });
-  if (target) {
+  // On a phone, focusing the input opens the keyboard at once and hides the
+  // Skip button and the privacy note. Let the user tap the field themselves.
+  const coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+  if (target && !(coarse && target === input)) {
     try { target.focus({ preventScroll: true }); } catch (e) { target.focus(); }
   }
 }
 
 /** Skip the address lookup and go straight to the assessment. */
 function skipResearch() {
+  // A lookup still running must not write its results into the assessment later
+  if (typeof cancelResearch === 'function') cancelResearch();
   const input = document.getElementById('research-address-input');
   const typed = input ? (input.value || '').trim() : '';
   if (typed) state.location = typed;
@@ -1235,8 +1270,8 @@ function formatReportDate(iso) {
 
 /**
  * Plain-text likelihood × impact line for a scored hazard.
- * Neighborhood mode lists each household that rated it, plus the average
- * when both did (the score is that average).
+ * Neighborhood mode lists each household that rated it; the score is the
+ * higher of the two so the more exposed home is never hidden.
  */
 function formatLIText(it) {
   if (state.assessmentType !== 'neighborhood') {
@@ -1251,7 +1286,7 @@ function formatLIText(it) {
     else if (l > 0)     { parts.push(`${names[idx]}: L${l}, impact not rated`); }
     else if (i > 0)     { parts.push(`${names[idx]}: I${i}, likelihood not rated`); }
   });
-  if (full === 2) parts.push(`average ${it.score}`);
+  if (full === 2) parts.push(`higher of the two: ${it.score}`);
   return parts.join('; ');
 }
 
@@ -1283,6 +1318,9 @@ function buildReportData() {
       notes: userNotes(e),
       isAuto: !!e.isAuto,
       fromResearch: researchIds.has(h.id),
+      // A placeholder likelihood (source did not respond) is never "research"
+      isEstimate: !!e.isEstimate || origin?.status === 'estimated',
+      action: rl ? rl.action : '',
       source: origin?.source || '',
       confidence: origin?.confidence || '',
       finding: origin ? cleanFindingText(origin.finding) : '',
@@ -1320,7 +1358,8 @@ function buildReportData() {
     const used = rr.findings.filter(f => f.scoreAssigned !== null && f.scoreAssigned !== undefined);
     const conf = { High: 0, Medium: 0, Low: 0 };
     used.forEach(f => { if (conf[f.confidence] !== undefined) conf[f.confidence]++; });
-    const sources = [...new Set(used.map(f => f.source).filter(Boolean))];
+    // Only sources that actually answered are listed as sources
+    const sources = [...new Set(used.filter(f => f.status === 'success').map(f => f.source).filter(Boolean))];
     research = {
       address: state.researchAddress || '',
       matchedAddress: rr.geocoded?.displayAddress || '',
@@ -1422,7 +1461,9 @@ function renderResults() {
 
     bandItems.forEach(it => {
       const sourceTag = it.fromResearch
-        ? `<span class="result-source-tag auto">${ic('map-pin')} Research</span>`
+        ? (it.isEstimate
+            ? `<span class="result-source-tag manual">${ic('triangle-alert')} Rough estimate</span>`
+            : `<span class="result-source-tag auto">${ic('map-pin')} From public data</span>`)
         : `<span class="result-source-tag manual">${ic('pencil')} Entered by hand</span>`;
       html += `
         <div class="result-card">
@@ -1506,7 +1547,7 @@ function shareResults() {
 function fallbackCopy(text) {
   if (navigator.clipboard) {
     navigator.clipboard.writeText(text).then(() => {
-      alert('Results copied to clipboard.');
+      showToast('Results copied to clipboard.');
     }).catch(() => {
       showTextExportDialog(text);
     });
@@ -1670,11 +1711,11 @@ function saveAssessment() {
   try {
     localStorage.setItem('wa_saves', JSON.stringify(saves));
   } catch (e) {
-    alert('Could not save: storage is unavailable or full.');
+    showToast('Could not save: storage is unavailable or full. Export your work as a backup.', 6000);
     return;
   }
   renderSavedList();
-  alert(`Assessment saved: ${new Date(timestamp).toLocaleString()}`);
+  showToast(`Copy saved: ${new Date(timestamp).toLocaleString()}`);
 }
 
 function getSavedAssessments() {
@@ -1689,18 +1730,29 @@ function loadAssessment(id) {
   const saves = getSavedAssessments();
   const save = saves[id];
   if (!save) return;
-  state = normalizeState(save.state);
-  autoSave();
-  showScreen('assessment');
+  const go = () => {
+    state = normalizeState(save.state);
+    // Drop any in-memory research from the previous assessment so its address
+    // and likelihoods cannot be applied on top of the one just loaded.
+    if (typeof resetResearchUI === 'function') resetResearchUI();
+    autoSave();
+    showScreen('assessment');
+  };
+  const dirty = countScored() > 0 || !!state.location || !!state.researchReport;
+  if (dirty) {
+    showConfirm('Load this saved copy? The assessment you are working on now will be replaced. Save a copy first if you want to keep it.', go, { confirmLabel: 'Load and replace' });
+  } else {
+    go();
+  }
 }
 
 function deleteAssessment(id) {
-  showConfirm('Delete this saved assessment? This cannot be undone.', () => {
+  showConfirm('Delete this saved copy? This cannot be undone.', () => {
     const saves = getSavedAssessments();
     delete saves[id];
     try { localStorage.setItem('wa_saves', JSON.stringify(saves)); } catch (e) { /* ignore */ }
     renderSavedList();
-  });
+  }, { confirmLabel: 'Delete this copy' });
 }
 
 function renderSavedList() {
@@ -1714,41 +1766,38 @@ function renderSavedList() {
     return;
   }
 
-  // Also update home screen saved list
-  const homeContainer = document.getElementById('home-saved-items');
+  // The Home screen is what a workshop room sees on the projector, so saved
+  // assessments (which are addresses) are listed under About only.
   const homeSection = document.getElementById('home-saved-list');
+  if (homeSection) homeSection.classList.add('hidden');
 
   let html = '';
   keys.sort((a, b) => b.localeCompare(a)).forEach(k => {
     const s = saves[k];
     const d = new Date(s.timestamp);
+    const when = isNaN(d) ? '' : `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
     html += `
       <div class="saved-item">
         <div class="saved-item-info">
-          <strong>${escHtml(s.location)}</strong>
-          <span class="saved-meta">${s.type === 'neighborhood' ? 'Neighborhood' : 'Household'}. ${s.scored} hazards scored. ${d.toLocaleDateString()}</span>
+          <strong>${escHtml(s.location || 'No address')}</strong>
+          <span class="saved-meta">${s.type === 'neighborhood' ? 'Neighborhood' : 'Household'}. ${escHtml(String(s.scored ?? 0))} hazards scored. ${escHtml(when)}</span>
         </div>
         <div class="saved-item-actions">
-          <button class="btn btn-secondary btn-small" onclick="loadAssessment('${k}')">Load</button>
-          <button class="btn btn-danger btn-small" onclick="deleteAssessment('${k}')">Delete</button>
+          <button class="btn btn-secondary btn-small" onclick="loadAssessment('${escHtml(k)}')">Load</button>
+          <button class="btn btn-danger btn-small" onclick="deleteAssessment('${escHtml(k)}')">Delete</button>
         </div>
       </div>
     `;
   });
 
   container.innerHTML = html;
-
-  if (homeContainer && homeSection) {
-    homeContainer.innerHTML = html;
-    homeSection.classList.toggle('hidden', keys.length === 0);
-  }
 }
 
 function exportJSON() {
   const data = {
     exportedAt: new Date().toISOString(),
     tool: 'World Aware Risk Assessment',
-    version: '2.0',
+    version: APP_VERSION,
     assessmentType: state.assessmentType,
     location: state.location,
     date: state.date,
@@ -1783,7 +1832,8 @@ function exportJSON() {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  // Revoking synchronously can cancel the download in some Safari and Firefox builds
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 /* ---------------------------------------------------------------
@@ -1791,19 +1841,46 @@ function exportJSON() {
 --------------------------------------------------------------- */
 
 function clearAllData() {
-  showConfirm('Clear all assessment data and saved assessments? This cannot be undone.', () => {
+  showConfirm('Delete everything on this device: the current assessment, every saved copy, and all report edits? This cannot be undone.', () => {
+    let ok = true;
     try {
       localStorage.removeItem('wa_current_state');
       localStorage.removeItem('wa_saves');
       localStorage.removeItem('wa_report_edits');
-    } catch (e) { /* storage unavailable */ }
+    } catch (e) { ok = false; }
+    // Addresses and coordinates may also sit in the service worker's cache
+    // from earlier versions; remove any cross-origin entries there too.
+    if (typeof caches !== 'undefined' && caches.keys) {
+      caches.keys().then(names => names.filter(n => n.startsWith('wa-risk-')).forEach(n => {
+        caches.open(n).then(c => c.keys().then(reqs => {
+          reqs.forEach(r => { try { if (new URL(r.url).origin !== location.origin) c.delete(r); } catch (e) { /* ignore */ } });
+        }));
+      })).catch(() => { /* ignore */ });
+    }
     // Reset state
     state = defaultState();
     if (typeof resetResearchUI === 'function') resetResearchUI();
     renderSavedList();
     showScreen('home');
-    alert('All data cleared.');
-  });
+    showToast(ok ? 'Everything on this device was deleted.' : 'Could not clear storage on this device. Try clearing site data in your browser settings.');
+  }, { confirmLabel: 'Delete everything' });
+}
+
+/** Small in-page status message instead of a native alert(). */
+function showToast(message, ms) {
+  let el = document.getElementById('wa-toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'wa-toast';
+    el.className = 'wa-toast';
+    el.setAttribute('role', 'status');
+    el.setAttribute('aria-live', 'polite');
+    document.body.appendChild(el);
+  }
+  el.textContent = message;
+  el.classList.add('is-visible');
+  clearTimeout(el._timer);
+  el._timer = setTimeout(() => el.classList.remove('is-visible'), ms || 4000);
 }
 
 /* ---------------------------------------------------------------
@@ -1811,22 +1888,62 @@ function clearAllData() {
 --------------------------------------------------------------- */
 
 let _confirmCallback = null;
+let _confirmReturnFocus = null;
 
-function showConfirm(message, onConfirm) {
+/**
+ * Modal confirm. Focus moves into the dialog, Tab stays inside it, Escape
+ * cancels, and focus returns to the control that opened it.
+ * opts.confirmLabel names the destructive action ("Delete everything").
+ */
+function showConfirm(message, onConfirm, opts) {
+  opts = opts || {};
   document.getElementById('confirm-message').textContent = message;
+  const okBtn = document.getElementById('confirm-ok-btn');
+  if (okBtn) okBtn.textContent = opts.confirmLabel || 'Yes, continue';
   _confirmCallback = onConfirm;
-  document.getElementById('confirm-dialog').classList.remove('hidden');
+  _confirmReturnFocus = document.activeElement;
+  const dlg = document.getElementById('confirm-dialog');
+  dlg.classList.remove('hidden');
+  const shell = document.querySelector('.shell');
+  if (shell) shell.setAttribute('inert', '');
+  const cancel = document.getElementById('confirm-cancel-btn');
+  if (cancel) cancel.focus();
+  dlg.addEventListener('keydown', _confirmKeydown);
+}
+
+function _confirmKeydown(e) {
+  if (e.key === 'Escape') { e.preventDefault(); cancelAction(); return; }
+  if (e.key !== 'Tab') return;
+  const focusable = Array.from(document.querySelectorAll('#confirm-dialog button'));
+  if (focusable.length === 0) return;
+  const first = focusable[0], last = focusable[focusable.length - 1];
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+}
+
+function _closeConfirm() {
+  const dlg = document.getElementById('confirm-dialog');
+  dlg.classList.add('hidden');
+  dlg.removeEventListener('keydown', _confirmKeydown);
+  const shell = document.querySelector('.shell');
+  if (shell) shell.removeAttribute('inert');
+  const back = _confirmReturnFocus;
+  _confirmReturnFocus = null;
+  if (back && typeof back.focus === 'function' && document.contains(back)) {
+    try { back.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
+  }
 }
 
 function confirmAction() {
-  document.getElementById('confirm-dialog').classList.add('hidden');
-  if (_confirmCallback) _confirmCallback();
+  const cb = _confirmCallback;
   _confirmCallback = null;
+  _closeConfirm();
+  if (cb) cb();
 }
 
 function cancelAction() {
-  document.getElementById('confirm-dialog').classList.add('hidden');
   _confirmCallback = null;
+  _closeConfirm();
 }
 
 /* ---------------------------------------------------------------
@@ -1929,8 +2046,8 @@ if ('serviceWorker' in navigator) {
 --------------------------------------------------------------- */
 
 function escHtml(str) {
-  if (!str) return '';
-  return str
+  if (str === null || str === undefined) return '';
+  return String(str)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -1977,6 +2094,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (typeof renderReportView === 'function') renderReportView();
   });
 
-  console.log('World Aware Risk Assessment v2.1 loaded.');
+  console.log(`World Aware Risk Assessment v${APP_VERSION} loaded.`);
   console.log(`${HAZARD_DATA.length} hazards loaded.`);
 });

@@ -16,25 +16,32 @@
  * @returns {{ score:number, finding:string, confidence:string }}
  */
 function mapFloodZoneToScore(zone, subtype) {
-  const z = (zone || '').trim().toUpperCase();
-  const sub = (subtype || '').toUpperCase();
+  const z   = (zone || '').trim().toUpperCase();
+  const sub = (subtype || '').trim().toUpperCase();
 
-  if (!z) {
-    return { score: 1, finding: 'No FEMA flood zone data at this location', confidence: 'Low' };
+  // No zone, or a zone that carries no flood information. score:null means
+  // "no data" — callers must fall through to the next method, never score it.
+  if (!z || z === 'AREA NOT INCLUDED' || z === 'OPEN WATER') {
+    return {
+      score: null,
+      finding: z ? `FEMA: ${z.toLowerCase()} (no flood zone mapped here)` : 'No FEMA flood zone data at this location',
+      confidence: 'Low',
+    };
   }
 
-  // High-risk A zones (Zone A, AE, AH, AO, AR, A99)
-  if (/^A($|E|H|O|R|99|\d)/.test(z)) {
-    const subtypeNote = sub ? ` (${subtype})` : '';
+  // High-risk A zones (Zone A, AE, AH, AO, AR, A99, A1–A30). Exact match so
+  // that other FLD_ZONE values beginning with "A" are not caught.
+  if (/^(A|AE|AH|AO|AR|A99|A\d{1,2})$/.test(z)) {
+    const subtypeNote = sub ? ` (${sub})` : '';
     return {
       score: 5,
-      finding: `FEMA Zone ${z}${subtypeNote} — High Risk Flood Zone`,
+      finding: `FEMA Zone ${z}${subtypeNote} — High Risk Flood Zone (1% annual chance)`,
       confidence: 'High',
     };
   }
 
   // Coastal V zones are also high risk
-  if (/^V($|E)/.test(z)) {
+  if (/^(V|VE|V\d{1,2})$/.test(z)) {
     return {
       score: 5,
       finding: `FEMA Zone ${z} — High Risk Coastal Flood Zone`,
@@ -42,35 +49,26 @@ function mapFloodZoneToScore(zone, subtype) {
     };
   }
 
-  // Moderate risk — Zone B, shaded X, X500
-  if (/^B$|^X500$|^X\s*(SHADED|500)?$/.test(z) && !/UNSHADED/.test(sub)) {
-    // NB: "X" alone can mean either shaded (moderate) or unshaded (minimal);
-    // the subtype distinguishes them
-    if (z === 'X' && /UNSHADED/i.test(sub)) {
-      return { score: 2, finding: `FEMA Zone X (Unshaded) — Minimal Flood Risk`, confidence: 'High' };
-    }
-    if (z === 'B' || z === 'X500' || (z === 'X' && /SHADED/i.test(sub))) {
-      return { score: 3, finding: `FEMA Zone ${z} — Moderate Risk Flood Zone`, confidence: 'High' };
-    }
-    // Plain "X" with no subtype — treat as minimal
-    return { score: 2, finding: `FEMA Zone X — Minimal Flood Risk`, confidence: 'Medium' };
+  // Moderate risk — Zone B, X500, or Zone X with the 0.2% (500-year) or
+  // levee-protected subtype. NFHL spells these out in ZONE_SUBTY, e.g.
+  // "0.2 PCT ANNUAL CHANCE FLOOD HAZARD" and "AREA WITH REDUCED FLOOD RISK DUE TO LEVEE".
+  if (z === 'B' || z === 'X500' || (z.startsWith('X') && /0\.2 PCT|LEVEE/.test(sub))) {
+    const subtypeNote = sub ? ` (${sub})` : '';
+    return { score: 3, finding: `FEMA Zone ${z}${subtypeNote} — Moderate Risk Flood Zone`, confidence: 'High' };
   }
 
-  // Minimal risk — Zone C, unshaded X
-  if (/^C$/.test(z)) {
-    return { score: 2, finding: `FEMA Zone C — Minimal Flood Risk`, confidence: 'High' };
-  }
-  if (/^X$/.test(z)) {
-    return { score: 2, finding: `FEMA Zone X — Minimal Flood Risk`, confidence: 'Medium' };
+  // Minimal risk — Zone C, Zone X
+  if (z === 'C' || z === 'X') {
+    return { score: 2, finding: `FEMA Zone ${z} — Minimal Flood Risk`, confidence: sub ? 'High' : 'Medium' };
   }
 
   // Undetermined — Zone D
-  if (/^D$/.test(z)) {
+  if (z === 'D') {
     return { score: 2, finding: `FEMA Zone D — Undetermined Flood Risk`, confidence: 'Low' };
   }
 
-  // Fallback
-  return { score: 2, finding: `FEMA Zone ${z} — Risk level unclear`, confidence: 'Low' };
+  // Unrecognised zone code: no data rather than a guess
+  return { score: null, finding: `FEMA Zone ${z} — not recognised`, confidence: 'Low' };
 }
 
 
@@ -242,13 +240,14 @@ function mapTRIToChemScore(highHazardCount, totalCount, zip) {
  */
 function mapLandslideToScore(level) {
   const l = String(level || '').toLowerCase().trim();
+  const n = Number(level); // numeric codes may arrive as strings ("4")
 
   let score;
-  if (/very\s*high/i.test(l) || level === 5) score = 5;
-  else if (/^high$/i.test(l) || level === 4) score = 4;
-  else if (/moderate/i.test(l) || level === 3) score = 3;
-  else if (/^low$/i.test(l) || level === 2) score = 2;
-  else if (/very\s*low/i.test(l) || level === 1) score = 1;
+  if (/very\s*high/i.test(l) || n === 5) score = 5;
+  else if (/^high$/i.test(l) || n === 4) score = 4;
+  else if (/moderate/i.test(l) || n === 3) score = 3;
+  else if (/^low$/i.test(l) || n === 2) score = 2;
+  else if (/very\s*low/i.test(l) || n === 1) score = 1;
   else score = 1;
 
   const displayLabel = level ? String(level) : 'No susceptibility data';
