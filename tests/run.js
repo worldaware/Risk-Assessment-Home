@@ -98,6 +98,8 @@ console.log('Nominatim state key');
   check('flood requests ZONE_SUBTY', src.includes('outFields=FLD_ZONE,ZONE_SUBTY,SFHA_TF'));
   check('no "Colorado default applied" path', !src.includes('Colorado default applied'));
   check('no custom User-Agent header', !src.includes("'User-Agent'"));
+  const cfg = fs.readFileSync(path.join(ROOT, 'js/apiConfig.js'), 'utf8');
+  check('EPA query uses the zip_code column', cfg.includes('TRI_FACILITY/zip_code') && !cfg.includes('FACILITY_ZIP'));
 }
 
 console.log('Service worker');

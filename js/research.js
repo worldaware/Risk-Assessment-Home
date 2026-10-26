@@ -660,7 +660,7 @@ async function _callDroughtAPI(fips5) {
 
 /* ---------------------------------------------------------------
    API 5 — INDUSTRIAL FACILITIES (EPA TRI)
-   Route: proxy-first (EPA blocks browser CORS)
+   Route: direct (Envirofacts sends Access-Control-Allow-Origin: *)
 --------------------------------------------------------------- */
 
 async function _callEPAAPI(zip) {
@@ -668,7 +668,8 @@ async function _callEPAAPI(zip) {
   console.log('[EPA TRI] Starting fetch for ZIP', zip);
 
   const url  = `${API_CONFIG.EPA_TRI_ZIP}/${zip}/JSON`;
-  const data = await proxyFetch(url);
+  // Envirofacts allows direct browser calls (verified 2026-10-25); no relay needed
+  const data = await directFetch(url);
 
   if (!Array.isArray(data)) throw new Error('Unexpected EPA TRI response format');
 
@@ -676,8 +677,9 @@ async function _callEPAAPI(zip) {
   let potwCount = 0;
 
   data.forEach(fac => {
-    const sic  = fac.SIC || fac.PRIMARY_SIC || fac.NAICS || '';
-    const name = (fac.FACILITY_NAME || fac.FAC_NAME || '').toLowerCase();
+    // Envirofacts returns lowercase keys; keep the old uppercase fallbacks
+    const sic  = fac.sic || fac.primary_sic || fac.SIC || fac.PRIMARY_SIC || '';
+    const name = (fac.facility_name || fac.FACILITY_NAME || fac.FAC_NAME || '').toLowerCase();
     const cls  = classifyFacilitySIC(sic);
     if (cls === 'high-hazard') highHazardCount++;
     if (cls === 'potw' ||
