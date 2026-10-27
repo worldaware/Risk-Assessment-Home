@@ -332,6 +332,15 @@ function _pdfSafe(text) {
     .replace(/[ \t]+\n/g, '\n');
 }
 
+/** Date the data was pulled: research time if research ran, else the assessment date. */
+function _pdfDataDate(d) {
+  const ts = d.research && d.research.timestamp ? new Date(d.research.timestamp) : null;
+  if (ts && !isNaN(ts.getTime())) {
+    return ts.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+  }
+  return d.dateDisplay || d.date;
+}
+
 function reportPdfFilename(dateIso) {
   const d = /^\d{4}-\d{2}-\d{2}$/.test(dateIso || '') ? dateIso : localToday();
   return `World-Aware-Risk-Report-${d}.pdf`;
@@ -423,6 +432,7 @@ async function buildReportPDF() {
   const meta = [['Location', d.location || 'Not specified'], ['Date', d.dateDisplay || d.date], ['Assessment type', d.typeLabel]];
   if (d.householdSize) meta.push(['Household size', d.householdSize]);
   if (d.hhNames) meta.push(['Households', d.hhNames.join(' & ')]);
+  meta.push(['Prepared with', `World Aware's risk check, ${_pdfDataDate(d)}`]);
   const labelW = 118;
   const metaRowH = v => Math.max(15, measure(v, 10, W - labelW - 20));
   const metaH = meta.reduce((acc, [, v]) => acc + metaRowH(v), 0) + 16;
@@ -551,6 +561,11 @@ async function buildReportPDF() {
   heading('How to read these scores');
   para('Each hazard gets a likelihood from 1 to 5 and an impact from 1 to 5, multiplied into a score out of 25. Likelihood is how often the hazard affects this area; impact is your judgment of what it would do to your household. Several public sources describe your county or state, not your lot.', { size: 9.5, after: 4 });
   para('This is a planning-level screen. It is not a home inspection, an engineering assessment, an insurance appraisal, or an official flood or fire determination. For a flood determination use msc.fema.gov or your lender. For wildfire, ask your fire district. For coverage, ask your insurance agent.', { size: 9.5, color: C.muted });
+
+  // ── If you want more than a screen ────────────────────────
+  const moreText = 'This report can\'t see your roof vents or the five feet around your house. It doesn\'t know whether your insurance would rebuild at today\'s prices, or how your street gets out if the main road closes. Those take someone on site. World Aware does home and HOA walk-throughs in Boulder County on a sliding scale. beworldaware.com';
+  heading('If you want more than a screen', measure(moreText, 10.5, W) + 8);
+  para(moreText, { after: 4 });
 
   // ── Footer on every page ──────────────────────────────────
   waFooters(doc, F, 'World Aware Emergency Planning, Boulder, Colorado');
