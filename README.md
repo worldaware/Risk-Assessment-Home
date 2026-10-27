@@ -6,6 +6,7 @@ Household and neighborhood hazard risk assessment. Vanilla JS, no build step, se
 
 - `index.html`, `app.js`, `styles.css`, `tokens.css`, `fonts.css`: the app shell.
 - `js/research.js`, `js/apiConfig.js`, `js/scoreMapper.js`: the address lookup (geocode, then FEMA, USGS, USFS, NWS, Drought Monitor, EPA) and the pure functions that turn raw values into a 1 to 5 likelihood.
+- `relay/`: the Cloudflare Worker that relays the government lookups that block browsers, with its deploy steps.
 - `js/report.js`, `js/wa-pdf-theme.js`, `js/vendor/jspdf.umd.min.js`: the editable report and PDF.
 - `sw.js`: service worker for offline use of the shell. It never caches cross-origin (API) responses.
 - `tests/run.js`: unit tests for the mapping functions and a few invariants. `node tests/run.js`.
@@ -19,4 +20,4 @@ Household and neighborhood hazard risk assessment. Vanilla JS, no build step, se
 
 ## Known limits of the data layer (October 2026)
 
-The hazard lookups go through free public CORS relays (`js/apiConfig.js`). Those relays are unreliable and the USFS wildfire endpoint no longer exists. Until an owned relay replaces them, expect most lookups to fall back to state-level placeholders, which the UI now labels as such.
+USGS, FEMA, the Forest Service, the Drought Monitor and the Census geocoder refuse requests straight from a web page, so the app reaches them through one relay World Aware runs on Cloudflare (`relay/worker.js`; deploy steps in `relay/README.md`). It keeps no logs and only forwards to an allow-list of government hosts. Until `RELAY_URL` in `js/apiConfig.js` is set to the deployed Worker address, those lookups are skipped and their rows are labelled "Relay not configured" placeholders. NWS and EPA are called directly. Landslide has no working address-level source yet and stays a labelled placeholder; see "Open items" in `relay/README.md`.
