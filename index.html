@@ -162,6 +162,15 @@
       </div>
 
       <div class="content">
+      <!-- Continue card: shown when an assessment is already under way -->
+      <div id="home-continue-card" class="sheet home-continue-card hidden" role="group" aria-labelledby="home-continue-text">
+        <p id="home-continue-text" class="home-continue-text"></p>
+        <div class="home-continue-actions">
+          <button type="button" class="btn btn-primary btn-small" id="home-continue-btn" onclick="showScreen('assessment', { restoreScroll: true })">Continue</button>
+          <button type="button" class="btn btn-secondary btn-small" id="home-continue-results-btn" onclick="showScreen('results')">View results</button>
+        </div>
+      </div>
+
       <!-- Address entry + area research -->
       <div id="home-address-card" class="sheet home-address-card">
         <div class="address-card-head">

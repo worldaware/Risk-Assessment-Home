@@ -821,3 +821,8 @@ h1.rd-editable.is-empty::before { font-family: var(--font-body); font-size: var(
   .rd-editable.is-empty { display: none !important; }
   .rd-prepared.is-empty-line, .rd-actions.is-empty-section { display: none !important; }
 }
+
+/* ── Home: Continue card ──────────────────────────────────── */
+.home-continue-card { display: flex; flex-direction: column; gap: var(--space-3); margin-bottom: var(--space-4); }
+.home-continue-text { margin: 0; font-weight: 600; color: var(--color-text-heading); overflow-wrap: anywhere; }
+.home-continue-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }

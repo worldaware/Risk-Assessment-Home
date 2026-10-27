@@ -632,7 +632,25 @@ document.addEventListener('scroll', () => {
 
 function initHomeScreen() {
   _syncAddressTypePill();
+  renderContinueCard();
   if (typeof initResearchScreen === 'function') initResearchScreen();
+}
+
+/** Show the "Continue" card on Home when an assessment is already under way. */
+function renderContinueCard() {
+  const card = document.getElementById('home-continue-card');
+  const text = document.getElementById('home-continue-text');
+  if (!card || !text) return;
+  const scored = countScored();
+  if (!(scored > 0 || state.location)) {
+    card.classList.add('hidden');
+    return;
+  }
+  const name = state.location ||
+    (state.assessmentType === 'neighborhood' ? 'Neighborhood assessment' : 'Household assessment');
+  const when = state.date ? formatReportDate(state.date) : '';
+  text.textContent = `Continue: ${name}, ${scored} of ${totalActive()} hazards scored` + (when ? `, ${when}` : '');
+  card.classList.remove('hidden');
 }
 
 function _syncAddressTypePill() {
