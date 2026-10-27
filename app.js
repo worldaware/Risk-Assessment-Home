@@ -696,6 +696,40 @@ function startAssessment(type) {
   focusAddressEntry();
 }
 
+/** True when the assessment on screen holds work worth keeping. */
+function _isDirtyAssessment() {
+  return countScored() > 0 || !!state.location || !!state.researchReport;
+}
+
+/**
+ * Home start buttons. With work in progress, save it as a copy first and
+ * then begin a blank assessment. Without, behave like startAssessment.
+ * (startAssessment stays for the ?start= shortcut in the manifest.)
+ */
+function newAssessment(type) {
+  const t = type === 'neighborhood' ? 'neighborhood' : 'household';
+  if (!_isDirtyAssessment()) {
+    startAssessment(t);
+    return;
+  }
+  showConfirm('Start a new assessment? The one you are working on will be saved as a copy first.', () => {
+    if (!_snapshotCurrent()) {
+      showToast('Could not save a copy: storage is unavailable or full. Export your work as a backup, then try again.', 6000);
+      return;
+    }
+    state = defaultState();
+    state.assessmentType = t;
+    state.date = localToday();
+    _screenScroll.assessment = 0;
+    if (typeof resetResearchUI === 'function') resetResearchUI();
+    autoSave();
+    renderSavedList();
+    showScreen('home');
+    focusAddressEntry();
+    showToast('Your last assessment was saved as a copy under About.');
+  }, { confirmLabel: 'Save a copy and start new' });
+}
+
 /**
  * Set up the assessment screen UI based on current state.
  */
@@ -1695,10 +1729,16 @@ function buildRiskMatrix() {
    SAVE / LOAD / EXPORT
 --------------------------------------------------------------- */
 
-function saveAssessment() {
+/**
+ * Write a copy of the current assessment to the saved list (no toast, no re-render).
+ * Returns the saved summary, or null when storage is unavailable or full.
+ */
+function _snapshotCurrent() {
   const saves = getSavedAssessments();
   const timestamp = new Date().toISOString();
-  const id = 'wa_save_' + Date.now();
+  // Suffix keeps two copies made in the same millisecond from overwriting each other
+  let id = 'wa_save_' + Date.now();
+  while (saves[id]) id += 'x';
   const summary = {
     id,
     timestamp,
@@ -1711,11 +1751,19 @@ function saveAssessment() {
   try {
     localStorage.setItem('wa_saves', JSON.stringify(saves));
   } catch (e) {
+    return null;
+  }
+  return summary;
+}
+
+function saveAssessment() {
+  const summary = _snapshotCurrent();
+  if (!summary) {
     showToast('Could not save: storage is unavailable or full. Export your work as a backup.', 6000);
     return;
   }
   renderSavedList();
-  showToast(`Copy saved: ${new Date(timestamp).toLocaleString()}`);
+  showToast(`Copy saved: ${new Date(summary.timestamp).toLocaleString()}`);
 }
 
 function getSavedAssessments() {
