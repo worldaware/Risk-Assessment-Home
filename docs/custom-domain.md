@@ -6,22 +6,24 @@ You do four things in three places: back up your saved assessments, set the doma
 
 ## Before you start
 
-- Merge the branch that contains the `CNAME` file at the top of this repo (it holds one line: `risk.beworldaware.com`). Do this first. GitHub reads that file to know which domain the site belongs to.
+- Do the DNS record (step 3) before you set the domain in GitHub (step 2 can wait until the record exists). The moment GitHub knows the custom domain it starts sending visitors there, so if the record is not in place yet the site goes dark until it is. Doing it in the order below keeps the old address working the whole time.
+- You do not need to add a `CNAME` file to the repo yourself. When you save the domain in GitHub's Pages settings, GitHub commits that file to the main branch for you.
 - Make a list of the assessments you want to keep. They are saved inside your browser, and a browser keeps them separately for each web address. The new address starts out empty.
 
 ## Steps
 
 1. **Export your assessments from the old address.** Open https://worldaware.github.io/Risk-Assessment-Home/ on each device and browser where you saved work. Go to About, then Save and export, and tap Export as JSON for each assessment. Keep the files somewhere you can find them (email them to yourself or put them in a folder).
 
-2. **Set the domain in GitHub.** Open the repo on github.com, then Settings, then Pages. Under Custom domain, type `risk.beworldaware.com` and press Save. GitHub will say it is checking the DNS record. That message is expected until step 3 is done and has had time to spread.
-
-3. **Add the DNS record in Squarespace.** beworldaware.com is managed in Squarespace, so the record goes there.
+2. **Add the DNS record in Squarespace.** beworldaware.com is managed in Squarespace, so the record goes there.
    1. Sign in to Squarespace and open Domains.
    2. Click beworldaware.com, then DNS, then DNS Settings.
    3. Click Add Record.
    4. Type: `CNAME`. Host: `risk`. Data (the value it points to): `worldaware.github.io`. Leave the TTL at its default.
    5. Save. Do not put the repo name in the value and do not add `https://`. The value is only `worldaware.github.io`.
    6. Leave your other records alone, including the ones for the main website.
+   7. Wait an hour or so for the record to spread. You can check it at https://dnschecker.org by looking up `risk.beworldaware.com` as a CNAME; it should show `worldaware.github.io`.
+
+3. **Set the domain in GitHub.** Open the repo on github.com, then Settings, then Pages. Under Custom domain, type `risk.beworldaware.com` and press Save. GitHub checks the DNS record; if it still says it is checking, wait and reload. GitHub commits a `CNAME` file to the main branch at this point.
 
 4. **Wait for the certificate.** GitHub issues the HTTPS certificate on its own once it can see the DNS record. This often takes under an hour and can take up to a day. To check, go back to Settings, then Pages. When the check next to the domain turns green, the Enforce HTTPS box becomes clickable.
 
@@ -31,7 +33,7 @@ You do four things in three places: back up your saved assessments, set the doma
 
 7. **Import your assessments on the new address.** On https://risk.beworldaware.com/ go to About, then Save and export, and use the Import from JSON button. Pick each file you exported in step 1. Check that the saved assessments show up in the list. (The Import button comes with the new-assessment branch, so ship that branch before or together with this one.)
 
-8. **Test the old address.** Open https://worldaware.github.io/Risk-Assessment-Home/ in a fresh private window. GitHub should send you to the new address. If it does, old links and bookmarks keep working. If it does not, leave the old address as it is for a week and tell people the new one.
+8. **Test the old address.** Open https://worldaware.github.io/Risk-Assessment-Home/ in a fresh private window. In practice GitHub usually forwards the old address to the new one once a custom domain is set, but GitHub's documentation does not promise this, so treat it as a test. If it forwards, old links and bookmarks keep working. If it does not, leave the old address as it is for a week and tell people the new one. Either way, put only the new address on handouts and the QR code.
 
 9. **Tell installed users.** Anyone who added the app to their home screen from the old address has to add it again from the new one. The old icon stays tied to the old address and its saved data.
 
@@ -47,11 +49,11 @@ You do four things in three places: back up your saved assessments, set the doma
 For a subdomain such as `risk`, GitHub wants a CNAME record that points to `<account>.github.io`. For a bare domain such as beworldaware.com (no `risk.` in front), it wants A records instead, which does not apply here. Read the current versions before you change anything, because these requirements are the part most likely to change:
 
 - Managing a custom domain: https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site/managing-a-custom-domain-for-your-github-pages-site
-- About custom domains (also covers the redirect from the old address): https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site/about-custom-domains-and-github-pages
+- About custom domains: https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site/about-custom-domains-and-github-pages
 - Securing your site with HTTPS: https://docs.github.com/en/pages/getting-started-with-github-pages/securing-your-github-pages-site-with-https
 - Optional but worth doing, verifying the domain so nobody else can claim it: https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site/verifying-your-custom-domain-for-github-pages
 
-Note on sources: when this guide was written, the GitHub pages above could not be opened from the writing environment, so the record values and the old-address redirect in step 8 come from general knowledge of how GitHub Pages works and have not been checked line by line against those pages. Step 8 is written as a test for that reason. Check the first two links before you start.
+Note on sources: the record in step 3 (type CNAME, host `risk`, value `worldaware.github.io`, never the repo name and never the `*.pages.github.io` address shown in the repo's Pages settings) and the note that Enforce HTTPS can take up to 24 hours to become available were checked against GitHub's "Managing a custom domain" page on 2026-10-26. GitHub's documentation does not describe forwarding from the old github.io address, which is why step 8 is a test. Check the first two links before you start in case the requirements have changed.
 
 ## QR code
 
