@@ -7,7 +7,7 @@
 
 // Single source of truth for the version shown in About, the JSON export and the console.
 // Keep sw.js CACHE_NAME in step with it when shipping.
-const APP_VERSION = '2.2.0';
+const APP_VERSION = '2.3.0';
 
 /* ---------------------------------------------------------------
    CONSTANTS & CONFIGURATION
@@ -1575,63 +1575,7 @@ function showTextExportDialog(text) {
 function buildTextSummary() {
   const data = buildReportData();
   const edits = (typeof getReportEdits === 'function') ? getReportEdits() : {};
-  const rule = '='.repeat(40);
-
-  let out = `WORLD AWARE RISK ASSESSMENT RESULTS\n`;
-  if (edits.title) out += `${edits.title}\n`;
-  out += `${rule}\n`;
-  out += `Type: ${data.typeLabel}\n`;
-  out += `Location: ${data.location || 'Not specified'}\n`;
-  out += `Date: ${data.dateDisplay || data.date}\n`;
-  if (data.householdSize) out += `Household size: ${data.householdSize}\n`;
-  if (data.hhNames) out += `Households: ${data.hhNames.join(' & ')}\n`;
-  if (edits.preparedFor) out += `Prepared for: ${edits.preparedFor}\n`;
-  out += `${rule}\n`;
-
-  const summary = edits.summary || buildDefaultSummary(data);
-  if (summary) out += `\n${summary}\n`;
-
-  RISK_BANDS.forEach(band => {
-    const bandItems = data.scored.filter(it => it.level === band.key);
-    if (bandItems.length === 0) return;
-    out += `\n── ${RISK_LEVELS[band.key].label.toUpperCase()} ──\n`;
-    bandItems.forEach(it => {
-      out += `  [${it.score}] ${it.name}  (${it.category})\n       ${it.liText}\n`;
-      const notes = (edits.notes && edits.notes[it.id] !== undefined) ? edits.notes[it.id] : it.notes;
-      if (notes) out += `       Notes: ${notes}\n`;
-    });
-  });
-
-  if (data.unrated.length) {
-    out += `\n── IDENTIFIED BY RESEARCH — IMPACT NOT YET RATED ──\n`;
-    data.unrated.forEach(it => {
-      out += `  ${it.name}  (${it.category})  Likelihood ${it.l} – ${it.likelihoodLabel}\n`;
-      if (it.finding) out += `       Finding: ${it.finding}\n`;
-      if (it.source)  out += `       Source: ${it.source}${it.confidence ? ' (confidence: ' + it.confidence + ')' : ''}\n`;
-      const notes = (edits.notes && edits.notes[it.id] !== undefined) ? edits.notes[it.id] : it.notes;
-      if (notes) out += `       Notes: ${notes}\n`;
-    });
-  }
-
-  if (!data.scored.length && !data.unrated.length) {
-    out += `\nNo hazards scored yet.\n`;
-  }
-
-  if (edits.actions) {
-    out += `\n── ACTION ITEMS ──\n${edits.actions}\n`;
-  }
-
-  if (data.research) {
-    const r = data.research;
-    out += `\n── RESEARCH SOURCES ──\n`;
-    if (r.matchedAddress) out += `Matched address: ${r.matchedAddress}\n`;
-    out += `Likelihood estimated for ${r.findingCount} hazards (confidence: ${r.confidence.High} high, ${r.confidence.Medium} medium, ${r.confidence.Low} low).\n`;
-    r.sources.forEach(src => { out += `  - ${src}\n`; });
-  }
-
-  out += `\n${rule}\n`;
-  out += `${data.footer}\n`;
-  return out;
+  return buildShareText(data, edits);
 }
 
 /* ---------------------------------------------------------------
