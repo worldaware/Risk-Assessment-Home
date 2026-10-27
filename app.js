@@ -1929,11 +1929,16 @@ function applyImport(res) {
   showScreen('assessment');
 }
 
-function exportJSON() {
+/**
+ * The object exportJSON() writes. Everything Import from JSON needs sits at
+ * the top level; results[] is a human-readable summary the importer ignores.
+ */
+function buildExportData() {
   const data = {
     exportedAt: new Date().toISOString(),
     tool: 'World Aware Risk Assessment',
     version: APP_VERSION,
+    assessmentId: state.assessmentId,
     assessmentType: state.assessmentType,
     location: state.location,
     date: state.date,
@@ -1942,6 +1947,10 @@ function exportJSON() {
     hh2Name: state.hh2Name,
     scores: state.scores,
     customNames: state.customNames,
+    researchAddress: state.researchAddress,
+    researchReport: state.researchReport,
+    autoScoreOrigins: state.autoScoreOrigins,
+    reportEdits: (typeof getReportEdits === 'function') ? getReportEdits() : {},
     results: HAZARD_DATA
       .filter(h => {
         if (h.isCustom && !state.customNames[h.id]?.name) return false;
@@ -1959,7 +1968,11 @@ function exportJSON() {
       }))
       .sort((a, b) => b.score - a.score),
   };
+  return data;
+}
 
+function exportJSON() {
+  const data = buildExportData();
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
