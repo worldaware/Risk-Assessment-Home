@@ -115,5 +115,55 @@ console.log('Service worker');
   check('About shows the same version', html.includes(`Risk Assessment v${appVer}`));
 }
 
+console.log('buildDefaultActions');
+{
+  const a = loadSandbox(['js/actions.js']);
+  const hz = (id, name, level, score) => ({ id, name, level, score });
+  const boulder = {
+    location: '1234 Sunshine Canyon Dr, Boulder, CO 80302', householdSize: '3',
+    scored: [hz(1, 'Wildfire', 'CRITICAL', 20)],
+  };
+  const bl = a.buildDefaultActions(boulder);
+  check('Boulder: has a BOCO Alert line', bl.some(l => l.includes('BOCO Alert') && l.includes('www.BOCOAlert.org')), bl.join(' / '));
+  check('Boulder: has a Wildfire Partners line', bl.some(l => l.includes('Wildfire Partners')));
+  check('Boulder: mentions Genasys Protect', bl.some(l => l.includes('Genasys Protect')));
+  check('Boulder: starts with this week', /^This week:/.test(bl[0]));
+  check('Boulder: insurance line mentions the Marshall Fire', bl.some(l => /^Before your insurance renews:/.test(l) && l.includes('Marshall Fire')));
+
+  const researched = {
+    location: '', scored: [hz(1, 'Wildfire', 'HIGH', 12)],
+    research: { county: 'Boulder County', stateAbbr: 'CO', timestamp: '2026-10-20T15:00:00Z' },
+  };
+  check('Boulder County from research data', a.buildDefaultActions(researched).some(l => l.includes('BOCO Alert')));
+
+  const denver = { location: '100 Main St, Denver, CO 80202', scored: [hz(1, 'Wildfire', 'CRITICAL', 20)] };
+  const dl = a.buildDefaultActions(denver);
+  check('Non-Boulder: generic alert line', dl.some(l => /^This week: sign up for your county's emergency alert system/.test(l)), dl.join(' / '));
+  check('Non-Boulder: no BOCO Alert, Genasys or Wildfire Partners', !dl.some(l => /BOCO|Genasys|Wildfire Partners|Xcel/.test(l)));
+  check('Boulder City NV is not Boulder County', !a.buildDefaultActions({ location: 'Boulder City, NV 89005', scored: [] }).some(l => l.includes('BOCO')));
+
+  const many = { location: 'Boulder, CO', scored: [1, 2, 3, 5, 8, 9, 10, 15, 44, 24].map((id, i) => hz(id, 'Hazard ' + id, 'CRITICAL', 25 - i)) };
+  const ml = a.buildDefaultActions(many);
+  check('Cap of 10 lines holds with many Critical hazards', ml.length === 10, String(ml.length));
+  check('Highest-scoring hazard gets the first hazard line', ml[5] && ml[5].startsWith('Hazard 1:'), ml[5]);
+  check('Low and Moderate hazards add no lines', a.buildDefaultActions({ location: 'Denver, CO', scored: [hz(1, 'Wildfire', 'MEDIUM', 8), hz(2, 'Earthquake', 'LOW', 3)] }).length === 5);
+  check('Nothing scored still gives the base steps', a.buildDefaultActions({ scored: [] }).length === 5);
+
+  const all = [bl, dl, ml, a.buildDefaultActions(researched)].reduce((x, y) => x.concat(y), []);
+  check('No line contains "!"', !all.some(l => l.includes('!')));
+  check('No em-dash asides', !all.some(l => l.includes('—') || / -- /.test(l)));
+  check('Every line is a non-empty string', all.every(l => typeof l === 'string' && l.trim().length > 0));
+}
+
+console.log('Walk-through CTA and booking link');
+{
+  const app = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+  check('BOOKING_URL is defined', /const BOOKING_URL = 'https:\/\/[^']+';/.test(app));
+  const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  check('actions.js loads before report.js', html.indexOf('js/actions.js') > -1 && html.indexOf('js/actions.js') < html.indexOf('js/report.js'));
+  const sw = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
+  check('actions.js is in the app shell', sw.includes("'./js/actions.js'"));
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
