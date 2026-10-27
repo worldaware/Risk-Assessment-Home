@@ -1442,6 +1442,9 @@ function renderResults() {
       <p class="summary-chips"><span class="chip chip-total">${items.length} total scored</span>${data.unrated.length > 0 ? `<span class="chip chip-unrated">${data.unrated.length} impact not rated</span>` : ''}</p>`;
   }
 
+  const actionsEl = document.getElementById('results-actions');
+  if (actionsEl) actionsEl.hidden = items.length === 0;
+
   const listEl = document.getElementById('results-list');
   let html = '';
 
