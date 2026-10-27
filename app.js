@@ -646,7 +646,8 @@ function renderContinueCard() {
     card.classList.add('hidden');
     return;
   }
-  const name = state.location ||
+  // Home is the projector screen in a workshop: show street name and city, never the house number
+  const name = (state.location || '').replace(/^\s*\d+[A-Za-z-]*\s+/, '').trim() ||
     (state.assessmentType === 'neighborhood' ? 'Neighborhood assessment' : 'Household assessment');
   const when = state.date ? formatReportDate(state.date) : '';
   text.textContent = `Continue: ${name}, ${scored} of ${totalActive()} hazards scored` + (when ? `, ${when}` : '');
