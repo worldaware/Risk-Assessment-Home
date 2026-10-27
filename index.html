@@ -43,6 +43,7 @@
 <symbol id="i-external-link" viewBox="0 0 24 24"><path d="M15 3h6v6" /> <path d="M10 14 21 3" /> <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /></symbol>
 <symbol id="i-save" viewBox="0 0 24 24"><path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" /> <path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7" /> <path d="M7 3v4a1 1 0 0 0 1 1h7" /></symbol>
 <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 15V3" /> <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /> <path d="m7 10 5 5 5-5" /></symbol>
+<symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 3v12" /> <path d="m17 8-5-5-5 5" /> <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /></symbol>
 <symbol id="i-trash-2" viewBox="0 0 24 24"><path d="M10 11v6" /> <path d="M14 11v6" /> <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /> <path d="M3 6h18" /> <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></symbol>
 <symbol id="i-triangle-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" /> <path d="M12 9v4" /> <path d="M12 17h.01" /></symbol>
 <symbol id="i-circle-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" /> <line x1="12" x2="12" y1="8" y2="12" /> <line x1="12" x2="12.01" y1="16" y2="16" /></symbol>
@@ -458,6 +459,10 @@
           <button class="btn btn-secondary" onclick="exportJSON()">
             <svg class="i" aria-hidden="true" focusable="false"><use href="#i-download"/></svg> Export as JSON
           </button>
+          <button class="btn btn-secondary" id="import-json-btn" onclick="importJSON()">
+            <svg class="i" aria-hidden="true" focusable="false"><use href="#i-upload"/></svg> Import from JSON
+          </button>
+          <input type="file" id="import-json-input" class="hidden" accept="application/json,.json" aria-label="Choose an exported JSON file" onchange="handleImportFile(this)" />
           <button class="btn btn-danger" onclick="clearAllData()">
             <svg class="i" aria-hidden="true" focusable="false"><use href="#i-trash-2"/></svg> Delete everything on this device
           </button>
@@ -472,7 +477,7 @@
       </div>
 
       <div class="about-version">
-        <p>World Aware Risk Assessment v2.2.0</p>
+        <p>World Aware Risk Assessment v2.3.0</p>
         <p>Data stored locally on your device. No account required.</p>
       </div>
       </div>
@@ -534,6 +539,7 @@
   <script src="js/research.js"></script>
   <script src="js/wa-pdf-theme.js"></script>
   <script src="js/report.js"></script>
+  <script src="js/importValidator.js"></script>
 
   <!-- App Script -->
   <script src="app.js"></script>

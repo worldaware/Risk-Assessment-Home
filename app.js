@@ -7,7 +7,7 @@
 
 // Single source of truth for the version shown in About, the JSON export and the console.
 // Keep sw.js CACHE_NAME in step with it when shipping.
-const APP_VERSION = '2.2.0';
+const APP_VERSION = '2.3.0';
 
 /* ---------------------------------------------------------------
    CONSTANTS & CONFIGURATION
@@ -1857,6 +1857,76 @@ function renderSavedList() {
   });
 
   container.innerHTML = html;
+}
+
+/* ---------------------------------------------------------------
+   IMPORT FROM JSON  (validation lives in js/importValidator.js)
+--------------------------------------------------------------- */
+
+/** Open the file picker. */
+function importJSON() {
+  const input = document.getElementById('import-json-input');
+  if (input) input.click();
+}
+
+/** File picked: read it as text and hand it on. */
+function handleImportFile(input) {
+  const file = input && input.files && input.files[0];
+  if (!file) return;
+  const done = () => { try { input.value = ''; } catch (e) { /* ignore */ } };
+  if (file.size > IMPORT_MAX_BYTES) {
+    showToast('That file is larger than 2 MB, so it is not one of our exports.', 6000);
+    done();
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => { done(); importAssessmentText(String(reader.result || '')); };
+  reader.onerror = () => { done(); showToast('Could not read that file.', 6000); };
+  reader.readAsText(file);
+}
+
+/** Parse, validate and, after a confirm, apply the text of an exported file. */
+function importAssessmentText(text) {
+  const parsed = parseImportText(text);
+  const res = parsed.ok ? validateImport(parsed.obj) : { ok: false, errors: parsed.errors, warnings: [] };
+  if (!res.ok) {
+    const more = res.errors.length > 1 ? ` (${res.errors.length - 1} more problem${res.errors.length > 2 ? 's' : ''})` : '';
+    showToast(`Could not import: ${res.errors[0]}${more}`, 8000);
+    return;
+  }
+  const msg = _isDirtyAssessment()
+    ? 'Import this assessment? Your current work will be saved as a copy first.'
+    : 'Import this assessment?';
+  showConfirm(msg, () => applyImport(res), { confirmLabel: 'Import' });
+}
+
+/** Replace the current assessment with a validated import. */
+function applyImport(res) {
+  if (_isDirtyAssessment() && !_snapshotCurrent()) {
+    showToast('Could not save a copy: storage is unavailable or full. Export your work as a backup, then try again.', 6000);
+    return;
+  }
+  const next = normalizeState(res.state);
+  // Never reuse the id of the assessment being replaced: its copy and its report edits stay separate.
+  if (!res.state.assessmentId || res.state.assessmentId === state.assessmentId) next.assessmentId = _newAssessmentId();
+
+  const e = res.edits;
+  const hasEdits = e && (e.title || e.preparedFor || e.summary || e.actions || Object.keys(e.notes || {}).length);
+  if (hasEdits && typeof _readAllReportEdits === 'function' && typeof _writeAllReportEdits === 'function') {
+    const all = _readAllReportEdits();
+    all[next.assessmentId] = e;
+    _writeAllReportEdits(all);
+  }
+
+  state = next;
+  _screenScroll.assessment = 0;
+  if (typeof resetResearchUI === 'function') resetResearchUI();
+  autoSave();
+  renderSavedList();
+  if (res.warnings && res.warnings.length) console.warn('Import adjustments:', res.warnings);
+  showToast(`Imported: ${state.location || (state.assessmentType === 'neighborhood' ? 'Neighborhood assessment' : 'Household assessment')}` +
+    (res.warnings && res.warnings.length ? '. Some values were adjusted.' : ''));
+  showScreen('assessment');
 }
 
 function exportJSON() {
