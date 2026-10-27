@@ -1419,6 +1419,19 @@ function buildDefaultSummary(data) {
    RESULTS SCREEN
 --------------------------------------------------------------- */
 
+/** Walk-through card shown under the top Critical or High band on Results. */
+function walkthroughCtaHtml(top, rl) {
+  return `
+      <aside class="cta-card" aria-labelledby="cta-card-title">
+        <h3 id="cta-card-title">${escHtml(top.name)} came out ${escHtml(rl.label.toLowerCase())}.</h3>
+        <p>The score says what to worry about. It can't see your roof vents, the five feet around your house, or whether your insurance would rebuild at today's prices. A home walk-through can: Henry comes to the property, checks these numbers against what is there, and leaves a written plan in the order to do it. Sliding scale.</p>
+        <div class="cta-card-actions">
+          <a class="btn btn-amber" href="${escHtml(BOOKING_URL)}" target="_blank" rel="noopener">${ic('external-link')} Book a walk-through</a>
+          <a class="cta-card-ghost" href="${escHtml(BOOKING_URL)}" target="_blank" rel="noopener">Bring a workshop to your HOA</a>
+        </div>
+      </aside>`;
+}
+
 function renderResults() {
   const data = buildReportData();
   const items = data.scored;
@@ -1447,6 +1460,7 @@ function renderResults() {
 
   const listEl = document.getElementById('results-list');
   let html = '';
+  let ctaShown = false;
 
   RISK_BANDS.forEach(band => {
     const bandItems = items.filter(it => it.level === band.key);
@@ -1487,6 +1501,12 @@ function renderResults() {
     });
 
     html += `</section>`;
+
+    // One walk-through card per page, right after the first Critical or High band
+    if (!ctaShown && (band.key === 'CRITICAL' || band.key === 'HIGH')) {
+      html += walkthroughCtaHtml(bandItems[0], rl);
+      ctaShown = true;
+    }
   });
 
   if (data.unrated.length > 0) {
