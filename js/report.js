@@ -101,6 +101,16 @@ function _editable(key, value, placeholder, tag, extraClass) {
     data-edit="${key}" data-placeholder="${escHtml(placeholder || '')}">${escHtml(value || '')}</${tag}>`;
 }
 
+/** One honest sentence about where the likelihoods came from. */
+function _sourcesSentence(rs) {
+  const real = Math.max(0, (rs.findingCount || 0) - (rs.estimatedCount || 0));
+  const parts = [];
+  if (real > 0) parts.push(`Public data supplied the likelihood for ${real} hazard${real === 1 ? '' : 's'}`);
+  if (rs.estimatedCount) parts.push(`${rs.estimatedCount} ${rs.estimatedCount === 1 ? 'is a' : 'are'} rough placeholder${rs.estimatedCount === 1 ? '' : 's'} because a source did not respond`);
+  if (parts.length === 0) return 'No public data source responded; every likelihood below was rated by hand.';
+  return parts.join('; ') + '.';
+}
+
 function _riskClass(level) {
   const rl = RISK_LEVELS[level];
   return rl ? 'b-' + rl.cls : 'b-unrated';
@@ -163,7 +173,8 @@ function renderReportView() {
           </div>
           <div class="rd-item-body">
             <div class="rd-item-name"><span class="rd-rank">${idx + 1}.</span> ${escHtml(it.name)}</div>
-            <div class="rd-item-meta">${escHtml(catLabel(it.category))}. ${escHtml(it.liText)}.${it.fromResearch ? ' Likelihood from address research.' : ''}</div>
+            <div class="rd-item-action">${escHtml(RISK_LEVELS[it.level].label)}: ${escHtml(RISK_LEVELS[it.level].action)}.</div>
+            <div class="rd-item-meta">${escHtml(catLabel(it.category))}. ${escHtml(it.liText)}.${it.fromResearch ? (it.isEstimate ? ' Likelihood is a rough estimate (source did not respond).' : ' Likelihood from public data.') : ''}</div>
             ${it.fromResearch && it.finding ? `<div class="rd-item-finding">${escHtml(it.finding)}</div>` : ''}
             ${_editable('notes.' + it.id, it.reportNotes, 'Add notes', 'div', 'rd-notes')}
           </div>
@@ -212,10 +223,18 @@ function renderReportView() {
     html += `
       <section class="rd-section rd-sources">
         <h2>Research sources</h2>
-        <p>${rs.matchedAddress ? `Matched address: ${escHtml(rs.matchedAddress)}. ` : ''}Likelihood was estimated for ${rs.findingCount} hazards from public data (confidence: ${rs.confidence.High} high, ${rs.confidence.Medium} medium, ${rs.confidence.Low} low${rs.estimatedCount ? `; ${rs.estimatedCount} used a regional fallback estimate` : ''}).</p>
-        <ul>${rs.sources.map(s => `<li>${escHtml(s)}</li>`).join('')}</ul>
+        <p>${rs.matchedAddress ? `Matched address: ${escHtml(rs.matchedAddress)}. ` : ''}${_sourcesSentence(rs)}</p>
+        ${rs.sources.length ? `<ul>${rs.sources.map(s => `<li>${escHtml(s)}</li>`).join('')}</ul>` : ''}
       </section>`;
   }
+
+  // How to read these scores (always printed)
+  html += `
+    <section class="rd-section rd-howto">
+      <h2>How to read these scores</h2>
+      <p>Each hazard gets a likelihood from 1 to 5 and an impact from 1 to 5, multiplied into a score out of 25. Likelihood is how often the hazard affects this area; impact is your judgment of what it would do to your household. Several public sources describe your county or state, not your lot.</p>
+      <p class="rd-limits">This is a planning-level screen. It is not a home inspection, an engineering assessment, an insurance appraisal, or an official flood or fire determination. For a flood determination use msc.fema.gov or your lender. For wildfire, ask your fire district. For coverage, ask your insurance agent.</p>
+    </section>`;
 
   html += `</div><footer class="rd-footer"><strong>beworldaware.com</strong><span>World Aware Emergency Planning, Boulder, Colorado</span></footer>`;
 
@@ -467,8 +486,10 @@ async function buildReportPDF() {
   const scoredOpts = r.scored.map(it => ({
     levelKey: it.level,
     boxNum: String(it.score),
-    meta: `${catLabel(it.category)}. ${it.liText}.`,
-    extra: (it.fromResearch && it.finding) ? ['Research: ' + it.finding] : [],
+    meta: `${RISK_LEVELS[it.level].label}: ${RISK_LEVELS[it.level].action}. ${catLabel(it.category)}. ${it.liText}.`,
+    extra: (it.fromResearch && it.finding)
+      ? [(it.isEstimate ? 'Rough estimate (source did not respond): ' : 'Public data: ') + it.finding]
+      : [],
   }));
   heading('Ranked risks', r.scored.length ? itemHeight(r.scored[0], 1, scoredOpts[0]) : lh(10.5) * 2);
   if (r.scored.length === 0) {
@@ -517,9 +538,14 @@ async function buildReportPDF() {
   if (d.research) {
     const rs = d.research;
     heading('Research sources');
-    para(`${rs.matchedAddress ? 'Matched address: ' + rs.matchedAddress + '. ' : ''}Likelihood was estimated for ${rs.findingCount} hazards from public data (confidence: ${rs.confidence.High} high, ${rs.confidence.Medium} medium, ${rs.confidence.Low} low${rs.estimatedCount ? '; ' + rs.estimatedCount + ' used a regional fallback estimate' : ''}).`, { size: 9.5 });
+    para(`${rs.matchedAddress ? 'Matched address: ' + rs.matchedAddress + '. ' : ''}${_sourcesSentence(rs)}`, { size: 9.5 });
     rs.sources.forEach(src => para(src, { size: 9, color: C.muted, after: 1 }));
   }
+
+  // ── How to read these scores ──────────────────────────────
+  heading('How to read these scores');
+  para('Each hazard gets a likelihood from 1 to 5 and an impact from 1 to 5, multiplied into a score out of 25. Likelihood is how often the hazard affects this area; impact is your judgment of what it would do to your household. Several public sources describe your county or state, not your lot.', { size: 9.5, after: 4 });
+  para('This is a planning-level screen. It is not a home inspection, an engineering assessment, an insurance appraisal, or an official flood or fire determination. For a flood determination use msc.fema.gov or your lender. For wildfire, ask your fire district. For coverage, ask your insurance agent.', { size: 9.5, color: C.muted });
 
   // ── Footer on every page ──────────────────────────────────
   waFooters(doc, F, 'World Aware Emergency Planning, Boulder, Colorado');
@@ -527,7 +553,7 @@ async function buildReportPDF() {
   doc.setProperties({
     title: _pdfSafe(r.title),
     subject: 'World Aware Risk Assessment',
-    creator: 'World Aware Risk Assessment Tool v2.1',
+    creator: `World Aware Risk Assessment Tool v${typeof APP_VERSION !== 'undefined' ? APP_VERSION : '2.2.0'}`,
   });
   return { doc, filename: reportPdfFilename(d.date) };
 }
@@ -614,12 +640,12 @@ function sharePdf(btnEl) {
   if (btn) { btn.disabled = true; btn.textContent = 'Preparing PDF…'; }
   (_pdfBuilding || preparePdf()).then(r => {
     if (btn) { btn.disabled = false; btn.innerHTML = label; }
-    if (!r) { alert('Could not create the PDF. Please try again.'); return; }
+    if (!r) { (typeof showToast === 'function' ? showToast : alert)('Could not create the PDF. Please try again.'); return; }
     if (_canShareFile(r.file)) {
       navigator.share({ files: [r.file], title: r.filename }).catch(err => {
         if (err && err.name === 'AbortError') return;
         if (btn) { btn.innerHTML = label; }
-        alert('Your PDF is ready. Tap PDF / Share again to open it.');
+        (typeof showToast === 'function' ? showToast : alert)('Your PDF is ready. Tap PDF / Share again to open it.');
       });
     } else {
       _downloadBlob(r.blob, r.filename);

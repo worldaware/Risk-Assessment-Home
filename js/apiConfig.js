@@ -60,9 +60,11 @@ const API_CONFIG = {
   DROUGHT_MONITOR:
     'https://droughtmonitor.unl.edu/DmData/GISData.aspx',
 
-  /* ── EPA TRI (Toxics Release Inventory) — no key required ─ */
+  /* ── EPA TRI (Toxics Release Inventory) — no key required ─
+     Envirofacts column is `zip_code` (lowercase); FACILITY_ZIP never answers.
+     The service sends Access-Control-Allow-Origin: *, so call it direct.  */
   EPA_TRI_ZIP:
-    'https://data.epa.gov/efservice/TRI_FACILITY/FACILITY_ZIP',
+    'https://data.epa.gov/efservice/TRI_FACILITY/zip_code',
 
   /* ── USGS Landslide Susceptibility — no key required ────── */
   USGS_LANDSLIDE:

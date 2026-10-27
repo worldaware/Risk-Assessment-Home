@@ -3,7 +3,9 @@
    Service Worker: caches app shell for full offline use.
    ============================================================= */
 
-const CACHE_NAME = 'wa-risk-v2.1.0';  // v2.1: World Aware brand pass (fonts, tokens, logo, Lucide sprite, PDF theme)
+// Bump this with every release (keep in step with APP_VERSION in app.js).
+// v2.2.0: stop caching cross-origin API responses; the old cache held addresses.
+const CACHE_NAME = 'wa-risk-v2.2.0';
 
 // App shell files to cache on install
 const APP_SHELL = [
@@ -50,7 +52,9 @@ self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE_NAME).then(cache => {
       console.log('[SW] Caching app shell');
-      return cache.addAll(APP_SHELL);
+      // cache: 'reload' bypasses the HTTP cache so a new release never
+      // precaches files up to 10 minutes stale from GitHub Pages.
+      return cache.addAll(APP_SHELL.map(u => new Request(u, { cache: 'reload' })));
     }).then(() => {
       // Immediately take control — don't wait for old SW to be gone
       return self.skipWaiting();
@@ -64,7 +68,8 @@ self.addEventListener('activate', event => {
     caches.keys().then(cacheNames => {
       return Promise.all(
         cacheNames
-          .filter(name => name !== CACHE_NAME)
+          // Cache Storage is shared by every app on this origin; only touch our own
+          .filter(name => name.startsWith('wa-risk-') && name !== CACHE_NAME)
           .map(name => {
             console.log('[SW] Deleting old cache:', name);
             return caches.delete(name);
@@ -84,25 +89,10 @@ self.addEventListener('fetch', event => {
   // Only handle GET requests
   if (event.request.method !== 'GET') return;
 
-  // For external resources, try network first
-  if (url.origin !== self.location.origin) {
-    event.respondWith(
-      fetch(event.request)
-        .then(response => {
-          // Cache a copy of the CDN resource
-          if (response && response.status === 200) {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
-          }
-          return response;
-        })
-        .catch(() => {
-          // Network failed: try cache
-          return caches.match(event.request);
-        })
-    );
-    return;
-  }
+  // Cross-origin requests are the hazard-data lookups. Their URLs carry the
+  // typed address and coordinates, so they must never be written to Cache
+  // Storage. Let the browser handle them natively.
+  if (url.origin !== self.location.origin) return;
 
   // Page navigations: network-first so a new release shows up on the next
   // load; fall back to the cached shell when offline.
@@ -112,9 +102,11 @@ self.addEventListener('fetch', event => {
         .then(response => {
           if (response && response.status === 200) {
             const clone = response.clone();
-            caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+            event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone)));
+            return response;
           }
-          return response;
+          // A 404/5xx page from the host should not replace the app
+          return caches.match(event.request).then(r => r || caches.match('./index.html') || response);
         })
         .catch(() => caches.match(event.request).then(r => r || caches.match('./index.html')))
     );
@@ -125,13 +117,16 @@ self.addEventListener('fetch', event => {
   event.respondWith(
     caches.match(event.request).then(cachedResponse => {
       if (cachedResponse) {
-        // Serve from cache; refresh cache in background
-        fetch(event.request).then(networkResponse => {
-          if (networkResponse && networkResponse.status === 200) {
-            const clone = networkResponse.clone();
-            caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
-          }
-        }).catch(() => {/* network unavailable — that's OK */});
+        // Serve from cache; refresh cache in background. waitUntil keeps the
+        // worker alive until the refresh has been written.
+        event.waitUntil(
+          fetch(event.request).then(networkResponse => {
+            if (networkResponse && networkResponse.status === 200) {
+              const clone = networkResponse.clone();
+              return caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+            }
+          }).catch(() => {/* network unavailable — that's OK */})
+        );
 
         return cachedResponse;
       }
