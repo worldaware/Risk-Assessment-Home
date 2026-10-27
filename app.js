@@ -9,6 +9,9 @@
 // Keep sw.js CACHE_NAME in step with it when shipping.
 const APP_VERSION = '2.2.0';
 
+// Where "Book a walk-through" links go. Henry will change this to the booking page once it exists.
+const BOOKING_URL = 'https://beworldaware.com';
+
 /* ---------------------------------------------------------------
    CONSTANTS & CONFIGURATION
 --------------------------------------------------------------- */
@@ -2058,6 +2061,12 @@ function escHtml(str) {
 function slugify(str) {
   return str.toLowerCase().replace(/[^a-z0-9]/g, '-');
 }
+
+/** Point every static booking link in index.html (data-booking-link) at BOOKING_URL. */
+function applyBookingLinks() {
+  document.querySelectorAll('a[data-booking-link]').forEach(a => { a.href = BOOKING_URL; });
+}
+document.addEventListener('DOMContentLoaded', applyBookingLinks);
 
 /* ---------------------------------------------------------------
    BOOT
