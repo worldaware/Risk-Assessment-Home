@@ -78,12 +78,16 @@ function buildResolvedReport() {
   const edits = getReportEdits();
   const pick  = (v, d) => (typeof v === 'string' ? v : d);
   const noteFor = it => pick(edits.notes[it.id], it.notes || '');
+  // Action items: the user's own text once they have typed some, otherwise the generated list
+  const typedActions = (typeof edits.actions === 'string' && edits.actions.trim()) ? edits.actions : null;
+  const defaultActions = (typeof buildDefaultActions === 'function') ? buildDefaultActions(data).join('\n') : '';
   return {
     data,
     title:       pick(edits.title, _defaultReportTitle(data)),
     preparedFor: pick(edits.preparedFor, ''),
     summary:     pick(edits.summary, buildDefaultSummary(data)),
-    actions:     pick(edits.actions, ''),
+    actions:     typedActions !== null ? typedActions : defaultActions,
+    actionsAreDefault: typedActions === null && !!defaultActions,
     scored:  data.scored.map(it  => Object.assign({}, it, { reportNotes: noteFor(it) })),
     unrated: data.unrated.map(it => Object.assign({}, it, { reportNotes: noteFor(it) })),
   };
@@ -214,6 +218,7 @@ function renderReportView() {
   html += `
     <section class="rd-section rd-actions${r.actions.trim() ? '' : ' is-empty-section'}" data-section="actions">
       <h2>Action items</h2>
+      ${r.actionsAreDefault ? '<p class="rd-section-intro rd-actions-note">Edit this list. It is a starting point.</p>' : ''}
       ${_editable('actions', r.actions, 'Type the steps you plan to take, one per line', 'div', 'rd-actions-text')}
     </section>`;
 

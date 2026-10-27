@@ -5,7 +5,8 @@
 
 // Bump this with every release (keep in step with APP_VERSION in app.js).
 // v2.2.0: stop caching cross-origin API responses; the old cache held addresses.
-const CACHE_NAME = 'wa-risk-v2.2.0';
+// v2.3.0: default action items (js/actions.js) and the walk-through card.
+const CACHE_NAME = 'wa-risk-v2.3.0';
 
 // App shell files to cache on install
 const APP_SHELL = [
@@ -43,6 +44,7 @@ const APP_SHELL = [
   './js/research.js',
   './js/wa-pdf-theme.js',
   // Report view + offline PDF generation
+  './js/actions.js',
   './js/report.js',
   './js/vendor/jspdf.umd.min.js',
 ];

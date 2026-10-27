@@ -821,3 +821,7 @@ h1.rd-editable.is-empty::before { font-family: var(--font-body); font-size: var(
   .rd-editable.is-empty { display: none !important; }
   .rd-prepared.is-empty-line, .rd-actions.is-empty-section { display: none !important; }
 }
+
+/* ── Default action items note (report) ───────────────────── */
+.rd-actions-note { font-style: italic; }
+@media print { .rd-actions-note { display: none !important; } }

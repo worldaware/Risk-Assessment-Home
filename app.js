@@ -7,7 +7,7 @@
 
 // Single source of truth for the version shown in About, the JSON export and the console.
 // Keep sw.js CACHE_NAME in step with it when shipping.
-const APP_VERSION = '2.2.0';
+const APP_VERSION = '2.3.0';
 
 // Where "Book a walk-through" links go. Henry will change this to the booking page once it exists.
 const BOOKING_URL = 'https://beworldaware.com';
