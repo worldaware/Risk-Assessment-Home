@@ -63,8 +63,8 @@ const ACTION_GROUPS = [
     lines: loc => [
       'Plan for 3 days without power, including how you will run any medical device, stay warm with the furnace off and keep phones charged.',
       loc.boulderCounty
-        ? 'Xcel has cut power ahead of time in Boulder County on high-wind days, so keep a battery bank charged for anything that has to stay on.'
-        : 'Ask your utility how it warns customers before it shuts off power on purpose, and keep a battery bank charged for anything that has to stay on.',
+        ? 'Keep a battery bank charged for anything that has to stay on. Xcel has cut power ahead of time in Boulder County on high-wind days.'
+        : 'Keep a battery bank charged for anything that has to stay on, and ask your utility how it warns customers before it shuts off power on purpose.',
     ],
   },
   {

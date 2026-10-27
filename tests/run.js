@@ -152,6 +152,7 @@ console.log('buildDefaultActions');
   const all = [bl, dl, ml, a.buildDefaultActions(researched)].reduce((x, y) => x.concat(y), []);
   check('No line contains "!"', !all.some(l => l.includes('!')));
   check('No em-dash asides', !all.some(l => l.includes('—') || / -- /.test(l)));
+  check('Hazard lines keep proper nouns capitalized', !all.some(l => /: (xcel|fema|boco)/.test(l)));
   check('Every line is a non-empty string', all.every(l => typeof l === 'string' && l.trim().length > 0));
 }
 
