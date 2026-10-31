@@ -116,7 +116,7 @@ console.log('buildShareText');
   const boulder = f(base, {});
   const bl = lines(boulder);
   check('Boulder: first line has name, street, city and date, no house number',
-    bl[0] === 'Our household: hazard check, Pearl St, Boulder, (October 26, 2026)', bl[0]);
+    bl[0] === 'Our household: hazard check, Pearl St, Boulder (October 26, 2026)', bl[0]);
   check('Boulder: scoring explanation on line 2', bl[1].startsWith('Each hazard is scored out of 25'));
   check('Boulder: critical line lists names and scores', bl[2] === 'Act on these in the next 30 days: Wildfire, score 20; Flood, score 16.', bl[2]);
   check('Boulder: high line', bl[3] === 'Write down a plan for these this season: Winter storm, score 12.', bl[3]);
@@ -129,7 +129,7 @@ console.log('buildShareText');
 
   const other = f({ ...base, location: '88 Main Street, Fort Collins, CO', research: { county: 'Larimer County' } }, {});
   check('non-Boulder: generic alerts line', other.includes("sign up for your county's emergency alerts and learn two ways out") && !other.includes('bocoalert'));
-  check('non-Boulder: location street and city', lines(other)[0] === 'Our household: hazard check, Main Street, Fort Collins, (October 26, 2026)', lines(other)[0]);
+  check('non-Boulder: location street and city', lines(other)[0] === 'Our household: hazard check, Main Street, Fort Collins (October 26, 2026)', lines(other)[0]);
   const countyOnly = f({ ...base, location: '5 Elm Rd, Lyons', research: { county: 'Boulder County' } }, {});
   check('Boulder county alone triggers the BOCO line', countyOnly.includes('bocoalert.org'));
 
