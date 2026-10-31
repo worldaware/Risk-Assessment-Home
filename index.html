@@ -179,11 +179,12 @@
             <p class="alert-title">Privacy</p>
             <p>Nothing leaves your device until you tap Research. Skip sends nothing.
             When you tap Research, your street address goes to OpenStreetMap to find the location.
-            If that fails, it goes to the U.S. Census Bureau through a third-party relay
-            (api.allorigins.win, corsproxy.io or api.codetabs.com), and the relay operator can see it.
+            If that fails, it goes to the U.S. Census Bureau.
             Your approximate coordinates then go to the FCC, FEMA, USGS, the U.S. Forest Service,
-            the National Weather Service, the Drought Monitor and the EPA, and most of those requests
-            pass through the same relays. World Aware runs no server and does not receive your address.
+            the National Weather Service, the Drought Monitor and the EPA. The Census, FEMA, USGS,
+            Forest Service and Drought Monitor requests pass through a relay World Aware runs on
+            Cloudflare that keeps no logs; those services do not accept requests straight from a web page.
+            World Aware does not store your address.
             Your results stay in this browser. If someone else runs this for you, your results are
             saved on their device, not yours: ask for your PDF, then ask them to clear it.</p>
           </div>

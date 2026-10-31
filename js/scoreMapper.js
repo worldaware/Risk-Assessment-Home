@@ -96,24 +96,29 @@ function mapPGAToScore(pga) {
 --------------------------------------------------------------- */
 
 /**
- * @param {string} label     e.g. "Very High", "High", "Moderate"
- * @param {number|string} cat numeric category 1–5
+ * WHP 2023 classified pixel values (Dillon 2023, RDS-2015-0047-4):
+ * 1 very low, 2 low, 3 moderate, 4 high, 5 very high, 6 non-burnable, 7 water.
+ * Classes 1–5 map straight onto Likelihood 1–5; 6 and 7 score 1.
+ *
+ * @param {string} label     e.g. "Very High", "High", "Moderate" (optional)
+ * @param {number|string} cat numeric class 1–7
  * @returns {{ score:number, finding:string, confidence:string }}
  */
 function mapWHPToScore(label, cat) {
   const l = (label || '').toLowerCase().trim();
   const c = parseInt(cat) || 0;
+  const CLASS_LABELS = { 1: 'Very Low', 2: 'Low', 3: 'Moderate', 4: 'High', 5: 'Very High', 6: 'Non-burnable', 7: 'Water' };
 
   let score;
   if (l === 'very high' || c === 5) score = 5;
   else if (l === 'high'  || c === 4) score = 4;
   else if (l === 'moderate' || l === 'medium' || c === 3) score = 3;
   else if (l === 'low'   || c === 2) score = 2;
-  else if (l === 'very low' || c === 1) score = 1;
+  else if (l === 'very low' || l === 'non-burnable' || l === 'water' || c === 1 || c === 6 || c === 7) score = 1;
   else score = 2; // unknown → treat as minimal
 
-  const displayLabel = label || (c ? `Category ${c}` : 'unknown');
-  const confidence = (l || c) ? 'High' : 'Low';
+  const displayLabel = label || CLASS_LABELS[c] || (c ? `Category ${c}` : 'unknown');
+  const confidence = (l || CLASS_LABELS[c]) ? 'High' : 'Low';
 
   return {
     score,

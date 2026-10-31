@@ -1,0 +1,6 @@
+{
+  "name": "wa-risk-relay",
+  "private": true,
+  "type": "module",
+  "description": "World Aware hazard-data relay (Cloudflare Worker). No dependencies."
+}

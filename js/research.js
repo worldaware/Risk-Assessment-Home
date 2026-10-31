@@ -88,6 +88,7 @@ let _research = {
   stepStatuses: {}, // stepId → 'pending' | 'running' | 'success' | 'error'
   hasResults: false,
   runId:      0,    // bumped on every start/reset so a stale run cannot write results
+  failCodes:  {},   // stepId → error code of a failed lookup (e.g. RELAY_NOT_CONFIGURED)
 };
 
 /** Abandon any lookup in flight. Its late results are ignored. */
@@ -123,65 +124,66 @@ function withTimeout(promise, ms, label) {
   return Promise.race([promise, timeout]);
 }
 
-/**
- * Try each proxy in API_CONFIG.CORS_PROXIES in order.
- * Returns parsed JSON from the first proxy that succeeds.
- * Throws if all proxies fail.
- */
-async function fetchWithProxyCascade(targetUrl, timeoutMs) {
-  const proxies = API_CONFIG.CORS_PROXIES;
-  const totalTimeout = timeoutMs + API_CONFIG.PROXY_EXTRA_MS;
-  let lastError = null;
+/** Error codes that change the wording of a placeholder finding. */
+const RELAY_NOT_CONFIGURED = 'RELAY_NOT_CONFIGURED';
+const NO_SOURCE            = 'NO_SOURCE';
 
-  for (const proxy of proxies) {
-    const wrappedUrl = proxy.url + encodeURIComponent(targetUrl);
-    try {
-      // Abort the underlying request on timeout instead of letting it run on;
-      // no referrer so the relay never learns which page sent it.
-      const ctrl  = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), totalTimeout);
-      let response;
-      try {
-        response = await fetch(wrappedUrl, { signal: ctrl.signal, referrerPolicy: 'no-referrer' });
-      } finally {
-        clearTimeout(timer);
-      }
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      const result = await proxy.extract(response);
-      // Relays wrap upstream errors in HTTP 200. An ArcGIS/REST error object
-      // is a failure, not an empty result.
-      if (result === null || result === undefined) throw new Error('Empty body from relay');
-      if (result && typeof result === 'object' && result.error) {
-        throw new Error(`Upstream error ${result.error.code || ''} ${result.error.message || ''}`.trim());
-      }
-      console.log('[Proxy success]', proxy.name, '<-', targetUrl);
-      return result;
-    } catch (err) {
-      console.warn('[Proxy failed]', proxy.name, err.message);
-      lastError = err;
-      // continue to next proxy
-    }
-  }
-
-  throw new Error(`All CORS proxies failed for: ${targetUrl} (last: ${lastError?.message})`);
+function _codedError(code, message) {
+  const e = new Error(message);
+  e.code = code;
+  return e;
 }
 
 /**
- * Fetch via CORS proxy cascade — use for all government ArcGIS/EPA/NOAA
- * endpoints that block direct browser requests.
- * Returns parsed JSON of the actual API response.
+ * Fetch a government endpoint through the World Aware relay
+ * (API_CONFIG.RELAY_URL, a Cloudflare Worker; source in relay/worker.js).
+ * Returns the parsed JSON of the upstream response.
+ * Throws a RELAY_NOT_CONFIGURED error, without any network call, while
+ * RELAY_URL is empty.
+ */
+async function relayFetch(targetUrl) {
+  const base = String(API_CONFIG.RELAY_URL || '').trim().replace(/\/+$/, '');
+  if (!base) throw _codedError(RELAY_NOT_CONFIGURED, 'Relay not configured');
+
+  const wrappedUrl   = base + '/?url=' + encodeURIComponent(targetUrl);
+  const totalTimeout = API_CONFIG.TIMEOUT_MS + API_CONFIG.PROXY_EXTRA_MS;
+
+  // Abort the underlying request on timeout instead of letting it run on;
+  // no referrer so the relay never learns which page sent it.
+  const ctrl  = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), totalTimeout);
+  let response;
+  try {
+    response = await fetch(wrappedUrl, { signal: ctrl.signal, referrerPolicy: 'no-referrer' });
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (!response.ok) {
+    throw new Error(`Relay HTTP ${response.status}`);
+  }
+
+  const result = await response.json();
+  // ArcGIS services wrap errors in HTTP 200. An error object is a failure,
+  // not an empty result.
+  if (result === null || result === undefined) throw new Error('Empty body from relay');
+  if (result && typeof result === 'object' && result.error) {
+    throw new Error(`Upstream error ${result.error.code || ''} ${result.error.message || ''}`.trim());
+  }
+  return result;
+}
+
+/**
+ * Thin alias kept so call sites do not churn. Use for every government
+ * endpoint that blocks direct browser requests.
  */
 async function proxyFetch(url) {
-  return fetchWithProxyCascade(url, API_CONFIG.TIMEOUT_MS);
+  return relayFetch(url);
 }
 
 /**
  * Direct fetch — for APIs that support CORS natively
- * (USGS earthquake, NOAA weather.gov, FCC).
+ * (NOAA weather.gov, EPA Envirofacts).
  * No custom User-Agent: browsers set their own, and a custom one forces a
  * CORS preflight that some of these services reject.
  */
@@ -204,7 +206,7 @@ async function directFetch(url) {
 
 /**
  * Round a coordinate to 4 decimals (about 11 m) before it leaves the browser
- * for any third-party relay. Flood, wildfire and landslide polygons are far
+ * through the relay. Flood, wildfire and landslide polygons are far
  * coarser than this, so nothing is lost.
  */
 function _coarse(n) {
@@ -214,12 +216,12 @@ function _coarse(n) {
 /* ---------------------------------------------------------------
    STEP 0 — GEOCODER
    Primary:  Nominatim (OpenStreetMap) — CORS-friendly, no key
-   Fallback: Census Geocoder via allorigins proxy
+   Fallback: Census Geocoder via the World Aware relay
    FIPS:     FCC Area API — CORS-friendly, no key
 --------------------------------------------------------------- */
 
 /**
- * Try Nominatim first; fall back to Census via allorigins proxy.
+ * Try Nominatim first; fall back to Census via the World Aware relay.
  * Then enrich with county FIPS from the FCC Area API.
  */
 function _geoError(code, message) {
@@ -283,16 +285,16 @@ async function _geocode(address) {
     console.warn('[Geocode] Nominatim failed:', nominatimErr.message, '— trying Census fallback');
   }
 
-  /* ── FALLBACK: Census Geocoder via allorigins proxy ──── */
+  /* ── FALLBACK: Census Geocoder via the World Aware relay ── */
   if (!nominatimOk) {
     const censusUrl =
       `https://geocoding.geo.census.gov/geocoder/locations/onelineaddress` +
       `?address=${encodeURIComponent(address)}&benchmark=Public_AR_Current&format=json`;
-    console.log('[Geocode] Census fallback via proxy cascade:', censusUrl);
+    console.log('[Geocode] Census fallback via relay:', censusUrl);
 
     let censusData;
     try {
-      censusData = await fetchWithProxyCascade(censusUrl, API_CONFIG.TIMEOUT_MS);
+      censusData = await relayFetch(censusUrl);
       console.log('[Geocode] Census raw response:', censusData);
     } catch (censusErr) {
       console.warn('[Geocode] Census fallback also failed:', censusErr.message);
@@ -398,6 +400,18 @@ const _QUAKE_HIGH_STATES = new Set([
 
 const FALLBACK_PREFIX = 'This source did not respond, so this is a placeholder.';
 
+/* Placeholder wording when we know why a lookup could not run. */
+const FALLBACK_REASONS = {
+  [RELAY_NOT_CONFIGURED]: {
+    prefix: 'Relay not configured, so this is a placeholder.',
+    source: () => 'World Aware placeholder (relay not configured)',
+  },
+  [NO_SOURCE]: {
+    prefix: 'No public address-level source is available for this yet, so this is a placeholder.',
+    source: (src) => `World Aware placeholder (no working lookup for ${src} yet)`,
+  },
+};
+
 function _floodFallback() {
   return { score: 2, finding: `${FALLBACK_PREFIX} Check your flood zone at msc.fema.gov.`, confidence: 'Low', isFallback: true };
 }
@@ -434,11 +448,12 @@ function _landslideFallback() {
 }
 
 /* ---------------------------------------------------------------
-   API 1 — FLOOD RISK (FEMA NFHL) — 4-method waterfall
-   A: NFHL point query via proxy (primary)
-   B: FEMA MSC endpoint via proxy (fallback)
-   C: NFHL envelope query via proxy (wider net)
-   D: FEMA National Risk Index — direct fetch (CORS-friendly)
+   API 1 — FLOOD RISK (FEMA NFHL) — 3-method waterfall
+   A: NFHL point query via relay (primary)
+   B: FEMA MSC NFHL point query via relay (fallback)
+   D: FEMA National Risk Index, county level, via relay (last resort)
+   There is no envelope ("most common zone nearby") method: it could give
+   this parcel a neighbour's zone.
 --------------------------------------------------------------- */
 
 /** Parse a zone from ArcGIS features array; return null if empty. */
@@ -453,14 +468,65 @@ function _parseNFHLFeatures(feats) {
   };
 }
 
-async function _callFloodAPI(lat, lng, countyFips) {
+/** Read the first present field, trying each name as given and in lower case. */
+function _pickField(row, names) {
+  if (!row || typeof row !== 'object') return undefined;
+  for (const n of names) {
+    if (row[n] !== undefined && row[n] !== null && row[n] !== '') return row[n];
+    const lc = n.toLowerCase();
+    if (row[lc] !== undefined && row[lc] !== null && row[lc] !== '') return row[lc];
+  }
+  return undefined;
+}
+
+/** Unwrap the first record from an NRI API response of unknown envelope. */
+function _firstNRIRow(data) {
+  if (Array.isArray(data)) return data[0] || null;
+  if (!data || typeof data !== 'object') return null;
+  for (const k of ['data', 'items', 'results', 'counties']) {
+    if (Array.isArray(data[k])) return data[k][0] || null;
+  }
+  if (Array.isArray(data.features)) return data.features[0]?.attributes || data.features[0]?.properties || null;
+  return data;
+}
+
+/**
+ * County-level flood frequency from the National Risk Index.
+ * NRI annualized frequency is "recorded hazard occurrences (event-days) per
+ * year" across the whole county. It says nothing about this parcel, so the
+ * Likelihood is capped at 3 and tagged Low confidence. Since NRI v1.20 the
+ * riverine hazard may appear under the Inland Flooding prefix (IFLD); the
+ * older prefix is RFLD. Both are tried, in upper and lower case.
+ */
+function _mapNRIFloodFrequency(afreq, countyName) {
+  const f = parseFloat(afreq);
+  if (!isFinite(f) || f < 0) return null;
+  const where = countyName ? `in ${countyName}` : 'in this county';
+  let score, words;
+  if (f >= 1)        { score = 3; words = 'most years'; }
+  else if (f >= 0.1) { score = 2; words = 'some years'; }
+  else               { score = 1; words = 'rarely'; }
+  return {
+    score,
+    finding: `FEMA National Risk Index: flooding recorded ${words} ${where} ` +
+             `(about ${f < 0.1 ? f.toFixed(3) : f.toFixed(1)} event-days a year) — county-wide, not this parcel`,
+    confidence: 'Low',
+  };
+}
+
+async function _callFloodAPI(lat, lng, fips5) {
   console.log('[FEMA Flood] Starting fetch for', lat, lng);
-  const BASE = 'https://hazards.fema.gov/gis/nfhl/rest/services/public/NFHL/MapServer/28/query';
+  const BASE = API_CONFIG.FEMA_NFHL;
   const pointParams =
     `&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects` +
     `&outFields=FLD_ZONE,ZONE_SUBTY,SFHA_TF&returnGeometry=false&f=json`;
   const femaMapUrl = `https://msc.fema.gov/portal/search#${encodeURIComponent(lat + ',' + lng)}`;
   const cLat = _coarse(lat), cLng = _coarse(lng);
+
+  // Without the relay none of these can run; say so instead of "no data".
+  if (!String(API_CONFIG.RELAY_URL || '').trim()) {
+    throw _codedError(RELAY_NOT_CONFIGURED, 'Relay not configured');
+  }
 
   // ── Method A: NFHL point query ───────────────────────────
   try {
@@ -496,50 +562,19 @@ async function _callFloodAPI(lat, lng, countyFips) {
     console.warn('[FEMA Flood] Method B failed:', e.message);
   }
 
-  // ── Method C: NFHL envelope query (wider bbox) ────────────
-  try {
-    const d = 0.01;
-    const urlC =
-      `${BASE}?where=1%3D1` +
-      `&geometry=${cLng - d},${cLat - d},${cLng + d},${cLat + d}` +
-      `&geometryType=esriGeometryEnvelope&inSR=4326&spatialRel=esriSpatialRelIntersects` +
-      `&outFields=FLD_ZONE&returnGeometry=false&f=json`;
-    const dataC = await proxyFetch(urlC);
-    const feats = dataC?.features || [];
-    if (feats.length > 0) {
-      // Use most common zone in the bbox
-      const zones = feats.map(f => (f?.attributes?.FLD_ZONE || '').trim().toUpperCase()).filter(Boolean);
-      const freq  = {};
-      zones.forEach(z => { freq[z] = (freq[z] || 0) + 1; });
-      const zone  = Object.keys(freq).sort((a, b) => freq[b] - freq[a])[0] || '';
-      const r = mapFloodZoneToScore(zone, '');
-      if (r.score !== null) {
-        console.log('[FEMA Flood] Success via Method C — Zone:', zone, 'Score:', r.score);
-        return { ...r, finding: `${r.finding} (most common zone within about 1 km, not this parcel)`, femaMapUrl, confidence: 'Medium' };
-      }
-    }
-  } catch (e) {
-    console.warn('[FEMA Flood] Method C failed:', e.message);
-  }
-
-  // ── Method D: FEMA National Risk Index (CORS-friendly) ────
+  // ── Method D: FEMA National Risk Index, county level ─────
   // NRI needs the full 5-digit state+county FIPS; the 3-digit county part
   // alone is shared by about twenty counties.
-  if (countyFips && /^\d{5}$/.test(countyFips)) {
+  if (fips5 && /^\d{5}$/.test(fips5)) {
     try {
-      const urlD = `https://hazards.fema.gov/nri/api/county?fips=${countyFips}`;
-      const datD = await directFetch(urlD);
-      const row  = Array.isArray(datD) ? datD[0] : datD;
-      const rfld = parseFloat(row?.RFLD_RISKS ?? row?.rfld_risks ?? -1);
-      if (rfld >= 0) {
-        let score, finding;
-        if      (rfld >= 75) { score = 5; finding = `NRI: Very High riverine flood risk (score ${rfld.toFixed(0)}/100)`; }
-        else if (rfld >= 50) { score = 4; finding = `NRI: High riverine flood risk (score ${rfld.toFixed(0)}/100)`; }
-        else if (rfld >= 25) { score = 3; finding = `NRI: Moderate riverine flood risk (score ${rfld.toFixed(0)}/100)`; }
-        else if (rfld >= 10) { score = 2; finding = `NRI: Low riverine flood risk (score ${rfld.toFixed(0)}/100)`; }
-        else                 { score = 1; finding = `NRI: Very low riverine flood risk (score ${rfld.toFixed(0)}/100)`; }
-        console.log('[FEMA Flood] Success via Method D — NRI score:', rfld, 'Likelihood:', score);
-        return { score, finding: `${finding} — county-wide index, not this parcel`, femaMapUrl, confidence: 'Low' };
+      const urlD = `${API_CONFIG.FEMA_NRI_COUNTY}?fips=${fips5}`;
+      const row  = _firstNRIRow(await proxyFetch(urlD));
+      const afreq = _pickField(row, ['IFLD_AFREQ', 'RFLD_AFREQ']);
+      const name  = _pickField(row, ['COUNTY', 'COUNTYNAME']);
+      const r = _mapNRIFloodFrequency(afreq, name ? String(name).replace(/[<>&"]/g, '') : '');
+      if (r) {
+        console.log('[FEMA Flood] Success via Method D — NRI annualized frequency:', afreq, 'Likelihood:', r.score);
+        return { ...r, femaMapUrl };
       }
     } catch (e) {
       console.warn('[FEMA Flood] Method D failed:', e.message);
@@ -552,16 +587,16 @@ async function _callFloodAPI(lat, lng, countyFips) {
 
 /* ---------------------------------------------------------------
    API 2 — EARTHQUAKE HAZARD (USGS NEHRP)
-   Route: direct (USGS supports browser CORS natively)
+   Route: relay (the designmaps service blocks browser CORS, checked 2026-10-25)
 --------------------------------------------------------------- */
 
 async function _callEarthquakeAPI(lat, lng) {
   console.log('[USGS Earthquake] Starting fetch for', lat, lng);
   const url =
-    `${API_CONFIG.USGS_SEISMIC}?latitude=${lat}&longitude=${lng}` +
+    `${API_CONFIG.USGS_SEISMIC}?latitude=${_coarse(lat)}&longitude=${_coarse(lng)}` +
     `&riskCategory=III&siteClass=D&title=query`;
 
-  const data = await directFetch(url);
+  const data = await proxyFetch(url);
   // The NEHRP-2020 service wraps its payload as { request, response: { data } }
   // and names the value "pgam" (site-modified peak ground acceleration).
   const d   = data?.response?.data ?? data?.data;
@@ -573,25 +608,27 @@ async function _callEarthquakeAPI(lat, lng) {
 }
 
 /* ---------------------------------------------------------------
-   API 3 — WILDFIRE HAZARD POTENTIAL (USFS)
-   Route: proxy-first (USFS ArcGIS blocks browser CORS)
+   API 3 — WILDFIRE HAZARD POTENTIAL (USFS WHP 2023, 270 m)
+   Route: relay (USFS ArcGIS blocks browser CORS)
+   ImageServer identify returns { value: "4", ... } for the pixel under the
+   point, or "NoData" outside the mapped area.
 --------------------------------------------------------------- */
 
 async function _callWildfireAPI(lat, lng) {
   console.log('[USFS Wildfire] Starting fetch for', lat, lng);
+  const point = { x: _coarse(lng), y: _coarse(lat), spatialReference: { wkid: 4326 } };
   const url =
-    `${API_CONFIG.USFS_WILDFIRE}?geometry=${_coarse(lng)},${_coarse(lat)}` +
-    `&geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects` +
-    `&outFields=WHP_Label,WHP_Category&returnGeometry=false&f=json`;
+    `${API_CONFIG.USFS_WILDFIRE}?geometry=${encodeURIComponent(JSON.stringify(point))}` +
+    `&geometryType=esriGeometryPoint&returnGeometry=false&returnCatalogItems=false&f=json`;
 
   // Any failure here throws, so _tracked marks the step as failed and
   // _compileFindings applies the state fallback with an honest "Estimated" tag.
-  const data  = await proxyFetch(url);
-  const feats = Array.isArray(data?.features) ? data.features : [];
-  if (feats.length === 0) throw new Error('No USFS WHP polygon at this location');
+  const data = await proxyFetch(url);
+  const raw  = data?.value ?? data?.properties?.Values?.[0];
+  const cat  = parseInt(raw, 10);
+  if (!(cat >= 1 && cat <= 7)) throw new Error(`No USFS WHP class at this location (value: ${raw})`);
 
-  const attrs  = feats[0]?.attributes || {};
-  const result = mapWHPToScore(attrs.WHP_Label || '', attrs.WHP_Category);
+  const result = mapWHPToScore('', cat);
   console.log('[USFS Wildfire] Result:', result);
   return result;
 }
@@ -617,8 +654,8 @@ async function _callWeatherAPI(lat, lng) {
 }
 
 /* ---------------------------------------------------------------
-   API 4b — DROUGHT (NOAA Drought Monitor)
-   Route: proxy-first (Drought Monitor blocks browser CORS)
+   API 4b — DROUGHT (US Drought Monitor county statistics)
+   Route: relay (usdmdataservices blocks browser CORS)
 --------------------------------------------------------------- */
 
 function _mostRecentTuesdayStr(now) {
@@ -634,27 +671,36 @@ function _mostRecentTuesdayStr(now) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+/** M/D/YYYY in local time, the date format the Drought Monitor API wants. */
+function _usdmDate(d) {
+  return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
+}
+
 async function _callDroughtAPI(fips5) {
   if (!fips5) throw new Error('No FIPS code available');
   console.log('[Drought Monitor] Starting fetch for FIPS', fips5);
 
-  const date = _mostRecentTuesdayStr();
-  const url  =
-    `${API_CONFIG.DROUGHT_MONITOR}?mode=table&aoi=county&date=${date}&fips=${fips5}`;
+  // Five weeks back guarantees at least one published weekly map.
+  const end   = new Date();
+  const start = new Date(end.getFullYear(), end.getMonth(), end.getDate() - 35);
+  const url   =
+    `${API_CONFIG.DROUGHT_MONITOR}?aoi=${fips5}` +
+    `&startdate=${_usdmDate(start)}&enddate=${_usdmDate(end)}&statisticsType=1`;
 
+  // The relay sends Accept: application/json; without it the API returns CSV.
   const parsed = await proxyFetch(url);
+  const rows   = Array.isArray(parsed) ? parsed : [];
+  if (rows.length === 0) throw new Error('No drought data row returned');
 
-  const row = Array.isArray(parsed) ? parsed[0] : null;
-  if (!row) throw new Error('No drought data row returned');
+  // Latest week first. Dates arrive as "20261020" or ISO strings; digits sort either way.
+  const dateKey = r => String(_pickField(r, ['MapDate', 'ValidStart']) || '').replace(/\D/g, '');
+  const row = rows.slice().sort((x, y) => dateKey(y).localeCompare(dateKey(x)))[0];
 
+  const pct = k => parseFloat(_pickField(row, [k])) || 0;
   const result = mapDroughtToScore({
-    D4: parseFloat(row.D4) || 0,
-    D3: parseFloat(row.D3) || 0,
-    D2: parseFloat(row.D2) || 0,
-    D1: parseFloat(row.D1) || 0,
-    D0: parseFloat(row.D0) || 0,
+    D4: pct('D4'), D3: pct('D3'), D2: pct('D2'), D1: pct('D1'), D0: pct('D0'),
   });
-  console.log('[Drought Monitor] Result:', result);
+  console.log('[Drought Monitor] Result:', result, 'map date:', dateKey(row));
   return result;
 }
 
@@ -697,10 +743,15 @@ async function _callEPAAPI(zip) {
 
 /* ---------------------------------------------------------------
    API 6 — LANDSLIDE SUSCEPTIBILITY (USGS)
-   Route: proxy-first (ArcGIS blocks browser CORS)
+   Route: relay. No verified point-query service exists yet (see
+   API_CONFIG.USGS_LANDSLIDE), so this throws NO_SOURCE and the row stays
+   an honest placeholder until one is set.
 --------------------------------------------------------------- */
 
 async function _callLandslideAPI(lat, lng) {
+  if (!API_CONFIG.USGS_LANDSLIDE) {
+    throw _codedError(NO_SOURCE, 'No address-level landslide source configured');
+  }
   console.log('[USGS Landslide] Starting fetch for', lat, lng);
   const url =
     `${API_CONFIG.USGS_LANDSLIDE}?geometry=${_coarse(lng)},${_coarse(lat)}` +
@@ -784,12 +835,14 @@ function _compileFindings(apiResults, geocoded) {
     if (!result) {
       const fb = fallbackFn ? fallbackFn() : null;
       if (fb) {
+        // Say why when we know: relay not set up, or no source exists yet
+        const why = FALLBACK_REASONS[(_research.failCodes || {})[_apiKey]];
         findings.push({
           hazardId, hazardName, category,
           scoreAssigned: fb.score,
           // An estimate is a World Aware placeholder, not the named data source
-          source: `World Aware placeholder (${source} did not respond)`,
-          finding: fb.finding,
+          source: why ? why.source(source) : `World Aware placeholder (${source} did not respond)`,
+          finding: why ? String(fb.finding).replace(FALLBACK_PREFIX, why.prefix) : fb.finding,
           confidence: 'Low',
           status: 'estimated',
           isOverridden: false,
@@ -835,7 +888,7 @@ function _compileFindings(apiResults, geocoded) {
     () => _quakeFallback(stateAbbr));
 
   // ── WILDFIRE + WUI + AQ boost ────────────────────────────
-  const whpSrc = 'USFS Wildfire Hazard Potential dataset — national fuel/landscape conditions';
+  const whpSrc = 'USFS Wildfire Hazard Potential 2023 (270 m) — national fuel/landscape conditions';
   addFinding(H_ID.WILDFIRE, 'Wildfire', 'Natural Hazards', 'wildfire', wildfire, whpSrc,
     () => _wildfireFallback(stateAbbr));
   addFinding(H_ID.WUI, 'Wildland-Urban Interface Encroachment', 'Other & Human-Caused',
@@ -848,13 +901,16 @@ function _compileFindings(apiResults, geocoded) {
   const epaHigh  = epa?.highHazardCount || 0;
   const aqResult = _deriveAirQualityScore(whpScore, epaHigh, stateAbbr);
   const aqDerivedFromData = !!(wildfire && epa);
+  const aqRelayOff = !wildfire && (_research.failCodes || {}).wildfire === RELAY_NOT_CONFIGURED;
   findings.push({
     hazardId: H_ID.AIR_QUALITY, hazardName: 'Air Quality Crisis', category: 'Industrial & CBRN',
     scoreAssigned: aqResult.score,
     source: aqDerivedFromData
       ? 'Derived from USFS wildfire hazard and EPA TRI industrial proximity'
+      : aqRelayOff ? FALLBACK_REASONS[RELAY_NOT_CONFIGURED].source()
       : 'World Aware placeholder (wildfire or industrial data did not respond)',
-    finding:    aqDerivedFromData ? aqResult.finding : `${FALLBACK_PREFIX} ${aqResult.finding}`,
+    finding:    aqDerivedFromData ? aqResult.finding
+      : `${aqRelayOff ? FALLBACK_REASONS[RELAY_NOT_CONFIGURED].prefix : FALLBACK_PREFIX} ${aqResult.finding}`,
     confidence: aqDerivedFromData ? aqResult.confidence : 'Low',
     status: aqDerivedFromData ? 'success' : 'estimated', isOverridden: false,
   });
@@ -975,6 +1031,7 @@ function _tracked(stepId, apiPromise) {
     })
     .catch(err => {
       console.warn(`[Research] ${stepId} failed:`, err.message);
+      if (err && err.code) _research.failCodes[stepId] = err.code;
       _setStep(stepId, 'error');
       return null;   // null signals "_compileFindings" to use fallback
     });
@@ -1002,6 +1059,7 @@ async function startResearch() {
   _research.geocoded   = null;
   _research.findings   = [];
   _research.hasResults = false;
+  _research.failCodes  = {};
   STEPS.forEach(s => { _research.stepStatuses[s.id] = 'pending'; });
 
   // Show loading UI
@@ -1031,7 +1089,7 @@ async function startResearch() {
   ['flood','earthquake','wildfire','weather','drought','epa','airquality','landslide']
     .forEach(id => _setStep(id, 'running'));
 
-  const { lat, lng, zip, fips5, countyFips } = geocoded;
+  const { lat, lng, zip, fips5 } = geocoded;
 
   console.log('[Research] Starting parallel API calls for lat:', lat, 'lng:', lng, 'zip:', zip, 'fips5:', fips5);
 
@@ -1039,7 +1097,7 @@ async function startResearch() {
   // and resolve it after the other calls finish
   const [flood, earthquake, wildfire, weather, drought, epa, landslide] =
     await Promise.all([
-      _tracked('flood',      _callFloodAPI(lat, lng, countyFips)),
+      _tracked('flood',      _callFloodAPI(lat, lng, fips5)),
       _tracked('earthquake', _callEarthquakeAPI(lat, lng)),
       _tracked('wildfire',   _callWildfireAPI(lat, lng)),
       _tracked('weather',    _callWeatherAPI(lat, lng)),

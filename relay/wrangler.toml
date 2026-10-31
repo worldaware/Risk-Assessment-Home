@@ -1,0 +1,12 @@
+# Cloudflare Worker settings for the World Aware hazard-data relay.
+# Deploy from this folder with:  wrangler deploy
+name = "wa-risk-relay"
+main = "worker.js"
+compatibility_date = "2025-09-01"
+workers_dev = true
+
+# Privacy: keep request logging off. Workers Logs would store every request
+# URL, and those URLs carry the coordinates of a home. Do not turn this on,
+# and do not add a Logpush job for this Worker in the Cloudflare dashboard.
+[observability]
+enabled = false
