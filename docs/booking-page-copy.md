@@ -32,7 +32,6 @@ The risk check on your phone tells you which hazards to worry about. It can't se
 
 Contact us to schedule a walk-through.
 
-Typical range: **Henry to fill in**
 
 ## Who it is for
 
@@ -80,7 +79,7 @@ I run the World Aware risk check live with your neighbors in the room. Everyone 
 
 The board gets a written summary afterward with the hazards the neighborhood ranked highest, the steps households can take on their own, and the few that work better done together, like clearing common areas or agreeing on a meeting point.
 
-Workshop length: **Henry to fill in**
+Workshop length: 2 hours
 
 Cost: set with the board. Typical range: **Henry to fill in**
 
