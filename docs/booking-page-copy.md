@@ -2,7 +2,7 @@
 
 Text for a Squarespace page. Section headings below are suggestions for page blocks; everything under them is the copy to paste. Lines marked **Henry to fill in** have no source yet and need your numbers before the page goes live.
 
-When the page is live, change `BOOKING_URL` at the top of `app.js` to `https://beworldaware.com/walkthrough` so the app's "Book a walk-through" buttons land here.
+The app's "Contact us" buttons currently point at the Say Hello form at https://www.beworldaware.com/aboutus (`BOOKING_URL` at the top of `app.js`). If this page goes live at its own address, change that constant to match.
 
 ---
 
@@ -30,7 +30,7 @@ The risk check on your phone tells you which hazards to worry about. It can't se
 
 ## What it costs
 
-Sliding scale. Tell me what you can pay.
+Contact us to schedule a walk-through.
 
 Typical range: **Henry to fill in**
 
@@ -82,7 +82,7 @@ The board gets a written summary afterward with the hazards the neighborhood ran
 
 Workshop length: **Henry to fill in**
 
-Cost: sliding scale, set with the board. Typical range: **Henry to fill in**
+Cost: set with the board. Typical range: **Henry to fill in**
 
 Good for annual meetings, a board work session, or a standalone evening for residents.
 
@@ -104,5 +104,5 @@ Bring a workshop to your HOA
 
 **Home and HOA walk-throughs**
 I come to your property in Boulder County, check your risk scores against what is actually there, and leave a written plan in the order to do it.
-For households and HOA boards. Sliding scale; tell me what you can pay.
-[Book a walk-through](https://beworldaware.com/walkthrough)
+For households and HOA boards. Contact us to schedule a walk-through.
+[Contact us](https://www.beworldaware.com/aboutus)

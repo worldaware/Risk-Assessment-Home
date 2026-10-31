@@ -4,11 +4,10 @@
    ============================================================= */
 
 // Bump this with every release (keep in step with APP_VERSION in app.js).
-// v2.3.0: new js/importValidator.js (Import from JSON).
 // v2.2.0: stop caching cross-origin API responses; the old cache held addresses.
 // v2.3.0: owned relay; flood and wildfire from CORS-enabled copies.
-// v2.3.0: default action items (js/actions.js) and the walk-through card.
-const CACHE_NAME = 'wa-risk-v2.3.0';
+// v2.4.0: Import from JSON, Continue card, default action items, walk-through card, share text, custom-domain guide.
+const CACHE_NAME = 'wa-risk-v2.4.0';
 
 // App shell files to cache on install
 const APP_SHELL = [

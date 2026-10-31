@@ -563,7 +563,7 @@ async function buildReportPDF() {
   para('This is a planning-level screen. It is not a home inspection, an engineering assessment, an insurance appraisal, or an official flood or fire determination. For a flood determination use msc.fema.gov or your lender. For wildfire, ask your fire district. For coverage, ask your insurance agent.', { size: 9.5, color: C.muted });
 
   // ── If you want more than a screen ────────────────────────
-  const moreText = 'This report can\'t see your roof vents or the five feet around your house. It doesn\'t know whether your insurance would rebuild at today\'s prices, or how your street gets out if the main road closes. Those take someone on site. World Aware does home and HOA walk-throughs in Boulder County on a sliding scale. beworldaware.com';
+  const moreText = 'This report can\'t see your roof vents or the five feet around your house. It doesn\'t know whether your insurance would rebuild at today\'s prices, or how your street gets out if the main road closes. Those take someone on site. World Aware does home and HOA walk-throughs in Boulder County. Contact us to schedule a walk-through: beworldaware.com/aboutus';
   heading('If you want more than a screen', measure(moreText, 10.5, W) + 8);
   para(moreText, { after: 4 });
 

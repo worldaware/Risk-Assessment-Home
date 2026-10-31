@@ -39,7 +39,8 @@ function buildShareText(data, edits) {
   const where = shareStreetAndCity(data.location);
   const when = data.dateDisplay || data.date || '';
   const lines = [];
-  lines.push([`${who}: hazard check`, where, when ? `(${when})` : ''].filter(Boolean).join(', '));
+  // "Our household: hazard check, Broadway, Boulder CO (October 31, 2026)"; no stray comma when there is no address
+  lines.push([`${who}: hazard check`, where].filter(Boolean).join(', ') + (when ? ` (${when})` : ''));
   lines.push('Each hazard is scored out of 25: how likely it is here, times how badly it would hit us.');
 
   const critical = scored.filter(it => it.level === 'CRITICAL');

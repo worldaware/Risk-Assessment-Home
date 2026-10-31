@@ -7,10 +7,10 @@
 
 // Single source of truth for the version shown in About, the JSON export and the console.
 // Keep sw.js CACHE_NAME in step with it when shipping.
-const APP_VERSION = '2.3.0';
+const APP_VERSION = '2.4.0';
 
-// Where "Book a walk-through" links go. Henry will change this to the booking page once it exists.
-const BOOKING_URL = 'https://beworldaware.com';
+// Where every "Contact us" link goes: the Say Hello form on beworldaware.com.
+const BOOKING_URL = 'https://www.beworldaware.com/aboutus';
 
 /* ---------------------------------------------------------------
    CONSTANTS & CONFIGURATION
@@ -1477,9 +1477,9 @@ function walkthroughCtaHtml(top, rl) {
   return `
       <aside class="cta-card" aria-labelledby="cta-card-title">
         <h3 id="cta-card-title">${escHtml(top.name)} came out ${escHtml(rl.label.toLowerCase())}.</h3>
-        <p>The score says what to worry about. It can't see your roof vents, the five feet around your house, or whether your insurance would rebuild at today's prices. A home walk-through can: Henry comes to the property, checks these numbers against what is there, and leaves a written plan in the order to do it. Sliding scale.</p>
+        <p>The score says what to worry about. It can't see your roof vents, the five feet around your house, or whether your insurance would rebuild at today's prices. A home walk-through can: Henry comes to the property, checks these numbers against what is there, and leaves a written plan in the order to do it. Contact us to schedule a walk-through.</p>
         <div class="cta-card-actions">
-          <a class="btn btn-amber" href="${escHtml(BOOKING_URL)}" target="_blank" rel="noopener">${ic('external-link')} Book a walk-through</a>
+          <a class="btn btn-amber" href="${escHtml(BOOKING_URL)}" target="_blank" rel="noopener">${ic('external-link')} Contact us</a>
           <a class="cta-card-ghost" href="${escHtml(BOOKING_URL)}" target="_blank" rel="noopener">Bring a workshop to your HOA</a>
         </div>
       </aside>`;
