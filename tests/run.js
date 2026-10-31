@@ -214,7 +214,8 @@ async function asyncChecks() {
       check('GET allowed target: 200 with ACAO for our origin', r.status === 200 && r.headers.get('Access-Control-Allow-Origin') === ORIGIN);
       check('passes upstream body and content type', (await r.text()) === '{"ok":1}' && /application\/json/.test(r.headers.get('Content-Type')));
       check('Cache-Control public, max-age=3600', r.headers.get('Cache-Control') === 'public, max-age=3600');
-      check('upstream gets Accept: application/json', seen && seen.init.headers.Accept === 'application/json');
+      check('upstream Accept prefers application/json', seen && /^application\/json/.test(seen.init.headers.Accept));
+      check('upstream gets the relay User-Agent', seen && /WorldAwareRiskRelay/.test(seen.init.headers['User-Agent'] || ''));
       check('upstream gets no Referer', seen && !('Referer' in seen.init.headers) && !('referer' in seen.init.headers));
       check('upstream URL is the decoded target', seen && seen.url === target);
 
