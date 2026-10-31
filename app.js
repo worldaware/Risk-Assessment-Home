@@ -170,6 +170,48 @@ const HAZARD_DATA = [
 const RETIRED_HAZARD_IDS = [14, 16, 19, 21, 25, 26, 28, 29, 30, 31, 32, 33, 34, 35, 37, 38, 39, 40, 41, 42,
   43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 55, 56, 57, 58, 59];
 
+// For each retired id: its v2 name, and the v3 hazard that takes its notes.
+// Merged ids follow the "absorbs" list in the v3 spec. Ids that moved to the
+// household checklist have no absorbing hazard, so their notes go to the core
+// hazard they were a consequence of (a judgment call; see v3 build report).
+const RETIRED_HAZARDS = {
+  14: ['Dust Storm / Haboob', 23],
+  16: ['Hazmat Transportation Incident', 15],
+  19: ['Agricultural Chemical Drift', 15],
+  21: ['Wastewater / Sewage Release', 27],
+  25: ['Short-Term Power Outage (<3 days)', 24],
+  26: ['Natural Gas Service Interruption', 17],
+  28: ['Wastewater / Sewer Failure', 4],
+  29: ['Internet / Broadband Outage', 24],
+  30: ['Cell Network Failure', 24],
+  31: ['Landline / VOIP Outage', 24],
+  32: ['Emergency Services Overwhelmed', 36],
+  33: ['Hospital / Medical Facility Closure', 22],
+  34: ['School / Childcare Closure', 22],
+  35: ['Public Transit Disruption', 36],
+  37: ['Water Main Break', 27],
+  38: ['Fuel Supply Disruption', 36],
+  39: ['Dam Failure / Reservoir Release', 4],
+  40: ['Levee Failure', 3],
+  41: ['Electrical Grid Substation Failure', 24],
+  42: ['Building / Structural Failure', 2],
+  43: ['Stormwater / Drainage System Failure', 4],
+  44: ['Cyber Attack on Critical Infrastructure', 24],
+  45: ['Food Supply Shortage', 22],
+  46: ['Medication / Pharmaceutical Shortage', 22],
+  47: ['Medical Equipment Shortage', 24],
+  48: ['Fuel / Energy Supply Disruption', 8],
+  49: ['Building Materials Shortage', 1],
+  50: ['Bottled Water / Purification Supply Shortage', 27],
+  51: ['Electronic / Battery Supply Shortage', 24],
+  52: ['Cash / Banking System Disruption', 24],
+  55: ['Wildland-Urban Interface Encroachment', 1],
+  56: ['Economic Shock / Job Loss', 22],
+  57: ['Housing Instability / Displacement', 1],
+  58: ['Animal / Livestock Disease Outbreak', 22],
+  59: ['Extreme Isolation / Evacuation Difficulty', 36],
+};
+
 // The three groups on the Assess screen, in order. The household checklist
 // card sits above them (js/checklist.js).
 const HAZARD_GROUPS = [
@@ -351,6 +393,10 @@ function autoSave() {
   updateProgress();
 }
 
+// Set by loadCurrentState when an old saved state was folded into the v3 list;
+// shown as a toast once the page is up.
+let _pendingMigrationNotice = '';
+
 /**
  * Load state from localStorage.
  */
@@ -368,8 +414,10 @@ function loadCurrentState() {
       // Pre-v2 states have no assessmentId; the one generated below must be
       // saved right away or report edits keyed to it are lost on reload.
       if (!parsed || !parsed.assessmentId || !parsed.checklist) needsSave = true;
-      state = normalizeState(parsed);
+      const info = {};
+      state = normalizeState(parsed, info);
       if (typeof applyChecklistImpacts === 'function') applyChecklistImpacts(state);
+      if (info.merged > 0) { needsSave = true; _pendingMigrationNotice = migrationNoticeText(info); }
     } catch (e) {
       console.warn('Could not parse saved state', e);
       needsSave = true;
@@ -380,17 +428,30 @@ function loadCurrentState() {
       localStorage.setItem('wa_current_state', JSON.stringify(state));
     } catch (e) { /* storage unavailable */ }
   }
+  purgeRetiredReportNotes();
 }
 
 /**
  * Merge a (possibly older) saved state onto current defaults.
- * Score entries and research sources for hazards no longer in HAZARD_DATA
- * (the v2 ids retired in v3.0.0) are dropped. A state from before v3 (no
- * checklist) is migrated: impacts already rated on core hazards are kept as
- * set by hand, and the naDefault hazards nobody rated are ruled out.
- * Checklist impacts are not applied here; callers run applyChecklistImpacts().
+ *
+ * Hazards retired in v3.0.0: a user note on one is carried onto the hazard
+ * that absorbed it ("From <old name>: ..."), then the entry is dropped, along
+ * with its research source and findings.
+ *
+ * A state from before v3 (no checklist key) is also migrated: impacts already
+ * rated on core hazards are kept as set by hand, and hurricane, tsunami and
+ * volcanic ash are ruled out unless the user rated them or research placed
+ * the address outside Colorado. A research-only likelihood (isAuto) on them
+ * does not count as rated.
+ *
+ * `info`, when given, is filled with { merged, notesCarried } so callers can
+ * tell the user. Checklist impacts are not applied here; callers run
+ * applyChecklistImpacts().
  */
-function normalizeState(parsed) {
+function normalizeState(parsed, info) {
+  info = info || {};
+  info.merged = 0;
+  info.notesCarried = 0;
   const base = defaultState();
   const preV3 = !!parsed && typeof parsed === 'object' && !Object.prototype.hasOwnProperty.call(parsed, 'checklist');
   const merged = Object.assign(base, parsed || {});
@@ -406,7 +467,26 @@ function normalizeState(parsed) {
     if (obj && typeof obj === 'object') Object.keys(obj).forEach(k => { if (known.has(String(k))) out[k] = obj[k]; });
     return out;
   };
-  merged.scores           = keepKnown(merged.scores);
+
+  // Carry notes from retired hazards before their entries are dropped
+  const oldScores = (merged.scores && typeof merged.scores === 'object') ? merged.scores : {};
+  merged.scores = keepKnown(oldScores);
+  Object.keys(oldScores).forEach(k => {
+    const old = RETIRED_HAZARDS[k];
+    const e = oldScores[k];
+    if (!old || !e || typeof e !== 'object') return;
+    const note = userNotes(e).trim();
+    const rated = ['l', 'i', 'l2', 'i2'].some(f => (parseInt(e[f]) || 0) > 0);
+    if (rated || note) info.merged++;
+    if (!note) return;
+    const target = merged.scores[old[1]] || (merged.scores[old[1]] = {});
+    const line = `From ${old[0]}: ${note}`;
+    const existing = userNotes(target);
+    if (existing.includes(line)) return;
+    target.notes = existing.trim() ? `${existing.trim()}\n${line}` : line;
+    info.notesCarried++;
+  });
+
   merged.autoScoreOrigins = keepKnown(merged.autoScoreOrigins);
   if (merged.researchReport && Array.isArray(merged.researchReport.findings)) {
     merged.researchReport = Object.assign({}, merged.researchReport, {
@@ -415,19 +495,52 @@ function normalizeState(parsed) {
   }
 
   if (preV3) {
+    const researched = String(merged.researchReport?.geocoded?.stateAbbr || '').toUpperCase();
+    const inColoradoOrUnknown = !researched || researched === 'CO';
     HAZARD_DATA.forEach(h => {
       const e = merged.scores[h.id];
       if (h.group === 'core' && e) {
         if ((parseInt(e.i) || 0) > 0)  e.iManual = true;
         if ((parseInt(e.i2) || 0) > 0) e.i2Manual = true;
       }
-      if (h.naDefault) {
-        const rated = e && ['l', 'i', 'l2', 'i2'].some(f => (parseInt(e[f]) || 0) > 0);
-        if (!rated) merged.scores[h.id] = Object.assign(e || {}, { na: true, naAuto: true });
+      if (h.naDefault && inColoradoOrUnknown) {
+        // A likelihood research wrote on its own (isAuto) is not the user's rating
+        const rated = !!e && (((parseInt(e.l) || 0) > 0 && !e.isAuto) ||
+          ['i', 'l2', 'i2'].some(f => (parseInt(e[f]) || 0) > 0));
+        if (rated) return;
+        const entry = e || {};
+        if (entry.isAuto) {
+          entry.l = 0;
+          delete entry.isAuto;
+          delete entry.isEstimate;
+          delete merged.autoScoreOrigins[h.id];
+        }
+        merged.scores[h.id] = Object.assign(entry, { na: true, naAuto: true });
       }
     });
   }
   return merged;
+}
+
+/** Toast text after old ratings were folded into the v3 list, or '' when nothing moved. */
+function migrationNoticeText(info) {
+  if (!info || !(info.merged > 0)) return '';
+  return `Your saved ratings were moved to the new shorter hazard list; ${info.merged} item${info.merged === 1 ? ' was' : 's were'} merged.` +
+    (info.notesCarried > 0 ? ' Notes were kept.' : '');
+}
+
+/** Report notes keyed by retired hazard ids belong to rows that no longer exist. */
+function purgeRetiredReportNotes() {
+  if (typeof _readAllReportEdits !== 'function' || typeof _writeAllReportEdits !== 'function') return 0;
+  const all = _readAllReportEdits();
+  let removed = 0;
+  Object.keys(all).forEach(aid => {
+    const notes = all[aid] && all[aid].notes;
+    if (!notes || typeof notes !== 'object') return;
+    Object.keys(notes).forEach(k => { if (RETIRED_HAZARDS[k]) { delete notes[k]; removed++; } });
+  });
+  if (removed) _writeAllReportEdits(all);
+  return removed;
 }
 
 /* ---------------------------------------------------------------
@@ -512,7 +625,7 @@ function renderContinueCard() {
   const text = document.getElementById('home-continue-text');
   if (!card || !text) return;
   const scored = countScored();
-  if (!(scored > 0 || state.location)) {
+  if (!_isDirtyAssessment()) {
     card.classList.add('hidden');
     return;
   }
@@ -683,7 +796,7 @@ function getResearchFlaggedIds() {
   const ids = new Set();
   Object.keys(state.scores || {}).forEach(k => { if (state.scores[k]?.isAuto) ids.add(parseInt(k)); });
   Object.keys(state.autoScoreOrigins || {}).forEach(k => ids.add(parseInt(k)));
-  return [...ids].filter(id => (parseInt(state.scores[id]?.l) || 0) > 0).sort((a, b) => a - b);
+  return [...ids].filter(id => (parseInt(state.scores[id]?.l) || 0) > 0 && !state.scores[id]?.na).sort((a, b) => a - b);
 }
 
 /** A research-flagged hazard with a likelihood but no impact yet. */
@@ -912,15 +1025,12 @@ function buildHazardRow(hazard) {
     <div class="hazard-top">
       <div class="hazard-title">
         <div class="hazard-name-wrap">
-          <strong class="hazard-name">${escHtml(displayName)}</strong>
-          ${autoScoreBadgeHtml}
-          <button type="button" class="desc-toggle" onclick="toggleDesc(${hazard.id})" aria-label="Toggle description" aria-expanded="false" aria-controls="desc-${hazard.id}">
-            ${ic('info', 'desc-icon')}
-          </button>
+          <strong class="hazard-name">${escHtml(displayName)}</strong><button type="button" class="desc-toggle" onclick="toggleDesc(${hazard.id})" aria-label="Toggle description" aria-expanded="false" aria-controls="desc-${hazard.id}">${ic('info', 'desc-icon')}</button>
         </div>
+        ${autoScoreBadgeHtml}
         <div class="hazard-desc hidden" id="desc-${hazard.id}">${escHtml(displayDesc)}</div>
       </div>
-      <div class="score-block">${na ? '<span class="badge b-unrated">Ruled out</span>' : scoreBlockHtml(score)}</div>
+      <div class="score-block">${na ? RULED_OUT_BADGE : scoreBlockHtml(score)}</div>
     </div>
     ${naHtml}
     <div class="rate-impact-flag" id="rate-impact-${hazard.id}">
@@ -935,6 +1045,8 @@ function buildHazardRow(hazard) {
 
   return row;
 }
+
+const RULED_OUT_BADGE = '<span class="badge b-ruled-out">Ruled out</span>';
 
 /** Big score number with its risk badge (or the Not rated badge). */
 function scoreBlockHtml(score) {
@@ -1056,6 +1168,9 @@ function resetImpactToChecklist(hazardId, field) {
   applyChecklistImpacts();
   updateRowScore(hazardId);
   autoSave();
+  // The link that had focus is gone; keep the keyboard on this picker
+  const seg = document.querySelector(`#hazard-row-${hazardId} .picker[data-field="${field}"] .seg.on`);
+  if (seg) { try { seg.focus({ preventScroll: true }); } catch (err) { /* ignore */ } }
 }
 
 /** Rebuild one row in place (after "Does not apply here" or Undo). */
@@ -1135,7 +1250,7 @@ function updateRowScore(hazardId) {
 
   // Update main score block
   const block = row.querySelector('.score-block');
-  if (block) block.innerHTML = isNA(hazardId) ? '<span class="badge b-unrated">Ruled out</span>' : scoreBlockHtml(score);
+  if (block) block.innerHTML = isNA(hazardId) ? RULED_OUT_BADGE : scoreBlockHtml(score);
 
   // Neighborhood sub-scores
   if (state.assessmentType === 'neighborhood') {
@@ -1310,13 +1425,16 @@ function formatLIText(it) {
     return `Likelihood ${it.l} (${LIKELIHOOD_LABELS[it.l] || ''}) × Impact ${it.i} (${IMPACT_LABELS[it.i] || ''})`;
   }
   const names = [state.hh1Name || 'Household 1', state.hh2Name || 'Household 2'];
-  const pairs = [[it.l, it.i], [it.l2, it.i2]];
+  // An impact the checklist filled in is not a rating; only one set by hand
+  // (iManual / i2Manual, or any impact on a hazard the checklist does not
+  // cover) is worth saying "likelihood not rated" about.
+  const pairs = [[it.l, it.i, it.iManual], [it.l2, it.i2, it.i2Manual]];
   const parts = [];
   let full = 0;
-  pairs.forEach(([l, i], idx) => {
+  pairs.forEach(([l, i, byHand], idx) => {
     if (l > 0 && i > 0) { parts.push(`${names[idx]}: L${l} × I${i} = ${l * i}`); full++; }
     else if (l > 0)     { parts.push(`${names[idx]}: L${l}, impact not rated`); }
-    else if (i > 0)     { parts.push(`${names[idx]}: I${i}, likelihood not rated`); }
+    else if (i > 0 && byHand !== false) { parts.push(`${names[idx]}: I${i}, likelihood not rated`); }
   });
   if (full === 2) parts.push(`higher of the two: ${it.score}`);
   return parts.join('; ');
@@ -1336,11 +1454,15 @@ function buildReportData() {
     const score = calcScore(h.id);
     const rl = getRiskLevel(score);
     const origin = researchIds.has(h.id) ? getResearchOrigin(h.id) : null;
+    const core = h.group === 'core';
     return {
       id: h.id,
       name: hazardDisplayName(h),
       category: h.category,
       score,
+      // Impact set by hand (always true off the checklist's core list)
+      iManual:  core ? e.iManual === true : true,
+      i2Manual: core ? e.i2Manual === true : true,
       level: rl ? rl.key : '',
       rl,
       l: parseInt(e.l) || 0,
@@ -1387,7 +1509,9 @@ function buildReportData() {
   let research = null;
   const rr = state.researchReport;
   if (rr && Array.isArray(rr.findings)) {
-    const used = rr.findings.filter(f => f.scoreAssigned !== null && f.scoreAssigned !== undefined);
+    // Ruled-out hazards were never applied, so they are not counted as research
+    const live = rr.findings.filter(f => !isNA(f.hazardId));
+    const used = live.filter(f => f.scoreAssigned !== null && f.scoreAssigned !== undefined);
     const conf = { High: 0, Medium: 0, Low: 0 };
     used.forEach(f => { if (conf[f.confidence] !== undefined) conf[f.confidence]++; });
     // Only sources that actually answered are listed as sources
@@ -1399,8 +1523,8 @@ function buildReportData() {
       stateAbbr: rr.geocoded?.stateAbbr || '',
       timestamp: rr.timestamp || '',
       findingCount: used.length,
-      estimatedCount: rr.findings.filter(f => f.status === 'estimated').length,
-      unavailableCount: rr.findings.filter(f => f.status === 'error').length,
+      estimatedCount: live.filter(f => f.status === 'estimated').length,
+      unavailableCount: live.filter(f => f.status === 'error').length,
       confidence: conf,
       sources,
     };
@@ -1748,16 +1872,18 @@ function loadAssessment(id) {
   const save = saves[id];
   if (!save) return;
   const go = () => {
-    state = normalizeState(save.state);
+    const info = {};
+    state = normalizeState(save.state, info);
     applyChecklistImpacts(state);
     // Drop any in-memory research from the previous assessment so its address
     // and likelihoods cannot be applied on top of the one just loaded.
     if (typeof resetResearchUI === 'function') resetResearchUI();
     autoSave();
     showScreen('assessment');
+    const notice = migrationNoticeText(info);
+    if (notice) showToast(notice, 8000);
   };
-  const dirty = countScored() > 0 || !!state.location || !!state.researchReport;
-  if (dirty) {
+  if (_isDirtyAssessment()) {
     showConfirm('Load this saved copy? The assessment you are working on now will be replaced. Save a copy first if you want to keep it.', go, { confirmLabel: 'Load and replace' });
   } else {
     go();
@@ -1771,6 +1897,20 @@ function deleteAssessment(id) {
     try { localStorage.setItem('wa_saves', JSON.stringify(saves)); } catch (e) { /* ignore */ }
     renderSavedList();
   }, { confirmLabel: 'Delete this copy' });
+}
+
+/** Hazards done in a saved copy, counted the v3 way (older copies stored a v2 count). */
+function _savedDoneCount(save) {
+  const prev = state;
+  try {
+    state = normalizeState(save && save.state);
+    applyChecklistImpacts(state);
+    return countScored();
+  } catch (e) {
+    return save && save.scored != null ? save.scored : 0;
+  } finally {
+    state = prev;
+  }
 }
 
 function renderSavedList() {
@@ -1798,7 +1938,7 @@ function renderSavedList() {
       <div class="saved-item">
         <div class="saved-item-info">
           <strong>${escHtml(s.location || 'No address')}</strong>
-          <span class="saved-meta">${s.type === 'neighborhood' ? 'Neighborhood' : 'Household'}. ${escHtml(String(s.scored ?? 0))} hazards scored. ${escHtml(when)}</span>
+          <span class="saved-meta">${s.type === 'neighborhood' ? 'Neighborhood' : 'Household'}. ${escHtml(String(_savedDoneCount(s)))} hazards done. ${escHtml(when)}</span>
         </div>
         <div class="saved-item-actions">
           <button class="btn btn-secondary btn-small" onclick="loadAssessment('${escHtml(k)}')">Load</button>
@@ -1858,7 +1998,8 @@ function applyImport(res) {
     showToast('Could not save a copy: storage is unavailable or full. Export your work as a backup, then try again.', 6000);
     return;
   }
-  const next = normalizeState(res.state);
+  const info = {};
+  const next = normalizeState(res.state, info);
   // Never reuse the id of the assessment being replaced: its copy and its report edits stay separate.
   if (!res.state.assessmentId || res.state.assessmentId === state.assessmentId) next.assessmentId = _newAssessmentId();
 
@@ -1877,8 +2018,11 @@ function applyImport(res) {
   autoSave();
   renderSavedList();
   if (res.warnings && res.warnings.length) console.warn('Import adjustments:', res.warnings);
-  showToast(`Imported: ${state.location || (state.assessmentType === 'neighborhood' ? 'Neighborhood assessment' : 'Household assessment')}` +
-    (res.warnings && res.warnings.length ? '. Some values were adjusted.' : ''));
+  const notice = migrationNoticeText(info);
+  const otherWarnings = (res.warnings || []).filter(w => !/merged or moved|merged in v3/.test(w));
+  showToast(`Imported: ${state.location || (state.assessmentType === 'neighborhood' ? 'Neighborhood assessment' : 'Household assessment')}.` +
+    (notice ? ' ' + notice : '') +
+    (otherWarnings.length ? ' Some values were adjusted.' : ''), notice || otherWarnings.length ? 8000 : 4000);
   showScreen('assessment');
 }
 
@@ -2204,6 +2348,8 @@ document.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('beforeprint', () => {
     if (typeof renderReportView === 'function') renderReportView();
   });
+
+  if (_pendingMigrationNotice) { showToast(_pendingMigrationNotice, 8000); _pendingMigrationNotice = ''; }
 
   console.log(`World Aware Risk Assessment v${APP_VERSION} loaded.`);
   console.log(`${HAZARD_DATA.length} hazards loaded.`);

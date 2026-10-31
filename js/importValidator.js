@@ -20,9 +20,15 @@
    - results[] in the file is a human-readable summary and is ignored.
    - v3.0.0: score entries may carry na, naAuto, iManual and i2Manual
      (booleans), and the file may carry checklist { hh1: { 1..12: bool },
-     hh2: {...} }. Scores and research findings for hazard ids retired in
-     v3 (RETIRED_HAZARD_IDS in app.js) are skipped with a warning, so a v2
-     export still imports.
+     hh2: {...} }. Score entries for hazard ids retired in v3
+     (RETIRED_HAZARD_IDS in app.js) keep only ratings and notes, so
+     normalizeState() can carry the notes onto the hazard that absorbed them
+     before dropping the entry. Research findings for retired ids are
+     skipped. Both produce a warning, so a v2 export still imports.
+   - naAuto is kept only with na on a hazard that arrives ruled out
+     (naDefault); na is dropped on custom hazards.
+   - A file whose version is 3 or later and has no checklist gets an empty
+     one, so it is never migrated as a v2 file.
    ============================================================= */
 
 'use strict';
@@ -43,6 +49,13 @@ function _impIsPlain(v) {
 function _impHazardIds(opts) {
   if (opts && Array.isArray(opts.hazardIds)) return opts.hazardIds.map(String);
   if (typeof HAZARD_DATA !== 'undefined' && Array.isArray(HAZARD_DATA)) return HAZARD_DATA.map(h => String(h.id));
+  return [];
+}
+
+/** Hazard ids that arrive ruled out (naDefault): from HAZARD_DATA when loaded, else an explicit list. */
+function _impNaDefaultIds(opts) {
+  if (opts && Array.isArray(opts.naDefaultIds)) return opts.naDefaultIds.map(String);
+  if (typeof HAZARD_DATA !== 'undefined' && Array.isArray(HAZARD_DATA)) return HAZARD_DATA.filter(h => h.naDefault).map(h => String(h.id));
   return [];
 }
 
@@ -104,6 +117,7 @@ function validateImport(obj, opts) {
   const hazardIds = new Set(_impHazardIds(opts));
   const customIds = new Set(_impCustomIds(opts));
   const retiredIds = new Set(_impRetiredIds(opts));
+  const naDefaultIds = new Set(_impNaDefaultIds(opts));
   const idOk = k => /^\d{1,2}$/.test(k) && hazardIds.has(String(parseInt(k, 10))) && String(parseInt(k, 10)) === k;
 
   /** Read an optional string field. Returns undefined when absent. */
@@ -164,24 +178,28 @@ function validateImport(obj, opts) {
     errors.push('"scores" is missing or is not the right shape.');
   } else {
     st.scores = {};
-    let dropped = 0, retired = 0;
+    let dropped = 0, retired = 0, flagsDropped = 0;
     Object.keys(obj.scores).forEach(k => {
-      if (retiredIds.has(k)) { retired++; return; }
-      if (!idOk(k)) { dropped++; return; }
+      const isRetired = retiredIds.has(k);
+      if (!isRetired && !idOk(k)) { dropped++; return; }
       const e = obj.scores[k];
       if (!_impIsPlain(e)) { errors.push(`The score for hazard ${k} is not the right shape.`); return; }
       const out = {};
       ['l', 'i', 'l2', 'i2'].forEach(f => { if (_impHas(e, f)) out[f] = rating(e[f]); });
       const notes = str(e, 'notes', `notes for hazard ${k}`, IMPORT_NOTE_MAX);
       if (notes !== undefined) out.notes = notes;
+      if (isRetired) { retired++; st.scores[k] = out; return; }   // normalizeState carries the notes, then drops it
       ['isAuto', 'isEstimate', 'na', 'naAuto', 'iManual', 'i2Manual'].forEach(f => {
         const b = bool(e, f, `${f} for hazard ${k}`);
         if (b !== undefined) out[f] = b;
       });
+      if ('na' in out && customIds.has(k)) { delete out.na; delete out.naAuto; flagsDropped++; }
+      if ('naAuto' in out && !(out.naAuto === true && out.na === true && naDefaultIds.has(k))) { delete out.naAuto; flagsDropped++; }
       st.scores[k] = out;
     });
     if (dropped) warnings.push(`${dropped} unknown hazard entr${dropped === 1 ? 'y was' : 'ies were'} skipped.`);
-    if (retired) warnings.push(`${retired} hazard entr${retired === 1 ? 'y was' : 'ies were'} for hazards merged or moved to the household checklist in v3, and ${retired === 1 ? 'was' : 'were'} skipped.`);
+    if (retired) warnings.push(`${retired} hazard entr${retired === 1 ? 'y was' : 'ies were'} for hazards merged or moved to the household checklist in v3. Their notes move to the hazard that absorbed them.`);
+    if (flagsDropped) warnings.push(`${flagsDropped} "Does not apply here" mark${flagsDropped === 1 ? ' was' : 's were'} removed because ${flagsDropped === 1 ? 'it does' : 'they do'} not fit that hazard.`);
   }
 
   // checklist (v3.0.0, optional): { hh1: { "1".."12": true|false }, hh2: {...} }
@@ -191,6 +209,8 @@ function validateImport(obj, opts) {
       errors.push('"checklist" is not the right shape.');
     } else {
       const out = { hh1: {}, hh2: {} };
+      const extra = Object.keys(cl).filter(k => k !== 'hh1' && k !== 'hh2');
+      if (extra.length) warnings.push(`The checklist had ${extra.length} unknown part${extra.length === 1 ? '' : 's'}, which ${extra.length === 1 ? 'was' : 'were'} skipped.`);
       ['hh1', 'hh2'].forEach(hh => {
         if (!_impHas(cl, hh) || cl[hh] === null || cl[hh] === undefined) return;
         if (!_impIsPlain(cl[hh])) { errors.push(`The checklist for ${hh} is not the right shape.`); return; }
@@ -206,6 +226,9 @@ function validateImport(obj, opts) {
       });
       st.checklist = out;
     }
+  } else if (_impHas(obj, 'version') && typeof obj.version === 'string' && parseInt(obj.version, 10) >= 3) {
+    // A v3 (or later) file without a checklist is not a v2 file: no migration
+    st.checklist = { hh1: {}, hh2: {} };
   }
 
   // customNames

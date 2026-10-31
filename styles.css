@@ -235,6 +235,7 @@ textarea.input { min-height: 72px; resize: vertical; }
 .b-high     { background: var(--risk-high);     color: var(--risk-high-ink); }
 .b-critical { background: var(--risk-critical); color: var(--risk-critical-ink); }
 .b-unrated  { background: var(--stone-100); color: var(--color-text-muted); border: 1px dashed var(--stone-400); }
+.b-ruled-out { background: transparent; color: var(--color-text-muted); border: 1px solid var(--color-border); }
 
 .badge {
   display: inline-flex; align-items: center; gap: var(--space-2);
@@ -404,6 +405,7 @@ textarea.input { min-height: 72px; resize: vertical; }
 .override-score-btn.selected, .manual-score-btn.selected { background: var(--wa-maroon); border-color: var(--wa-maroon); color: var(--wa-cream); }
 .report-unavailable ul { margin-left: var(--space-5); }
 .report-manual-intro { font-size: var(--text-sm); color: var(--color-text-muted); }
+.report-ruled-out-note { font-size: var(--text-sm); color: var(--color-text-muted); margin-top: var(--space-3); }
 .report-manual-list { display: flex; flex-direction: column; }
 .report-manual-item { display: flex; flex-direction: column; padding: var(--space-3) 0; border-top: var(--border-hair) solid var(--color-border); font-size: var(--text-sm); color: var(--color-text-muted); }
 .report-manual-item strong { color: var(--color-text); font-size: var(--text-base); font-weight: var(--weight-semibold); }
@@ -474,7 +476,12 @@ textarea.input { min-height: 72px; resize: vertical; }
 .custom-hazard-inputs { display: grid; gap: var(--space-3); }
 .hazard-top { display: grid; grid-template-columns: 1fr auto; gap: var(--space-3); align-items: start; }
 .hazard-title { min-width: 0; display: flex; flex-direction: column; gap: var(--space-1); }
-.hazard-name-wrap { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.hazard-name-wrap { display: block; line-height: 1.4; }
+.hazard-name-wrap .hazard-name { display: inline; }
+/* The info button flows inline after the last word of the name; negative
+   vertical margins keep its 44px target from opening a gap between lines. */
+.hazard-name-wrap .desc-toggle { display: inline-flex; vertical-align: middle; margin: -10px 0 -10px 2px; }
+.hazard-title > .auto-score-badge { align-self: flex-start; }
 .hazard-name { font-weight: var(--weight-semibold); font-size: var(--text-base); }
 .auto-score-badge { font-size: var(--text-sm); font-weight: var(--weight-medium); padding: 0 8px; border-radius: var(--radius-sm); background: var(--color-surface-warm); color: var(--color-text-heading); }
 .desc-toggle { width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; background: transparent; border: 0; border-radius: var(--radius-sm); color: var(--color-text-muted); }

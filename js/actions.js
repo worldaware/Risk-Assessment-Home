@@ -128,10 +128,17 @@ const ACTION_GROUPS = [
     ],
   },
   {
-    key: 'chemical', ids: [15, 18],
+    key: 'chemical', ids: [15],
     lines: () => [
       'Learn to shelter in place: pick an inside room, keep tape and plastic sheeting there, and practice turning off the furnace, air conditioning and fans quickly.',
       'Find out which rail lines and freight routes run near you, so a shelter-in-place order makes sense the moment it comes.',
+    ],
+  },
+  {
+    key: 'nuclear', ids: [18],
+    lines: () => [
+      'If you are told of a radiation release, get inside, close windows and vents, turn off fans and the furnace, and stay in until officials say it is safe.',
+      'Take potassium iodide only if health officials tell you to, and sign up for county alerts so those instructions reach you.',
     ],
   },
   {

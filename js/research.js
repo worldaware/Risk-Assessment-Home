@@ -1500,16 +1500,25 @@ function _renderReport() {
   const geo        = _research.geocoded;
   const findings   = _research.findings;
   // 'estimated' = placeholder used; shown alongside success but counted separately
-  const successful = findings.filter(f => f.status === 'success' || f.status === 'estimated');
-  const fromData   = findings.filter(f => f.status === 'success');
-  const estimated  = findings.filter(f => f.status === 'estimated');
-  const failed     = findings.filter(f => f.status === 'error');
+  // Hazards marked "Does not apply here" are not filled in, so they are
+  // left out of every count and list and named once below.
+  // Same rule as applyResearchScores: a pre-mark is cleared for an address outside Colorado.
+  const isRuledOut = f => _researchSkipsNa(f.hazardId, geo && geo.stateAbbr);
+  const ruledOut   = findings.filter(isRuledOut);
+  const live       = findings.filter(f => !isRuledOut(f));
+  const successful = live.filter(f => f.status === 'success' || f.status === 'estimated');
+  const fromData   = live.filter(f => f.status === 'success');
+  const estimated  = live.filter(f => f.status === 'estimated');
+  const failed     = live.filter(f => f.status === 'error');
 
   // Hazards that need the user's judgment: not covered by a finding and not ruled out
   const findingIds = new Set(findings.map(f => f.hazardId));
   const manualIds = Object.keys(MANUAL_REASONS).map(Number).filter(id => {
     if (findingIds.has(id)) return false;
-    if (typeof HAZARD_DATA !== 'undefined' && !HAZARD_DATA.some(h => h.id === id)) return false;
+    const hz = (typeof HAZARD_DATA !== 'undefined') ? HAZARD_DATA.find(h => h.id === id) : null;
+    if (typeof HAZARD_DATA !== 'undefined' && !hz) return false;
+    // Custom slots are listed only once the user has named them
+    if (hz && hz.isCustom && !(typeof state !== 'undefined' && state.customNames && state.customNames[id] && state.customNames[id].name)) return false;
     return !(typeof state !== 'undefined' && state.scores && state.scores[id] && state.scores[id].na);
   });
   const manualCount = manualIds.length;
@@ -1551,7 +1560,7 @@ function _renderReport() {
       <button class="btn btn-primary btn-large" id="research-continue-btn" onclick="applyResearchScores()">
         Continue to assessment
       </button>
-      <p class="report-actions-note">Likelihood estimates are added to your assessment. You rate the impact for your household.</p>
+      <p class="report-actions-note">Likelihood estimates are added to your assessment. The household checklist sets the impact, and you can change it.</p>
       <button class="btn btn-ghost" id="research-restart-btn" onclick="clearAutoScores()">
         Research a different address
       </button>
@@ -1585,6 +1594,10 @@ function _renderReport() {
     });
   }
 
+  if (ruledOut.length > 0) {
+    html += `<p class="report-ruled-out-note">Not applied because you marked ${ruledOut.length === 1 ? 'it' : 'them'} Does not apply here: ${ruledOut.map(f => escHtml(_findingName(f))).join('; ')}.</p>`;
+  }
+
   // ── FAILED API CALLS ────────────────────────────────────────
   if (failed.length > 0) {
     html += `
@@ -1614,7 +1627,7 @@ function _renderReport() {
       return;
     }
     const hazard = (typeof HAZARD_DATA !== 'undefined') ? HAZARD_DATA.find(h => h.id === numId) : null;
-    const name   = hazard ? ((typeof hazardDisplayName === 'function' ? hazardDisplayName(hazard) : hazard.name) || `Custom hazard ${hazard.customIndex || ''}`.trim()) : `Hazard #${id}`;
+    const name   = hazard ? (typeof hazardDisplayName === 'function' ? hazardDisplayName(hazard) : hazard.name) : `Hazard #${id}`;
     html += `
       <div class="report-manual-item">
         <strong>${escHtml(name)}</strong>

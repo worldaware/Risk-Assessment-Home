@@ -123,10 +123,11 @@ function _riskClass(level) {
 // Methodology text shared by the on-screen report and the PDF
 const REPORT_METHOD_TEXT = 'Each hazard gets a likelihood from 1 to 5 and an impact from 1 to 5, multiplied into a score out of 25. Likelihood is how often the hazard affects this area; impact is what it would do to your household. Impact starts from a scenario for each hazard and rises with the household checklist; any impact you changed by hand is kept. Several public sources describe your county or state, not your lot.';
 
-/** "Considered and ruled out: Hurricane, Tsunami, Volcanic ash", or '' when nothing is ruled out. */
+/** "Considered and ruled out: Hurricane; Tsunami; Volcanic ash.", or '' when nothing is ruled out. */
 function ruledOutLine(data) {
   const names = (data && Array.isArray(data.ruledOut)) ? data.ruledOut.filter(Boolean) : [];
-  return names.length ? `Considered and ruled out: ${names.join(', ')}.` : '';
+  // Semicolons: several names contain commas ("Landslide, rockfall and debris flow after fire")
+  return names.length ? `Considered and ruled out: ${names.join('; ')}.` : '';
 }
 
 function renderReportView() {

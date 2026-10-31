@@ -139,14 +139,6 @@ function applyChecklistImpacts(st) {
   return changed;
 }
 
-/** True while this impact still comes from the checklist (core hazards only). */
-function isImpactFromChecklist(hazardId, field) {
-  const h = (typeof HAZARD_DATA !== 'undefined') ? HAZARD_DATA.find(x => x.id === parseInt(hazardId, 10)) : null;
-  if (!h || h.group !== 'core') return false;
-  const e = (typeof state !== 'undefined' && state.scores && state.scores[h.id]) || {};
-  return field === 'i2' ? e.i2Manual !== true : e.iManual !== true;
-}
-
 /* ---------------------------------------------------------------
    UI: "About your household" card on the Assess screen
    (called from buildHazardList in app.js)
@@ -165,24 +157,28 @@ function buildChecklistHtml() {
   const isNb = state.assessmentType === 'neighborhood';
   const hhs = isNb ? ['hh1', 'hh2'] : ['hh1'];
   const name = hh => hh === 'hh2' ? (state.hh2Name || 'Household 2') : (state.hh1Name || 'Household 1');
+  // Column heads are hidden from the reading order; each checkbox names its
+  // column and its item through aria-labelledby, so a renamed household is
+  // announced with its new name.
   const head = isNb
-    ? `<div class="checklist-head" aria-hidden="true"><span></span>${hhs.map(hh => `<span class="checklist-hh-label" data-hh="${hh}">${escHtml(name(hh))}</span>`).join('')}</div>`
+    ? `<div class="checklist-head" aria-hidden="true"><span></span>${hhs.map(hh => `<span class="checklist-hh-label" id="chk-head-${hh}" data-hh="${hh}">${escHtml(name(hh))}</span>`).join('')}</div>`
     : '';
   const rows = CHECKLIST_DATA.map(item => {
     const boxes = hhs.map(hh => {
       const id = `chk-${hh}-${item.id}`;
       const on = _checklistFor(hh)[item.id] === true;
-      const aria = isNb ? ` aria-label="${escHtml(name(hh))}: ${escHtml(item.text)}"` : '';
+      const aria = isNb ? ` aria-labelledby="chk-head-${hh} chk-text-${item.id}"` : '';
       return `<span class="checklist-box"><input type="checkbox" id="${id}" data-hh="${hh}" data-item="${item.id}"${on ? ' checked' : ''}${aria}
         onchange="toggleChecklistItem('${hh}', ${item.id}, this.checked)" /></span>`;
     }).join('');
     const labelFor = isNb ? '' : ` for="chk-hh1-${item.id}"`;
     return `<div class="checklist-row${isNb ? ' is-two' : ''}">
-        <label class="checklist-text"${labelFor}>${escHtml(item.text)}</label>${boxes}
+        <label class="checklist-text" id="chk-text-${item.id}"${labelFor}>${escHtml(item.text)}</label>${boxes}
       </div>`;
   }).join('');
   return `<p class="group-intro">Tick anything that's true for your household. We use these to set how hard each hazard would hit you, and you can change any of them later.</p>
-    <div class="checklist${isNb ? ' is-two' : ''}">${head}${rows}</div>`;
+    <div class="checklist${isNb ? ' is-two' : ''}">${head}${rows}</div>
+    <p class="sr-only" id="checklist-live" aria-live="polite"></p>`;
 }
 
 /** A checkbox changed: store it, recompute impacts, refresh the core rows. */
@@ -192,11 +188,20 @@ function toggleChecklistItem(hh, itemId, checked) {
   if (!state.checklist[key]) state.checklist[key] = {};
   if (checked) state.checklist[key][itemId] = true;
   else delete state.checklist[key][itemId];
-  applyChecklistImpacts();
+  const changed = applyChecklistImpacts();
   HAZARD_DATA.forEach(h => { if (h.group === 'core' && typeof updateRowScore === 'function') updateRowScore(h.id); });
   const count = document.getElementById('cat-count-household');
   if (count) count.textContent = checklistCountText();
+  const live = document.getElementById('checklist-live');
+  if (live) live.textContent = checklistChangeText(changed.length);
   if (typeof autoSave === 'function') autoSave();
+  return changed;
+}
+
+/** What the live region says after a checkbox changes. */
+function checklistChangeText(n) {
+  if (!n) return 'No impacts changed.';
+  return `Impact updated for ${n} hazard${n === 1 ? '' : 's'}.`;
 }
 
 /** Keep the two column labels in step with the household name fields. */
