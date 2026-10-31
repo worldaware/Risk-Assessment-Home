@@ -18,7 +18,7 @@ const API_CONFIG = {
      with no trailing slash (see relay/README.md). While it is empty, every
      lookup that needs the relay is skipped and labelled
      "Relay not configured" in the results.                              */
-  RELAY_URL: '',
+      RELAY_URL: 'https://wa-risk-relay.henrylmitchell-cloudflare.workers.dev',
 
   /* ── Geocoding (US Census Bureau) — no key required ─────── */
   CENSUS_GEOCODER:
