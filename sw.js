@@ -4,6 +4,7 @@
    ============================================================= */
 
 // Bump this with every release (keep in step with APP_VERSION in app.js).
+// v2.3.0: new js/importValidator.js (Import from JSON).
 // v2.2.0: stop caching cross-origin API responses; the old cache held addresses.
 // v2.3.0: owned relay; flood and wildfire from CORS-enabled copies.
 const CACHE_NAME = 'wa-risk-v2.3.0';
@@ -45,6 +46,7 @@ const APP_SHELL = [
   './js/wa-pdf-theme.js',
   // Report view + offline PDF generation
   './js/report.js',
+  './js/importValidator.js',
   './js/vendor/jspdf.umd.min.js',
 ];
 
