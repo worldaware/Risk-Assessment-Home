@@ -5,7 +5,8 @@
 
 // Bump this with every release (keep in step with APP_VERSION in app.js).
 // v2.2.0: stop caching cross-origin API responses; the old cache held addresses.
-const CACHE_NAME = 'wa-risk-v2.2.0';
+// v2.3.0: owned relay; flood and wildfire from CORS-enabled copies.
+const CACHE_NAME = 'wa-risk-v2.3.0';
 
 // App shell files to cache on install
 const APP_SHELL = [

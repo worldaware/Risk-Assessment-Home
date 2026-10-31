@@ -7,7 +7,7 @@
 
 // Single source of truth for the version shown in About, the JSON export and the console.
 // Keep sw.js CACHE_NAME in step with it when shipping.
-const APP_VERSION = '2.2.0';
+const APP_VERSION = '2.3.0';
 
 /* ---------------------------------------------------------------
    CONSTANTS & CONFIGURATION
