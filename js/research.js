@@ -1,8 +1,9 @@
 /* =============================================================
    WORLD AWARE RISK ASSESSMENT — js/research.js
-   "Research My Area" — geocodes an address, queries 7 free
-   government APIs in parallel, and pre-populates the hazard
-   assessment with Likelihood scores.
+   "Research My Area" — geocodes an address, queries free
+   government APIs in parallel (FEMA, USGS, USFS, NWS, Drought
+   Monitor, EPA), and pre-populates the hazard assessment with
+   Likelihood scores.
    ============================================================= */
 
 'use strict';
@@ -24,6 +25,7 @@ const H_ID = {
   LANDSLIDE:          11,
   CHEMICAL_PLANT:     15,
   AIR_QUALITY:        23,   // "Smoke and bad air days" (absorbed dust storm in v3)
+  HIGH_WIND:          63,
 };
 // v3.0.0 dropped the dust storm (14), wastewater (21) and WUI (55) findings:
 // those hazards merged into smoke, water outage and wildfire.
@@ -43,6 +45,7 @@ const H_NAME = {
   11: 'Landslide, rockfall and debris flow after fire',
   15: 'Chemical spill from road, rail or a nearby plant',
   23: 'Smoke and bad air days',
+  63: 'High wind',
 };
 const H_CAT = { 15: 'Industrial & CBRN' };
 function _hCat(id) { return H_CAT[id] || 'Natural Hazards'; }
@@ -51,6 +54,7 @@ function _hCat(id) { return H_CAT[id] || 'Natural Hazards'; }
 const MANUAL_REASONS = {
   17: 'For big gas transmission lines, check the PHMSA pipeline map at pvnpms.phmsa.dot.gov. For the main on your street, you know it better than any map.',
   18: 'Nuclear facility proximity requires the NRC facility search at nrc.gov.',
+  11: 'The USGS landslide map did not load for this address. Look it up at https://www.usgs.gov/tools/us-landslide-inventory-and-susceptibility-map and rate it higher for a steep slope or a burn scar above you.',
   20: 'Old mine workings and quarries are on county and Colorado Geological Survey maps. Local knowledge helps.',
   22: 'Disease outbreaks are regional. No address-level data exists.',
   24: 'Outage history is not public. Check your utility\'s planned shutoff map (Xcel publishes one) and how often your street loses power.',
@@ -58,7 +62,7 @@ const MANUAL_REASONS = {
   36: 'Depends on how many roads lead out of your neighborhood and what could block them. Local knowledge required.',
   53: 'Civil unrest depends on where you live and work. Enter what you know.',
   54: 'Active threat risk depends on local context. Enter what you know.',
-  63: 'High wind is county-wide weather. Rate it from what you see on your street: downed limbs, roof damage, shutoffs.',
+  63: 'FEMA wind records did not load for this address. Rate it from what you see on your street: downed limbs, roof damage, shutoffs.',
   64: 'Radon is only known by testing the house. Haven\'t tested: rate it 3. Tested high: 5. Tested low: 1.',
   65: 'House fire depends on the home itself: heating, wiring, dryer and cooking. Enter what you know.',
   66: 'Swelling clay is mapped by the Colorado Geological Survey. Cracked foundations or sticking doors are a sign.',
@@ -118,6 +122,7 @@ function cancelResearch() {
 /* Research step definitions (UI order) */
 const STEPS = [
   { id: 'geocode',    label: 'Finding the address' },
+  { id: 'nri',        label: 'Checking FEMA National Risk Index for your census tract' },
   { id: 'flood',      label: 'Checking flood zones (FEMA)' },
   { id: 'earthquake', label: 'Checking earthquake hazard (USGS)' },
   { id: 'wildfire',   label: 'Checking wildfire hazard (Forest Service)' },
@@ -125,7 +130,8 @@ const STEPS = [
   { id: 'drought',    label: 'Checking drought conditions (Drought Monitor)' },
   { id: 'epa',        label: 'Checking for industrial sites nearby (EPA)' },
   { id: 'airquality', label: 'Estimating smoke and air quality risk' },
-  { id: 'landslide',  label: 'Checking landslide susceptibility (USGS)' },
+  { id: 'landslide',  label: 'Checking landslide susceptibility and records nearby (USGS)' },
+  { id: 'declarations', label: 'Checking FEMA disaster declarations for your county' },
 ];
 
 /* ---------------------------------------------------------------
@@ -418,6 +424,12 @@ const _QUAKE_HIGH_STATES = new Set([
 
 const FALLBACK_PREFIX = 'This source did not respond, so this is a placeholder.';
 
+/* Source line of the state weather table, and how the summary spots it. */
+const WEATHER_RULE_SRC = 'World Aware state-level rule of thumb (not NOAA data)';
+function _isRuleOfThumb(f) {
+  return !!f && f.status === 'estimated' && /rule of thumb/i.test(String(f.source || ''));
+}
+
 /* Placeholder wording when we know why a lookup could not run. */
 const FALLBACK_REASONS = {
   [RELAY_NOT_CONFIGURED]: {
@@ -461,15 +473,16 @@ function _wildfireFallback(stateAbbr) {
     confidence: 'Low', isFallback: true,
   };
 }
-function _landslideFallback() {
-  return { score: 1, finding: `${FALLBACK_PREFIX} Minimal landslide risk assumed.`, confidence: 'Low', isFallback: true };
-}
+// Landslide has no placeholder score: when the USGS map and the NRI tract
+// value both fail, the hazard goes to "Needs your judgment" (MANUAL_REASONS[11]).
 
 /* ---------------------------------------------------------------
-   API 1 — FLOOD RISK (FEMA NFHL) — 3-method waterfall
-   A: NFHL point query via relay (primary)
-   B: FEMA MSC NFHL point query via relay (fallback)
-   D: FEMA National Risk Index, county level, via relay (last resort)
+   API 1 — FLOOD RISK (FEMA NFHL) — waterfall
+   0: Esri Living Atlas copy of NFHL, direct (primary)
+   A: NFHL point query via relay
+   B: FEMA MSC NFHL point query via relay
+   D: FEMA National Risk Index county IFLD_AFREQ (ArcGIS Online, direct),
+      then the hazards.fema.gov NRI API through the relay as a last resort
    There is no envelope ("most common zone nearby") method: it could give
    this parcel a neighbour's zone.
 --------------------------------------------------------------- */
@@ -512,9 +525,9 @@ function _firstNRIRow(data) {
  * County-level flood frequency from the National Risk Index.
  * NRI annualized frequency is "recorded hazard occurrences (event-days) per
  * year" across the whole county. It says nothing about this parcel, so the
- * Likelihood is capped at 3 and tagged Low confidence. Since NRI v1.20 the
- * riverine hazard may appear under the Inland Flooding prefix (IFLD); the
- * older prefix is RFLD. Both are tried, in upper and lower case.
+ * Likelihood is capped at 3 and tagged Low confidence. The December 2025
+ * release names riverine flooding "Inland Flooding" (IFLD_AFREQ); RFLD_* is
+ * on neither layer (checked 2026-10-31). The relay fallback still tries both.
  */
 function _mapNRIFloodFrequency(afreq, countyName) {
   const f = parseFloat(afreq);
@@ -532,7 +545,7 @@ function _mapNRIFloodFrequency(afreq, countyName) {
   };
 }
 
-async function _callFloodAPI(lat, lng, fips5) {
+async function _callFloodAPI(lat, lng, fips5, nriPromise) {
   console.log('[FEMA Flood] Starting fetch for', lat, lng);
   const BASE = API_CONFIG.FEMA_NFHL;
   const pointParams =
@@ -559,63 +572,83 @@ async function _callFloodAPI(lat, lng, fips5) {
     console.warn('[FEMA Flood] Method 0 failed:', e.message);
   }
 
-  // The remaining methods need the relay; say so instead of "no data".
-  if (!String(API_CONFIG.RELAY_URL || '').trim()) {
-    throw _codedError(RELAY_NOT_CONFIGURED, 'Relay not configured');
-  }
+  const relayOn = !!String(API_CONFIG.RELAY_URL || '').trim();
 
-  // ── Method A: NFHL point query ───────────────────────────
-  try {
-    const urlA = `${BASE}?geometry=${cLng},${cLat}${pointParams}`;
-    const dataA = await proxyFetch(urlA);
-    const parsed = _parseNFHLFeatures(dataA?.features);
-    if (parsed && parsed.zone) {
-      const r = mapFloodZoneToScore(parsed.zone, parsed.subtype);
-      if (r.score !== null) {
-        console.log('[FEMA Flood] Success via Method A — Zone:', parsed.zone, 'Score:', r.score);
-        return { ...r, femaMapUrl, confidence: 'High' };
+  if (relayOn) {
+    // ── Method A: NFHL point query ───────────────────────────
+    try {
+      const urlA = `${BASE}?geometry=${cLng},${cLat}${pointParams}`;
+      const dataA = await proxyFetch(urlA);
+      const parsed = _parseNFHLFeatures(dataA?.features);
+      if (parsed && parsed.zone) {
+        const r = mapFloodZoneToScore(parsed.zone, parsed.subtype);
+        if (r.score !== null) {
+          console.log('[FEMA Flood] Success via Method A — Zone:', parsed.zone, 'Score:', r.score);
+          return { ...r, femaMapUrl, confidence: 'High' };
+        }
       }
+    } catch (e) {
+      console.warn('[FEMA Flood] Method A failed:', e.message);
     }
-  } catch (e) {
-    console.warn('[FEMA Flood] Method A failed:', e.message);
-  }
 
-  // ── Method B: MSC endpoint ────────────────────────────────
-  try {
-    const urlB =
-      `https://msc.fema.gov/arcgis/rest/services/NFHL_National_Clip/NFHL_National_Clip/MapServer/28/query` +
-      `?geometry=${cLng},${cLat}${pointParams}`;
-    const dataB = await proxyFetch(urlB);
-    const parsed = _parseNFHLFeatures(dataB?.features);
-    if (parsed && parsed.zone) {
-      const r = mapFloodZoneToScore(parsed.zone, parsed.subtype);
-      if (r.score !== null) {
-        console.log('[FEMA Flood] Success via Method B — Zone:', parsed.zone, 'Score:', r.score);
-        return { ...r, femaMapUrl, confidence: 'High' };
+    // ── Method B: MSC endpoint ────────────────────────────────
+    try {
+      const urlB =
+        `https://msc.fema.gov/arcgis/rest/services/NFHL_National_Clip/NFHL_National_Clip/MapServer/28/query` +
+        `?geometry=${cLng},${cLat}${pointParams}`;
+      const dataB = await proxyFetch(urlB);
+      const parsed = _parseNFHLFeatures(dataB?.features);
+      if (parsed && parsed.zone) {
+        const r = mapFloodZoneToScore(parsed.zone, parsed.subtype);
+        if (r.score !== null) {
+          console.log('[FEMA Flood] Success via Method B — Zone:', parsed.zone, 'Score:', r.score);
+          return { ...r, femaMapUrl, confidence: 'High' };
+        }
       }
+    } catch (e) {
+      console.warn('[FEMA Flood] Method B failed:', e.message);
     }
-  } catch (e) {
-    console.warn('[FEMA Flood] Method B failed:', e.message);
   }
 
   // ── Method D: FEMA National Risk Index, county level ─────
   // NRI needs the full 5-digit state+county FIPS; the 3-digit county part
-  // alone is shared by about twenty counties.
+  // alone is shared by about twenty counties. The county row normally comes
+  // from the NRI step already running in parallel; without it, ask directly.
   if (fips5 && /^\d{5}$/.test(fips5)) {
     try {
-      const urlD = `${API_CONFIG.FEMA_NRI_COUNTY}?fips=${fips5}`;
-      const row  = _firstNRIRow(await proxyFetch(urlD));
-      const afreq = _pickField(row, ['IFLD_AFREQ', 'RFLD_AFREQ']);
-      const name  = _pickField(row, ['COUNTY', 'COUNTYNAME']);
-      const r = _mapNRIFloodFrequency(afreq, name ? String(name).replace(/[<>&"]/g, '') : '');
+      let row = null;
+      if (nriPromise) row = (await nriPromise)?.county || null;
+      if (!row) row = await _fetchNRICounty(fips5);
+      const afreq = _pickField(row, ['IFLD_AFREQ']);
+      const r = _mapNRIFloodFrequency(afreq, _nriCountyLabel(row?.COUNTY));
       if (r) {
-        console.log('[FEMA Flood] Success via Method D — NRI annualized frequency:', afreq, 'Likelihood:', r.score);
+        console.log('[FEMA Flood] Success via Method D (NRI county IFLD_AFREQ):', afreq, 'Likelihood:', r.score);
         return { ...r, femaMapUrl };
       }
+      console.warn('[FEMA Flood] Method D: no IFLD_AFREQ on the county row');
     } catch (e) {
       console.warn('[FEMA Flood] Method D failed:', e.message);
     }
+
+    // ── Method D2: hazards.fema.gov NRI API through the relay (last resort) ──
+    if (relayOn) {
+      try {
+        const row   = _firstNRIRow(await proxyFetch(`${API_CONFIG.FEMA_NRI_COUNTY}?fips=${fips5}`));
+        const afreq = _pickField(row, ['IFLD_AFREQ', 'RFLD_AFREQ']);
+        const name  = _pickField(row, ['COUNTY', 'COUNTYNAME']);
+        const r = _mapNRIFloodFrequency(afreq, name ? String(name).replace(/[<>&"]/g, '') : '');
+        if (r) {
+          console.log('[FEMA Flood] Success via Method D2 (hazards.fema.gov):', afreq, 'Likelihood:', r.score);
+          return { ...r, femaMapUrl };
+        }
+      } catch (e) {
+        console.warn('[FEMA Flood] Method D2 failed:', e.message);
+      }
+    }
   }
+
+  // Say why when the relay methods could not run, instead of "no data".
+  if (!relayOn) throw _codedError(RELAY_NOT_CONFIGURED, 'Relay not configured');
 
   // ── All methods failed: report failure so the caller marks it Estimated ──
   throw new Error('No FEMA flood zone data retrieved');
@@ -778,40 +811,438 @@ async function _callEPAAPI(zip) {
 }
 
 /* ---------------------------------------------------------------
-   API 6 — LANDSLIDE SUSCEPTIBILITY (USGS)
-   Route: relay. No verified point-query service exists yet (see
-   API_CONFIG.USGS_LANDSLIDE), so this throws NO_SOURCE and the row stays
-   an honest placeholder until one is set.
+   API 6 — FEMA NATIONAL RISK INDEX (December 2025 release)
+   Route: direct. FEMA's ArcGIS Online copies of the tract and county
+   layers send CORS headers (checked 2026-10-31). One step feeds hail,
+   high wind, winter storm, tornado, the flood Method D fallback and the
+   landslide fallback. Likelihood uses <HAZ>_AFREQ (events or event-days a
+   year); the _RISKR ratings mix in exposure and vulnerability, so they
+   describe consequence, not likelihood.
 --------------------------------------------------------------- */
 
+const NRI_RELEASE    = 'December 2025 release';
+const NRI_SRC_TRACT  = `FEMA National Risk Index (census tract), ${NRI_RELEASE}`;
+const NRI_SRC_COUNTY = `FEMA National Risk Index (county), ${NRI_RELEASE}`;
+
+/* Fields confirmed on both December 2025 layers (Henry's browser, 2026-10-31).
+   One unknown name in outFields fails the whole query, so ask for no others. */
+const NRI_CONFIRMED_FIELDS = [
+  'HAIL_AFREQ', 'TRND_AFREQ', 'SWND_AFREQ', 'WNTW_AFREQ', 'CWAV_AFREQ', 'HWAV_AFREQ',
+  'LNDS_AFREQ', 'LTNG_AFREQ', 'IFLD_AFREQ', 'WFIR_RISKR',
+];
+const NRI_TRACT_FIELDS  = ['TRACTFIPS', 'COUNTY'].concat(NRI_CONFIRMED_FIELDS);
+const NRI_COUNTY_FIELDS = ['STCOFIPS', 'COUNTY', 'AREA'].concat(NRI_CONFIRMED_FIELDS);
+
+/** ArcGIS point geometry in the JSON form (the short "x,y" form returned nothing on one service). */
+function _esriPointParam(lat, lng) {
+  return encodeURIComponent(JSON.stringify({ x: _coarse(lng), y: _coarse(lat), spatialReference: { wkid: 4326 } }));
+}
+
+function _nriTractUrl(lat, lng) {
+  return `${API_CONFIG.NRI_TRACT}?geometry=${_esriPointParam(lat, lng)}` +
+    `&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects` +
+    `&outFields=${NRI_TRACT_FIELDS.join(',')}&returnGeometry=false&f=json`;
+}
+
+function _nriCountyUrl(fips5) {
+  return `${API_CONFIG.NRI_COUNTY}?where=${encodeURIComponent(`STCOFIPS='${fips5}'`)}` +
+    `&outFields=${NRI_COUNTY_FIELDS.join(',')}&returnGeometry=false&f=json`;
+}
+
+function _firstAttributes(data) {
+  if (!data || !Array.isArray(data.features)) throw new Error('Unexpected NRI response');
+  return data.features[0]?.attributes || null;
+}
+
+async function _fetchNRICounty(fips5) {
+  if (!/^\d{5}$/.test(String(fips5 || ''))) throw new Error('No 5-digit FIPS');
+  return _firstAttributes(await directFetch(_nriCountyUrl(fips5)));
+}
+
+/** Tract row by point and county row by FIPS, in parallel. Throws only if both fail. */
+async function _callNRIAPI(lat, lng, fips5) {
+  console.log('[FEMA NRI] Starting tract and county queries');
+  const tractP = directFetch(_nriTractUrl(lat, lng)).then(_firstAttributes)
+    .catch(e => { console.warn('[FEMA NRI] tract query failed:', e.message); return null; });
+  const countyP = _fetchNRICounty(fips5)
+    .catch(e => { console.warn('[FEMA NRI] county query failed:', e.message); return null; });
+  const [tract, county] = await Promise.all([tractP, countyP]);
+  if (!tract && !county) throw new Error('No National Risk Index row for this address');
+  console.log('[FEMA NRI] tract:', tract && tract.TRACTFIPS, 'county:', county && county.COUNTY);
+  return { tract, county };
+}
+
+/** A finite, non-negative number, or null for a missing field. */
+function _nriNum(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return (isFinite(n) && n >= 0) ? n : null;
+}
+
+/** 1 below cuts[0], 2 from cuts[0], ... 5 from cuts[3]. */
+function _binScore(v, cuts) {
+  let s = 1;
+  cuts.forEach(c => { if (v >= c) s += 1; });
+  return s;
+}
+
+/** Plain number for a finding sentence: 6.3, 0.70, 0.019. */
+function _fmtRate(v) {
+  if (v >= 10) return String(Math.round(v));
+  if (v >= 1)  return v.toFixed(1);
+  if (v >= 0.1) return v.toFixed(2);
+  if (v < 0.0001) return 'less than 0.0001';
+  return String(Number(v.toPrecision(2)));
+}
+
+/** NRI names counties without the word "County"; add the usual one. */
+function _nriCountyLabel(name, stateAbbr) {
+  const n = String(name || '').replace(/[<>&"]/g, '').trim();
+  if (!n) return '';
+  if (/\b(county|parish|borough|census area|municipality|city)\b/i.test(n)) return n;
+  const st = String(stateAbbr || '').toUpperCase();
+  return `${n} ${st === 'LA' ? 'Parish' : st === 'AK' ? 'Borough' : 'County'}`;
+}
+
+/** Hail (id 5): tract HAIL_AFREQ, hail reports a year in the area. */
+function _mapNRIHail(afreq) {
+  const f = _nriNum(afreq);
+  if (f === null) return null;
+  return {
+    score: _binScore(f, [1, 2, 3.5, 5]),
+    finding: `About ${_fmtRate(f)} hail events a year recorded near this tract (FEMA NRI)`,
+    confidence: 'High',
+  };
+}
+
+/** High wind (id 63): tract SWND_AFREQ. NRI strong wind comes from SPC thunderstorm wind reports. */
+function _mapNRIWind(afreq) {
+  const f = _nriNum(afreq);
+  if (f === null) return null;
+  return {
+    score: _binScore(f, [1, 2, 3, 5]),
+    finding: `About ${_fmtRate(f)} damaging wind events a year recorded near this tract (FEMA NRI). ` +
+             'Thunderstorm wind only; downslope windstorms are not counted.',
+    confidence: 'Medium',
+  };
+}
+
+/** Winter storm and extreme cold (id 8): tract WNTW_AFREQ, plus one level for frequent cold waves. */
+function _mapNRIWinter(wntwAfreq, cwavAfreq) {
+  const w = _nriNum(wntwAfreq);
+  if (w === null) return null;
+  const c = _nriNum(cwavAfreq);
+  const base = _binScore(w, [2, 5, 10, 15]);
+  const cold = c !== null && c >= 2;
+  return {
+    score: cold ? Math.min(5, base + 1) : base,
+    finding: `About ${_fmtRate(w)} winter weather days a year recorded for this tract (FEMA NRI)` +
+             (cold ? `; about ${_fmtRate(c)} cold wave days a year add one level` : ''),
+    confidence: 'High',
+  };
+}
+
+/**
+ * Tornado (id 6): county TRND_AFREQ per 1,000 square miles. Tract tornado
+ * frequency scales with tract size, so the county density is used.
+ */
+function _mapNRITornado(trndAfreq, areaSqMi, countyLabel) {
+  const t = _nriNum(trndAfreq);
+  const a = _nriNum(areaSqMi);
+  if (t === null || !a) return null;
+  const d = t / a * 1000;
+  return {
+    score: _binScore(d, [0.2, 0.5, 0.8, 1.0]),
+    density: d,
+    finding: `About ${d.toFixed(2)} tornadoes a year per 1,000 square miles in ${countyLabel || 'this county'} (FEMA NRI). County-wide, not this address`,
+    confidence: 'Medium',
+  };
+}
+
+/** Landslide fallback (id 11): tract LNDS_AFREQ. A tract average cannot see this lot's slope. */
+function _mapNRILandslide(afreq) {
+  const f = _nriNum(afreq);
+  if (f === null) return null;
+  return {
+    score: _binScore(f, [0.001, 0.01, 0.05, 0.2]),
+    finding: `About ${_fmtRate(f)} landslides a year in this census tract (tract-level, FEMA NRI). ` +
+             'The USGS slope map did not load, and a tract average cannot tell whether this lot is on a slope',
+    confidence: 'Low',
+  };
+}
+
+/* ---------------------------------------------------------------
+   API 7 — LANDSLIDE (USGS)
+   Route: direct (tiles.arcgis.com and services.arcgis.com send CORS).
+   1. Susceptibility: the 2024 national map exists only as cached tiles, so
+      the pixel under the address is read from the level-12 tile in a canvas
+      and matched to the legend colours.
+   2. Modifiers: USGS inventory landslides and post-fire debris-flow basins
+      within 1 km each add one level.
+   When the tile or canvas fails, _compileFindings falls back to the NRI
+   tract value, then to "Needs your judgment".
+--------------------------------------------------------------- */
+
+const LS_SRC          = 'USGS landslide susceptibility 2024 (90 m)';
+const LS_LEVEL        = 12;
+const LS_TILE_PX      = 512;
+const LS_RES_L12      = 19.1092570712683;    // metres per pixel at level 12 (service JSON)
+const LS_ORIGIN       = 20037508.342787;     // Web Mercator tiling origin
+const LS_LEGEND_LAYER = 8;                   // CONUS
+const LS_TOLERANCE    = 40;                  // max RGB distance to a legend colour
+// Built-in copy of the CONUS legend colours (read from the live legend, 2026-10-31).
+const LS_LEGEND_FALLBACK = { 1: [251, 213, 117], 2: [247, 168, 20], 3: [241, 129, 129], 4: [231, 33, 36], 5: [114, 16, 15] };
+
+/** Level-12 tile row/col and the pixel inside it for a WGS84 point. */
+function _lsTileFor(lat, lng) {
+  const R = 6378137;
+  const x = R * lng * Math.PI / 180;
+  const y = R * Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360));
+  const span = LS_TILE_PX * LS_RES_L12;
+  const fc = (x + LS_ORIGIN) / span;
+  const fr = (LS_ORIGIN - y) / span;
+  const col = Math.floor(fc), row = Math.floor(fr);
+  return {
+    level: LS_LEVEL, row, col,
+    px: Math.min(LS_TILE_PX - 1, Math.floor((fc - col) * LS_TILE_PX)),
+    py: Math.min(LS_TILE_PX - 1, Math.floor((fr - row) * LS_TILE_PX)),
+  };
+}
+
+/** Most common colour in a flat RGBA array. Near-transparent pixels count as one "no colour" value. */
+function _lsModeColor(data) {
+  const counts = new Map();
+  for (let i = 0; i + 3 < data.length; i += 4) {
+    const a = data[i + 3];
+    const key = a < 16 ? 'none' : `${data[i]},${data[i + 1]},${data[i + 2]},${a}`;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  let best = null, n = -1;
+  counts.forEach((c, k) => { if (c > n) { best = k; n = c; } });
+  if (best === null || best === 'none') return [0, 0, 0, 0];
+  return best.split(',').map(Number);
+}
+
+/**
+ * Legend class for a pixel: 0 for no colour (negligible), 1 to 5 for the
+ * nearest legend colour within the tolerance (RGB only; the layer is drawn
+ * at 75% opacity), or null when nothing is close enough.
+ */
+function _lsMatchClass(rgba, table, tolerance) {
+  if (!rgba || rgba.length < 4 || rgba[3] < 16) return 0;
+  const tol = tolerance === undefined ? LS_TOLERANCE : tolerance;
+  let best = null, bestD = Infinity;
+  Object.keys(table || {}).forEach(k => {
+    const c = table[k];
+    const d = Math.sqrt((rgba[0] - c[0]) ** 2 + (rgba[1] - c[1]) ** 2 + (rgba[2] - c[2]) ** 2);
+    if (d < bestD) { bestD = d; best = Number(k); }
+  });
+  return bestD <= tol ? best : null;
+}
+
+/** Susceptibility class (0 = negligible) and nearby records -> finding. */
+function _landslideResult(cls, inventoryCount, postfireCount) {
+  const BASE = { 0: 1, 1: 2, 2: 3, 3: 4, 4: 5, 5: 5 };
+  let score = BASE[cls];
+  if (score === undefined) return null;
+  const notes = [];
+  if (inventoryCount > 0) notes.push(`${inventoryCount === 1 ? 'A landslide is' : `${inventoryCount} landslides are`} recorded within 1 km in the USGS landslide inventory`);
+  if (postfireCount > 0) notes.push('a USGS post-fire debris-flow basin lies within 1 km');
+  if (notes.length) score = Math.min(5, score + 1);
+  const head = cls === 0
+    ? 'No susceptibility mapped at this point (negligible)'
+    : `Susceptibility class ${cls} of 5 at this point`;
+  const skipped = [];
+  if (inventoryCount === null) skipped.push('landslide inventory');
+  if (postfireCount === null) skipped.push('post-fire debris-flow basins');
+  let finding = head;
+  if (notes.length) finding += `. Raised one level: ${notes.join(', and ')}`;
+  if (skipped.length) finding += `. Not checked: ${skipped.join(' and ')}`;
+  finding += '. The map rates the slope here, not debris that can travel down to it';
+  return { score, finding, confidence: (cls === 0 || cls >= 4) ? 'High' : 'Medium', susceptibilityClass: cls };
+}
+
+function _lsLoadImage(src) {
+  return new Promise((resolve, reject) => {
+    if (typeof Image === 'undefined') { reject(new Error('Images are not available here')); return; }
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload  = () => resolve(img);
+    img.onerror = () => reject(new Error('Image did not load'));
+    img.src = src;
+  });
+}
+
+/** RGBA of a w x h block. Throws when the canvas is tainted (no CORS) or missing. */
+function _lsReadPixels(img, x, y, w, h) {
+  if (typeof document === 'undefined' || !document.createElement) throw new Error('No canvas');
+  const canvas = document.createElement('canvas');
+  canvas.width  = img.naturalWidth  || img.width;
+  canvas.height = img.naturalHeight || img.height;
+  const cx = canvas.getContext && canvas.getContext('2d', { willReadFrequently: true });
+  if (!cx) throw new Error('No 2D canvas');
+  cx.drawImage(img, 0, 0);
+  return cx.getImageData(x, y, w, h).data;
+}
+
+/** Most common colour of the 3 x 3 block around (px, py) in a tile. */
+async function _lsSample(tileUrl, px, py) {
+  const img = await withTimeout(_lsLoadImage(tileUrl), API_CONFIG.TIMEOUT_MS, 'Landslide tile');
+  const x0 = Math.max(0, Math.min(LS_TILE_PX - 3, px - 1));
+  const y0 = Math.max(0, Math.min(LS_TILE_PX - 3, py - 1));
+  let data;
+  try {
+    data = _lsReadPixels(img, x0, y0, 3, 3);
+  } catch (e) {
+    throw new Error(`Landslide tile could not be read: ${e.message}`);
+  }
+  return _lsModeColor(data);
+}
+
+/* Legend colours, read once per session from the service's own legend. */
+let _lsLegendCache = null;
+
+async function _lsFetchLegend() {
+  const data  = await directFetch(`${API_CONFIG.USGS_LANDSLIDE}/legend?f=json`);
+  const layer = (Array.isArray(data?.layers) ? data.layers : []).find(l => l && l.layerId === LS_LEGEND_LAYER);
+  if (!layer || !Array.isArray(layer.legend)) throw new Error('No CONUS legend');
+  const table = {};
+  for (const e of layer.legend) {
+    const cls = parseInt(e && e.label, 10);
+    if (!(cls >= 1 && cls <= 5) || !e.imageData) continue;
+    const type = /^image\/(png|jpeg|gif)$/.test(e.contentType || '') ? e.contentType : 'image/png';
+    const img  = await withTimeout(_lsLoadImage(`data:${type};base64,${e.imageData}`), API_CONFIG.TIMEOUT_MS, 'Legend swatch');
+    const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+    const d = _lsReadPixels(img, Math.floor(w / 2), Math.floor(h / 2), 1, 1);
+    if (d[3] > 0) table[cls] = [d[0], d[1], d[2]];
+  }
+  if (Object.keys(table).length !== 5) throw new Error('Legend has ' + Object.keys(table).length + ' of 5 colours');
+  return { table, fromService: true };
+}
+
+/** Live legend colours, or the built-in copy when the legend cannot be read (retried next run). */
+function _lsLegendTable() {
+  if (!_lsLegendCache) {
+    _lsLegendCache = _lsFetchLegend().catch(e => {
+      console.warn('[USGS Landslide] legend not read, using built-in colours:', e.message);
+      _lsLegendCache = null;
+      return { table: LS_LEGEND_FALLBACK, fromService: false };
+    });
+  }
+  return _lsLegendCache;
+}
+
+/** Count of features within 1 km of the point, or throws. */
+async function _lsCountWithin1km(baseUrl, lat, lng) {
+  const url = `${baseUrl}?geometry=${_esriPointParam(lat, lng)}` +
+    `&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects` +
+    `&distance=1000&units=esriSRUnit_Meter&returnCountOnly=true&f=json`;
+  const data = await directFetch(url);
+  const n = Number(data && data.count);
+  if (!isFinite(n) || n < 0) throw new Error('No count in response');
+  return n;
+}
+
 async function _callLandslideAPI(lat, lng) {
-  if (!API_CONFIG.USGS_LANDSLIDE) {
-    throw _codedError(NO_SOURCE, 'No address-level landslide source configured');
-  }
-  console.log('[USGS Landslide] Starting fetch for', lat, lng);
-  const url =
-    `${API_CONFIG.USGS_LANDSLIDE}?geometry=${_coarse(lng)},${_coarse(lat)}` +
-    `&geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects` +
-    `&outFields=*&returnGeometry=false&f=json`;
+  console.log('[USGS Landslide] Starting for', _coarse(lat), _coarse(lng));
+  const t = _lsTileFor(lat, lng);
+  const tileUrl = `${API_CONFIG.USGS_LANDSLIDE}/tile/${t.level}/${t.row}/${t.col}`;
 
-  const data = await proxyFetch(url);
-  const feats = Array.isArray(data?.features) ? data.features : [];
+  // Modifiers run alongside the tile; a failed one is reported, not fatal.
+  const invP = _lsCountWithin1km(API_CONFIG.USGS_LANDSLIDE_INVENTORY, lat, lng)
+    .catch(e => { console.warn('[USGS Landslide] inventory not checked:', e.message); return null; });
+  const pfP  = _lsCountWithin1km(API_CONFIG.USGS_POSTFIRE, lat, lng)
+    .catch(e => { console.warn('[USGS Landslide] post-fire basins not checked:', e.message); return null; });
 
-  let result;
-  if (feats.length === 0) {
-    throw new Error('No USGS landslide susceptibility polygon at this location');
-  } else {
-    const attrs = feats[0]?.attributes || {};
-    const level =
-      attrs.SusceptibilityClass ||
-      attrs.Susceptibility ||
-      attrs.CLASS ||
-      attrs.LABEL ||
-      attrs.GRIDCODE;
-    result = mapLandslideToScore(level);
+  const [legend, rgba] = await Promise.all([_lsLegendTable(), _lsSample(tileUrl, t.px, t.py)]);
+  const cls = _lsMatchClass(rgba, legend.table);
+  if (cls === null) throw new Error(`Tile colour ${rgba.join(',')} matches no legend class`);
+
+  const [inv, pf] = await Promise.all([invP, pfP]);
+  const result = _landslideResult(cls, inv, pf);
+  console.log('[USGS Landslide] tile', `${t.level}/${t.row}/${t.col}`, 'px', t.px, t.py, 'rgba', rgba.join(','),
+    'class', cls, 'legend from service:', legend.fromService, 'result:', result);
+  return { ...result, source: LS_SRC };
+}
+
+/* ---------------------------------------------------------------
+   API 8 — FEMA DISASTER DECLARATIONS (OpenFEMA)
+   Route: direct (CORS, checked 2026-10-31). Counts county declarations by
+   incident type since 2000 and only ever raises a likelihood floor.
+--------------------------------------------------------------- */
+
+const DECLARATIONS_SINCE = 2000;
+
+async function _callDeclarationsAPI(stateFips, countyFips) {
+  if (!/^\d{2}$/.test(String(stateFips || '')) || !/^\d{3}$/.test(String(countyFips || ''))) {
+    throw new Error('No county FIPS');
   }
-  console.log('[USGS Landslide] Result:', result);
-  return result;
+  const filter = `fipsStateCode eq '${stateFips}' and fipsCountyCode eq '${countyFips}'`;
+  const url = `${API_CONFIG.OPENFEMA_DECLARATIONS}?$filter=${encodeURIComponent(filter)}` +
+    `&$select=disasterNumber,incidentType,declarationDate,fipsCountyCode&$top=1000`;
+  const data = await directFetch(url);
+  const rows = data && data.DisasterDeclarationsSummaries;
+  if (!Array.isArray(rows)) throw new Error('Unexpected OpenFEMA response');
+  const counts = _countDeclarations(rows, DECLARATIONS_SINCE);
+  console.log('[OpenFEMA] declarations since', DECLARATIONS_SINCE, counts);
+  return counts;
+}
+
+/** Count by incidentType. Statewide rows (county '000') and rows before sinceYear are left out. */
+function _countDeclarations(rows, sinceYear) {
+  const counts = {};
+  const seen = new Set();
+  (Array.isArray(rows) ? rows : []).forEach(r => {
+    if (!r || typeof r !== 'object') return;
+    if (String(r.fipsCountyCode) === '000') return;
+    const year = new Date(r.declarationDate).getUTCFullYear();
+    if (!(year >= sinceYear)) return;
+    const type = String(r.incidentType || '').trim();
+    if (!type) return;
+    // One disaster can be listed more than once for a county
+    if (r.disasterNumber !== undefined && r.disasterNumber !== null) {
+      const key = `${r.disasterNumber}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+    }
+    counts[type] = (counts[type] || 0) + 1;
+  });
+  return counts;
+}
+
+/* Floors: [count needed, minimum likelihood], highest first. */
+const DECLARATION_FLOORS = [
+  { types: ['Fire'],                          words: 'fire',                   ids: [1],    rules: [[6, 4], [3, 3]] },
+  { types: ['Flood'],                         words: 'flood',                  ids: [3, 4], rules: [[3, 3]] },
+  { types: ['Snowstorm', 'Severe Ice Storm'], words: 'snowstorm or ice storm', ids: [8],    rules: [[2, 3]] },
+  { types: ['Tornado'],                       words: 'tornado',                ids: [6],    rules: [[2, 3]] },
+  { types: ['Hurricane', 'Typhoon'],          words: 'hurricane or typhoon',   ids: [7],    rules: [[2, 3]] },
+];
+
+/**
+ * Raise (never lower) finding scores where FEMA has declared several
+ * disasters of that type in the county. Never creates a finding.
+ * Returns the hazard ids it changed.
+ */
+function _applyDeclarationFloors(findings, counts, countyLabel, stateAbbr) {
+  const changed = [];
+  if (!counts || typeof counts !== 'object' || !Array.isArray(findings)) return changed;
+  const where = countyLabel || 'this county';
+  DECLARATION_FLOORS.forEach(fl => {
+    const n = fl.types.reduce((sum, t) => sum + (Number(counts[t]) || 0), 0);
+    const rule = fl.rules.find(([need]) => n >= need);
+    if (!rule) return;
+    const floor = rule[1];
+    fl.ids.forEach(id => {
+      if (_researchSkipsNa(id, stateAbbr)) return;
+      const f = findings.find(x => x.hazardId === id);
+      if (!f || typeof f.scoreAssigned !== 'number' || f.scoreAssigned >= floor) return;
+      f.scoreAssigned = floor;
+      f.finding = `${String(f.finding || '').replace(/\.?\s*$/, '.')} FEMA has declared ${n} ${fl.words} disasters in ${where} since ${DECLARATIONS_SINCE}.`;
+      changed.push(id);
+    });
+  });
+  return changed;
 }
 
 /* ---------------------------------------------------------------
@@ -856,12 +1287,16 @@ function _deriveAirQualityScore(whpScore, epaHighHazardCount, stateAbbr) {
 
 function _compileFindings(apiResults, geocoded) {
   const {
-    flood, earthquake, wildfire, weather, drought, epa, landslide,
+    flood, earthquake, wildfire, weather, drought, epa, landslide, nri, declarations,
   } = apiResults;
 
   const stateAbbr     = geocoded.stateAbbr || weather?.stateAbbr || '';
   const weatherScores = getStateWeatherScores(stateAbbr);
   const findings      = [];
+  const nriTract      = (nri && nri.tract)  || null;
+  const nriCounty     = (nri && nri.county) || null;
+  const countyLabel   = _nriCountyLabel(nriCounty && nriCounty.COUNTY, stateAbbr) ||
+                        _nriCountyLabel(String(geocoded.county || '').replace(/ County$/i, ''), stateAbbr);
 
   /**
    * Add a finding. If result is null (API failed), apply a fallback score
@@ -950,13 +1385,30 @@ function _compileFindings(apiResults, geocoded) {
     status: aqDerivedFromData ? 'success' : 'estimated', isOverridden: false,
   });
 
-  // ── WEATHER HEURISTICS ────────────────────────────────────
-  // These six scores come from a hand-written state table in scoreMapper.js.
-  // The NWS call only confirms the state. Say so; do not cite NOAA for them.
+  // ── WEATHER ───────────────────────────────────────────────
+  // Hail, winter storm and tornado come from the FEMA National Risk Index
+  // when it answers. The state table in scoreMapper.js (getStateWeatherScores)
+  // is the fallback; the NWS call only confirms the state, so the fallback
+  // never cites NOAA.
+  // Extreme heat stays on the state rule of thumb on purpose: NRI HWAV_AFREQ
+  // rates Boulder "Very Low" (0.79 heat wave days a year) against about 33
+  // days a year at or above 90 F in the 1991-2020 normals, because it counts
+  // only heat events the local NWS office logged. v3.3 adds NOAA normals.
+  // Hurricane also stays on the rule of thumb (skipped when ruled out).
   const weatherNote = stateAbbr
     ? `Statewide estimate for ${stateAbbr}, not specific to this address.`
     : 'Regional estimate; state could not be confirmed.';
-  const weatherSrc = 'World Aware state-level rule of thumb (not NOAA data)';
+  const weatherSrc = WEATHER_RULE_SRC;
+  const nriWeather = {
+    [H_ID.SEVERE_THUNDERSTORM]: nriTract  ? _mapNRIHail(nriTract.HAIL_AFREQ) : null,
+    [H_ID.TORNADO]:             nriCounty ? _mapNRITornado(nriCounty.TRND_AFREQ, nriCounty.AREA, countyLabel) : null,
+    [H_ID.WINTER_STORM]:        nriTract  ? _mapNRIWinter(nriTract.WNTW_AFREQ, nriTract.CWAV_AFREQ) : null,
+  };
+  const nriSource = {
+    [H_ID.SEVERE_THUNDERSTORM]: NRI_SRC_TRACT,
+    [H_ID.TORNADO]:             NRI_SRC_COUNTY,
+    [H_ID.WINTER_STORM]:        NRI_SRC_TRACT,
+  };
 
   const weatherMap = [
     { id: H_ID.SEVERE_THUNDERSTORM, key: 'severeThunderstorm' },
@@ -970,6 +1422,18 @@ function _compileFindings(apiResults, geocoded) {
     // A hazard ruled out for this place gets no estimate (Hurricane arrives
     // ruled out for Colorado; an address elsewhere clears that mark).
     if (_researchSkipsNa(id, stateAbbr)) return;
+    const fromNri = nriWeather[id];
+    if (fromNri) {
+      findings.push({
+        hazardId: id, hazardName: H_NAME[id], category: _hCat(id),
+        scoreAssigned: fromNri.score,
+        source: nriSource[id],
+        finding: fromNri.finding,
+        confidence: fromNri.confidence,
+        status: 'success', isOverridden: false,
+      });
+      return;
+    }
     const score = weatherScores[key] || 2;
     findings.push({
       hazardId: id, hazardName: H_NAME[id], category: _hCat(id),
@@ -980,6 +1444,21 @@ function _compileFindings(apiResults, geocoded) {
       status: 'estimated', isOverridden: false,
     });
   });
+
+  // ── HIGH WIND ─────────────────────────────────────────────
+  // NRI thunderstorm wind only. There is no state rule of thumb for wind,
+  // so without NRI it stays on the "Needs your judgment" list.
+  const wind = nriTract ? _mapNRIWind(nriTract.SWND_AFREQ) : null;
+  if (wind && !_researchSkipsNa(H_ID.HIGH_WIND, stateAbbr)) {
+    findings.push({
+      hazardId: H_ID.HIGH_WIND, hazardName: H_NAME[63], category: _hCat(63),
+      scoreAssigned: wind.score,
+      source: NRI_SRC_TRACT,
+      finding: wind.finding,
+      confidence: wind.confidence,
+      status: 'success', isOverridden: false,
+    });
+  }
 
   // ── DROUGHT ───────────────────────────────────────────────
   addFinding(H_ID.DROUGHT, H_NAME[10], _hCat(10),
@@ -997,9 +1476,32 @@ function _compileFindings(apiResults, geocoded) {
     () => ({ score: 2, finding: `${FALLBACK_PREFIX} Industrial proximity unknown. ${railNote}`, confidence: 'Low', isFallback: true }));
 
   // ── LANDSLIDE ─────────────────────────────────────────────
-  addFinding(H_ID.LANDSLIDE, H_NAME[11], _hCat(11),
-    'landslide', landslide, 'USGS National Landslide Susceptibility dataset',
-    _landslideFallback);
+  // USGS 2024 susceptibility at the point; if the tile or canvas failed, the
+  // NRI tract frequency (Low confidence); if that is missing too, no finding,
+  // and the hazard is listed under "Needs your judgment" with the USGS map link.
+  const landslideNri = landslide ? null : (nriTract ? _mapNRILandslide(nriTract.LNDS_AFREQ) : null);
+  if (landslide) {
+    findings.push({
+      hazardId: H_ID.LANDSLIDE, hazardName: H_NAME[11], category: _hCat(11),
+      scoreAssigned: landslide.score,
+      source: landslide.source || LS_SRC,
+      finding: landslide.finding,
+      confidence: landslide.confidence,
+      status: 'success', isOverridden: false,
+    });
+  } else if (landslideNri) {
+    findings.push({
+      hazardId: H_ID.LANDSLIDE, hazardName: H_NAME[11], category: _hCat(11),
+      scoreAssigned: landslideNri.score,
+      source: NRI_SRC_TRACT,
+      finding: landslideNri.finding,
+      confidence: landslideNri.confidence,
+      status: 'success', isOverridden: false,
+    });
+  }
+
+  // ── FEMA DECLARATION FLOORS (raise only, after everything else) ──
+  if (declarations) _applyDeclarationFloors(findings, declarations, countyLabel, stateAbbr);
 
   return findings;
 }
@@ -1105,25 +1607,30 @@ async function startResearch() {
     return;
   }
 
-  // ── STEPS 1–7: PARALLEL API CALLS (spinners update independently) ──
-  ['flood','earthquake','wildfire','weather','drought','epa','airquality','landslide']
+  // ── PARALLEL API CALLS (spinners update independently) ──
+  ['nri','flood','earthquake','wildfire','weather','drought','epa','airquality','landslide','declarations']
     .forEach(id => _setStep(id, 'running'));
 
-  const { lat, lng, zip, fips5 } = geocoded;
+  const { lat, lng, zip, fips5, stateFips, countyFips } = geocoded;
 
   console.log('[Research] Starting parallel API calls for lat:', lat, 'lng:', lng, 'zip:', zip, 'fips5:', fips5);
 
   // Air quality is always derived — mark it running separately
   // and resolve it after the other calls finish
-  const [flood, earthquake, wildfire, weather, drought, epa, landslide] =
+  // One NRI call feeds hail, wind, winter, tornado, the flood fallback and
+  // the landslide fallback. Flood waits on it only if it reaches Method D.
+  const nriP = _tracked('nri', _callNRIAPI(lat, lng, fips5));
+  const [nri, flood, earthquake, wildfire, weather, drought, epa, landslide, declarations] =
     await Promise.all([
-      _tracked('flood',      _callFloodAPI(lat, lng, fips5)),
+      nriP,
+      _tracked('flood',      _callFloodAPI(lat, lng, fips5, nriP)),
       _tracked('earthquake', _callEarthquakeAPI(lat, lng)),
       _tracked('wildfire',   _callWildfireAPI(lat, lng)),
       _tracked('weather',    _callWeatherAPI(lat, lng)),
       _tracked('drought',    _callDroughtAPI(fips5)),
       _tracked('epa',        _callEPAAPI(zip)),
       _tracked('landslide',  _callLandslideAPI(lat, lng)),
+      _tracked('declarations', _callDeclarationsAPI(stateFips, countyFips)),
     ]);
 
   if (run !== _research.runId) return;   // cancelled while the lookups ran
@@ -1132,13 +1639,13 @@ async function startResearch() {
   _setStep('airquality', (wildfire && epa) ? 'success' : 'error');
 
   console.log('[Research] All API calls settled. Results:', {
-    flood, earthquake, wildfire, weather, drought, epa, landslide
+    nri, flood, earthquake, wildfire, weather, drought, epa, landslide, declarations
   });
 
   // ── COMPILE FINDINGS ──────────────────────────────────────
   try {
     _research.findings = _compileFindings(
-      { flood, earthquake, wildfire, weather, drought, epa, landslide },
+      { flood, earthquake, wildfire, weather, drought, epa, landslide, nri, declarations },
       geocoded
     );
     _research.hasResults = true;
@@ -1530,13 +2037,10 @@ function _renderReport() {
   const summaryHead = fromData.length > 0
     ? `<strong>Public data found for ${fromData.length} hazard${fromData.length === 1 ? '' : 's'}.</strong>`
     : `<strong>No public data sources responded.</strong>`;
-  const summarySub  = [
-    estimated.length > 0 ? `${estimated.length} ${estimated.length === 1 ? 'is a' : 'are'} rough placeholder${estimated.length === 1 ? '' : 's'} because a source did not respond.` : '',
-    failed.length > 0 ? `${failed.length} could not be scored.` : '',
-    `${manualCount} need your judgment.`,
-  ].filter(Boolean).join(' ');
+  const summarySub  = _researchSummarySub(estimated, failed.length, manualCount);
 
   let html = `
+
     <!-- Confirmed address -->
     <div class="report-address-card">
       <div class="report-address-icon">${ic('map-pin')}</div>
@@ -1640,6 +2144,21 @@ function _renderReport() {
   html += `</div>`; // end .research-details
 
   container.innerHTML = html;
+}
+
+/**
+ * Second line of the research summary. State rules of thumb are not a
+ * source that failed, so they are counted apart from real placeholders.
+ */
+function _researchSummarySub(estimated, failedCount, manualCount) {
+  const rule  = estimated.filter(_isRuleOfThumb).length;
+  const other = estimated.length - rule;
+  return [
+    other > 0 ? `${other} ${other === 1 ? 'is a' : 'are'} rough placeholder${other === 1 ? '' : 's'} because a source did not respond.` : '',
+    rule > 0 ? `No address-level source exists yet for ${rule} item${rule === 1 ? '' : 's'}; ${rule === 1 ? 'it uses' : 'they use'} a state rule of thumb.` : '',
+    failedCount > 0 ? `${failedCount} could not be scored.` : '',
+    `${manualCount} need your judgment.`,
+  ].filter(Boolean).join(' ');
 }
 
 /** Current hazard name for a finding (saved reports may carry a v2 name). */

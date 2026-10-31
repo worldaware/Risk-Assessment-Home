@@ -7,7 +7,7 @@
 
 // Single source of truth for the version shown in About, the JSON export and the console.
 // Keep sw.js CACHE_NAME in step with it when shipping.
-const APP_VERSION = '3.0.0';
+const APP_VERSION = '3.1.0';
 
 // Where every "Contact us" link goes: the Say Hello form on beworldaware.com.
 const BOOKING_URL = 'https://www.beworldaware.com/aboutus';
@@ -1524,6 +1524,8 @@ function buildReportData() {
       timestamp: rr.timestamp || '',
       findingCount: used.length,
       estimatedCount: live.filter(f => f.status === 'estimated').length,
+      // State rules of thumb are estimates by design, not a source that failed
+      ruleOfThumbCount: live.filter(f => f.status === 'estimated' && /rule of thumb/i.test(String(f.source || ''))).length,
       unavailableCount: live.filter(f => f.status === 'error').length,
       confidence: conf,
       sources,

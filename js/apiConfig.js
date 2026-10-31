@@ -62,9 +62,28 @@ const API_CONFIG = {
   DROUGHT_MONITOR:
     'https://usdmdataservices.unl.edu/api/CountyStatistics/GetDroughtSeverityStatisticsByAreaPercent',
 
-  /* ── FEMA National Risk Index, county level — no key required ─ */
+  /* ── FEMA National Risk Index (December 2025 release) — no key required ─
+     FEMA's own ArcGIS Online copies of the NRI. Both answered direct from
+     the published page with CORS headers (checked from Henry's browser,
+     2026-10-31). The tract layer answers a point query (JSON geometry form);
+     the county layer is queried by 5-digit STCOFIPS. Request only fields
+     confirmed on both layers: a single unknown name in outFields fails the
+     whole query. Riverine flood is IFLD_* in this release (RFLD_* is gone). */
+  NRI_TRACT:
+    'https://services.arcgis.com/XG15cJAlne2vxtgt/arcgis/rest/services/National_Risk_Index_Census_Tracts/FeatureServer/0/query',
+  NRI_COUNTY:
+    'https://services.arcgis.com/XG15cJAlne2vxtgt/arcgis/rest/services/National_Risk_Index_Counties/FeatureServer/0/query',
+  /* hazards.fema.gov NRI API: did not answer on 2026-10-31 (FEMA's servers
+     refuse Cloudflare's network). Kept only as a last-resort flood fallback
+     through the relay. */
   FEMA_NRI_COUNTY:
     'https://hazards.fema.gov/nri/api/county',
+
+  /* ── OpenFEMA disaster declarations — no key required ─────
+     Answered direct with CORS from the published page (2026-10-31). Used
+     only to raise a likelihood floor, never to lower one. */
+  OPENFEMA_DECLARATIONS:
+    'https://www.fema.gov/api/open/v2/DisasterDeclarationsSummaries',
 
   /* ── EPA TRI (Toxics Release Inventory) — no key required ─
      Envirofacts column is `zip_code` (lowercase); FACILITY_ZIP never answers.
@@ -72,12 +91,20 @@ const API_CONFIG = {
   EPA_TRI_ZIP:
     'https://data.epa.gov/efservice/TRI_FACILITY/zip_code',
 
-  /* ── USGS Landslide Susceptibility — not wired ────────────
-     The old services.arcgis.com/jIL9msH9OI208GCb/.../landslide_susceptibility_US
-     layer answers {"error":{"code":400,"message":"Invalid URL"}}. The current
-     USGS national map (Belair et al. 2024, doi:10.5066/P13KAGU3) is published
-     as file downloads only; no point-query service was found (2026-10-26).
-     Empty means "no source": the landslide row stays an honest placeholder.
-     See relay/README.md, "Open items".                                    */
-  USGS_LANDSLIDE: '',
+  /* ── USGS landslide (Belair et al. 2024, doi:10.5066/P13KAGU3) ─────
+     The 2024 national susceptibility map is a cached tile service only
+     (512 px tiles, Web Mercator, levels 1 to 12, no query or identify). The
+     app reads the pixel under the address from the level-12 tile in a
+     canvas and matches its colour to the legend (CONUS is layerId 8).
+     Tiles, legend, inventory and post-fire layers all answered direct with
+     CORS from the published page (checked from Henry's browser, 2026-10-31).
+     The old jIL9msH9OI208GCb landslide_susceptibility_US layer is gone.     */
+  USGS_LANDSLIDE:
+    'https://tiles.arcgis.com/tiles/v01gqwM5QqNysAAi/arcgis/rest/services/US_Landslide_Susceptibility/MapServer',
+  // US Landslide Inventory v3, point layer 11 (count within 1 km)
+  USGS_LANDSLIDE_INVENTORY:
+    'https://services.arcgis.com/v01gqwM5QqNysAAi/arcgis/rest/services/US_Landslide_point_v2/FeatureServer/11/query',
+  // USGS post-fire debris-flow assessments, layer 4 Basin Combined Hazard (count within 1 km)
+  USGS_POSTFIRE:
+    'https://services.arcgis.com/v01gqwM5QqNysAAi/ArcGIS/rest/services/USGS_Post_Fire_Hazard_Assessment_Data/FeatureServer/4/query',
 };
