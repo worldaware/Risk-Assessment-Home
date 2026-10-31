@@ -553,7 +553,7 @@ async function buildReportPDF() {
   doc.setProperties({
     title: _pdfSafe(r.title),
     subject: 'World Aware Risk Assessment',
-    creator: `World Aware Risk Assessment Tool v${typeof APP_VERSION !== 'undefined' ? APP_VERSION : '2.2.0'}`,
+    creator: `World Aware Risk Assessment Tool v${typeof APP_VERSION !== 'undefined' ? APP_VERSION : '2.3.0'}`,
   });
   return { doc, filename: reportPdfFilename(d.date) };
 }

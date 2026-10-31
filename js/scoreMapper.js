@@ -52,7 +52,7 @@ function mapFloodZoneToScore(zone, subtype) {
   // Moderate risk — Zone B, X500, or Zone X with the 0.2% (500-year) or
   // levee-protected subtype. NFHL spells these out in ZONE_SUBTY, e.g.
   // "0.2 PCT ANNUAL CHANCE FLOOD HAZARD" and "AREA WITH REDUCED FLOOD RISK DUE TO LEVEE".
-  if (z === 'B' || z === 'X500' || (z.startsWith('X') && /0\.2 PCT|LEVEE/.test(sub))) {
+  if (z === 'B' || z === 'X500' || (z.startsWith('X') && /0\.2 (PCT|PERCENT)|LEVEE/.test(sub))) {
     const subtypeNote = sub ? ` (${sub})` : '';
     return { score: 3, finding: `FEMA Zone ${z}${subtypeNote} — Moderate Risk Flood Zone`, confidence: 'High' };
   }

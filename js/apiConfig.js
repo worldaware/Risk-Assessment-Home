@@ -24,7 +24,15 @@ const API_CONFIG = {
   CENSUS_GEOCODER:
     'https://geocoding.geo.census.gov/geocoder/geographies/onelineaddress',
 
-  /* ── FEMA NFHL Flood Zones — no key required ────────────── */
+  /* ── FEMA NFHL Flood Zones — no key required ──────────────
+     Primary: Esri Living Atlas "USA Flood Hazard Areas" (FEMA NFHL data,
+     same FLD_ZONE / ZONE_SUBTY fields). Sends CORS headers, so it is called
+     direct. It holds only mapped hazard polygons: an empty answer at a point
+     means unshaded Zone X (minimal hazard). FEMA's own servers refuse
+     Cloudflare's network (checked 2026-10-31); FEMA_NFHL below is kept as a
+     fallback through the relay. */
+  ESRI_FLOOD_HAZARD:
+    'https://services5.arcgis.com/7weheFjxuNkGGiZi/arcgis/rest/services/USA_Flood_Hazard_Areas_view/FeatureServer/0/query',
   FEMA_NFHL:
     'https://hazards.fema.gov/gis/nfhl/rest/services/public/NFHL/MapServer/28/query',
 
@@ -37,9 +45,12 @@ const API_CONFIG = {
      Classified image service (Dillon 2023, RDS-2015-0047-4). The old
      EDW_WildfireHazardPotential_01 MapServer returns 404. Point lookups use
      the ImageServer "identify" operation; pixel values are
-     1 very low, 2 low, 3 moderate, 4 high, 5 very high, 6 non-burnable, 7 water. */
+     1 very low, 2 low, 3 moderate, 4 high, 5 very high, 6 non-burnable, 7 water.
+     apps.fs.usda.gov refuses Cloudflare's network (checked 2026-10-31), so this
+     uses the Forest Service's copy of the same 2023 classified raster on the
+     federal GeoPlatform. It sends CORS headers, so it is called direct. */
   USFS_WILDFIRE:
-    'https://apps.fs.usda.gov/fsgisx01/rest/services/RDW_Wildfire/RMRS_WildfireHazardPotential_Classified_2023/ImageServer/identify',
+    'https://imagery.geoplatform.gov/iipp/rest/services/Fire_Aviation/USFS_EDW_RMRS_WildfireHazardPotentialClassified/ImageServer/identify',
 
   /* ── NOAA NWS Points — no key required ──────────────────── */
   NWS_POINTS: 'https://api.weather.gov/points',

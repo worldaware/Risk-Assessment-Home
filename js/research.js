@@ -523,7 +523,25 @@ async function _callFloodAPI(lat, lng, fips5) {
   const femaMapUrl = `https://msc.fema.gov/portal/search#${encodeURIComponent(lat + ',' + lng)}`;
   const cLat = _coarse(lat), cLng = _coarse(lng);
 
-  // Without the relay none of these can run; say so instead of "no data".
+  // ── Method 0: Esri Living Atlas copy of NFHL, direct (CORS) ─────
+  // Only mapped hazard polygons are in this layer, so a valid answer with
+  // no features means unshaded Zone X (minimal hazard).
+  try {
+    const url0  = `${API_CONFIG.ESRI_FLOOD_HAZARD}?geometry=${cLng},${cLat}${pointParams}`;
+    const data0 = await directFetch(url0);
+    if (Array.isArray(data0?.features)) {
+      const parsed = _parseNFHLFeatures(data0.features) || { zone: 'X', subtype: '', sfha: false };
+      const r = mapFloodZoneToScore(parsed.zone, parsed.subtype);
+      if (r.score !== null) {
+        console.log('[FEMA Flood] Success via Method 0 (Esri NFHL copy) — Zone:', parsed.zone, 'Score:', r.score);
+        return { ...r, femaMapUrl, confidence: 'High' };
+      }
+    }
+  } catch (e) {
+    console.warn('[FEMA Flood] Method 0 failed:', e.message);
+  }
+
+  // The remaining methods need the relay; say so instead of "no data".
   if (!String(API_CONFIG.RELAY_URL || '').trim()) {
     throw _codedError(RELAY_NOT_CONFIGURED, 'Relay not configured');
   }
@@ -609,7 +627,7 @@ async function _callEarthquakeAPI(lat, lng) {
 
 /* ---------------------------------------------------------------
    API 3 — WILDFIRE HAZARD POTENTIAL (USFS WHP 2023, 270 m)
-   Route: relay (USFS ArcGIS blocks browser CORS)
+   Route: direct (GeoPlatform copy sends CORS headers; apps.fs.usda.gov blocks Cloudflare)
    ImageServer identify returns { value: "4", ... } for the pixel under the
    point, or "NoData" outside the mapped area.
 --------------------------------------------------------------- */
@@ -623,7 +641,7 @@ async function _callWildfireAPI(lat, lng) {
 
   // Any failure here throws, so _tracked marks the step as failed and
   // _compileFindings applies the state fallback with an honest "Estimated" tag.
-  const data = await proxyFetch(url);
+  const data = await directFetch(url);
   const raw  = data?.value ?? data?.properties?.Values?.[0];
   const cat  = parseInt(raw, 10);
   if (!(cat >= 1 && cat <= 7)) throw new Error(`No USFS WHP class at this location (value: ${raw})`);
