@@ -7,7 +7,7 @@
 
 // Single source of truth for the version shown in About, the JSON export and the console.
 // Keep sw.js CACHE_NAME in step with it when shipping.
-const APP_VERSION = '2.4.0';
+const APP_VERSION = '3.0.0';
 
 // Where every "Contact us" link goes: the Say Hello form on beworldaware.com.
 const BOOKING_URL = 'https://www.beworldaware.com/aboutus';
@@ -34,6 +34,7 @@ const CATEGORY_ICONS = {
   'Infrastructure Failures':           'building-2',
   'Supply Chain':                      'truck',
   'Other & Human-Caused':              'users',
+  'Home':                              'house',
 };
 const CATEGORY_LABELS = {
   'Natural Hazards':                   'Natural hazards',
@@ -42,6 +43,7 @@ const CATEGORY_LABELS = {
   'Infrastructure Failures':           'Infrastructure failures',
   'Supply Chain':                      'Supply chain',
   'Other & Human-Caused':              'Other and human-caused',
+  'Home':                              'Home',
 };
 function catLabel(name) { return CATEGORY_LABELS[name] || name; }
 
@@ -58,339 +60,131 @@ function riskBadgeHtml(rl) {
 }
 
 /* ---------------------------------------------------------------
-   FULL HAZARD DATA — 62 hazards
+   HAZARD DATA (v3.0.0): 20 core, 8 less common, 3 custom
+   Ids are stable from v2 so old exports and research findings still
+   line up. `group` sets where a hazard sits on the Assess screen;
+   `category` is kept for the report, actions and share text.
+   `baseImpact` (core only) is the impact the household checklist
+   starts from (js/checklist.js). `naDefault` hazards arrive marked
+   "Does not apply here".
+   Order here is the order on screen.
 --------------------------------------------------------------- */
 
 const HAZARD_DATA = [
-  // ── Natural Hazards ──────────────────────────────────────────
-  {
-    id: 1, category: 'Natural Hazards',
+  // ── The 20 most likely here ──────────────────────────────────
+  { id: 1,  group: 'core', baseImpact: 4, category: 'Natural Hazards',
     name: 'Wildfire',
-    description: 'Fast-moving fire threatening structures, air quality, and evacuation routes',
-  },
-  {
-    id: 2, category: 'Natural Hazards',
+    description: 'A wildfire comes close enough that you are told to leave, or embers land on your property.' },
+  { id: 23, group: 'core', baseImpact: 2, category: 'Natural Hazards',
+    name: 'Smoke and bad air days',
+    description: 'Smoke or blowing dust makes outdoor air unhealthy enough that you close up the house for a day or more.' },
+  { id: 5,  group: 'core', baseImpact: 3, category: 'Natural Hazards',
+    name: 'Hail and severe thunderstorms',
+    description: 'Hail big enough to damage a roof, windows or car, or lightning and downpours from the same storm, hits your home.' },
+  { id: 63, group: 'core', baseImpact: 3, category: 'Natural Hazards',
+    name: 'High wind',
+    description: 'Wind strong enough to tear shingles, drop trees or power lines on your street, or push a grass fire.' },
+  { id: 8,  group: 'core', baseImpact: 3, category: 'Natural Hazards',
+    name: 'Winter storm and extreme cold',
+    description: 'Snow or ice keeps you home for two days or more, or cold deep enough that pipes freeze or the furnace can\'t keep up.' },
+  { id: 24, group: 'core', baseImpact: 3, category: 'Outages & Service Interruptions',
+    name: 'Long power outage, including planned safety shutoffs',
+    description: 'Power is off at your home for more than a day, from storm damage or because the utility shuts it off to prevent fires.' },
+  { id: 4,  group: 'core', baseImpact: 4, category: 'Natural Hazards',
+    name: 'Flash flood',
+    description: 'Water rushes down a canyon, gulch or street fast enough to reach your home within hours of heavy rain, or after a dam release upstream.' },
+  { id: 3,  group: 'core', baseImpact: 4, category: 'Natural Hazards',
+    name: 'River and creek flood',
+    description: 'A creek or river rises over its banks and water reaches your home or cuts off your street for a day or more.' },
+  { id: 10, group: 'core', baseImpact: 2, category: 'Natural Hazards',
+    name: 'Drought and watering limits',
+    description: 'Your water provider orders mandatory limits, or you have to cut household water use.' },
+  { id: 9,  group: 'core', baseImpact: 2, category: 'Natural Hazards',
+    name: 'Extreme heat',
+    description: 'Several hot days in a row when the house stays unsafe without cooling, worst if the power is also out.' },
+  { id: 2,  group: 'core', baseImpact: 3, category: 'Natural Hazards',
     name: 'Earthquake',
-    description: 'Ground shaking, structural damage, aftershocks, utility disruption',
-  },
-  {
-    id: 3, category: 'Natural Hazards',
-    name: 'Flood (riverine)',
-    description: 'River or creek overflow inundating properties and roads',
-  },
-  {
-    id: 4, category: 'Natural Hazards',
-    name: 'Flash Flood',
-    description: 'Rapid, sudden flooding from heavy rain or dam failure upstream',
-  },
-  {
-    id: 5, category: 'Natural Hazards',
-    name: 'Severe Thunderstorm',
-    description: 'High winds, hail, lightning, localized flooding, tree damage',
-  },
-  {
-    id: 6, category: 'Natural Hazards',
+    description: 'Shaking strong enough at your home to knock things off shelves and crack walls or chimneys.' },
+  { id: 11, group: 'core', baseImpact: 4, category: 'Natural Hazards',
+    name: 'Landslide, rockfall and debris flow after fire',
+    description: 'Rock, mud or a slope moves onto your home or your road, including mud and debris washing off a burned hillside in a storm.' },
+  { id: 64, group: 'core', baseImpact: 3, category: 'Home',
+    name: 'Radon',
+    description: 'A test of your home shows radon at or above the EPA action level of 4 pCi/L. Haven\'t tested: rate it 3. Tested high: 5. Tested low: 1.' },
+  { id: 65, group: 'core', baseImpact: 5, category: 'Home',
+    name: 'House fire',
+    description: 'A fire starts inside your home from cooking, heating, electrical or a dryer.' },
+  { id: 15, group: 'core', baseImpact: 3, category: 'Industrial & CBRN',
+    name: 'Chemical spill from road, rail or a nearby plant',
+    description: 'A truck, train or nearby plant releases something toxic and you are told to stay inside with windows shut, or to leave.' },
+  { id: 17, group: 'core', baseImpact: 4, category: 'Industrial & CBRN',
+    name: 'Gas leak or explosion',
+    description: 'A gas leak at your home or on your street forces you out, or a nearby gas line fails.' },
+  { id: 27, group: 'core', baseImpact: 2, category: 'Outages & Service Interruptions',
+    name: 'Water outage or unsafe tap water',
+    description: 'Your tap water is off, or under a boil order, for a day or more.' },
+  { id: 36, group: 'core', baseImpact: 3, category: 'Outages & Service Interruptions',
+    name: 'Road closed when you need to leave',
+    description: 'The roads you would use to get out are blocked by fire, flood, snow or a crash at the moment you need them.' },
+  { id: 22, group: 'core', baseImpact: 3, category: 'Other & Human-Caused',
+    name: 'Serious disease outbreak',
+    description: 'A disease outbreak closes schools and workplaces or keeps your household home for weeks.' },
+  { id: 6,  group: 'core', baseImpact: 4, category: 'Natural Hazards',
     name: 'Tornado',
-    description: 'Violent rotating winds causing structural damage and debris',
-  },
-  {
-    id: 7, category: 'Natural Hazards',
-    name: 'Hurricane / Tropical Storm',
-    description: 'Sustained high winds, storm surge, heavy rain, extended power outages',
-  },
-  {
-    id: 8, category: 'Natural Hazards',
-    name: 'Winter Storm / Ice Storm',
-    description: 'Heavy snow, ice accumulation, road closures, hypothermia risk',
-  },
-  {
-    id: 9, category: 'Natural Hazards',
-    name: 'Extreme Heat',
-    description: 'Prolonged high temperatures causing heat stroke, crop failure, power spikes',
-  },
-  {
-    id: 10, category: 'Natural Hazards',
-    name: 'Drought',
-    description: 'Extended water scarcity affecting drinking water, fire risk, food production',
-  },
-  {
-    id: 11, category: 'Natural Hazards',
-    name: 'Landslide / Mudslide',
-    description: 'Slope failure threatening structures, roads, and utility lines',
-  },
-  {
-    id: 12, category: 'Natural Hazards',
+    description: 'A tornado touches down close enough to damage your home or blow debris through your street.' },
+
+  // ── Less common here ─────────────────────────────────────────
+  { id: 7,  group: 'rare', naDefault: true, category: 'Natural Hazards',
+    name: 'Hurricane',
+    description: 'A hurricane or tropical storm brings damaging wind, storm surge or flooding rain to your home. They form over warm ocean water and do not reach Colorado as hurricanes.' },
+  { id: 12, group: 'rare', naDefault: true, category: 'Natural Hazards',
     name: 'Tsunami',
-    description: 'Ocean wave inundation following earthquake or submarine landslide',
-  },
-  {
-    id: 13, category: 'Natural Hazards',
-    name: 'Volcanic Ash / Eruption',
-    description: 'Ash fall disrupting air quality, power, transportation, and water',
-  },
-  {
-    id: 14, category: 'Natural Hazards',
-    name: 'Dust Storm / Haboob',
-    description: 'Visibility loss, respiratory hazard, equipment damage',
-  },
+    description: 'A wave from the ocean floods your home after an undersea earthquake or landslide. Only coastal homes are exposed.' },
+  { id: 13, group: 'rare', naDefault: true, category: 'Natural Hazards',
+    name: 'Volcanic ash',
+    description: 'Ash from an eruption falls on your area and fouls the air, water, roads and engines.' },
+  { id: 18, group: 'rare', category: 'Industrial & CBRN',
+    name: 'Nuclear or radiological incident',
+    description: 'A release from a reactor, a medical or industrial radiation source, or a deliberate attack means you are told to stay inside or to leave.' },
+  { id: 20, group: 'rare', category: 'Industrial & CBRN',
+    name: 'Old mine collapse or quarry blasting',
+    description: 'Ground over old coal or mine workings sinks under your home, or blasting at a nearby quarry shakes or damages it.' },
+  { id: 53, group: 'rare', category: 'Other & Human-Caused',
+    name: 'Civil unrest',
+    description: 'Protests or riots near your home make it unsafe to go out, block your way home, or damage property on your street.' },
+  { id: 54, group: 'rare', category: 'Other & Human-Caused',
+    name: 'Active threat',
+    description: 'A shooting or other violent attack happens nearby and you are told to shelter in place or stay away from the area.' },
+  { id: 66, group: 'rare', category: 'Natural Hazards',
+    name: 'Shifting or swelling soil under the house',
+    description: 'Clay soil under the house swells when wet and shrinks when dry, cracking the foundation, walls or driveway over months or years.' },
 
-  // ── Industrial & CBRN ────────────────────────────────────────
-  {
-    id: 15, category: 'Industrial & CBRN',
-    name: 'Chemical Plant / Refinery Release',
-    description: 'Toxic chemical release from nearby industrial facility',
-  },
-  {
-    id: 16, category: 'Industrial & CBRN',
-    name: 'Hazmat Transportation Incident',
-    description: 'Truck or rail car carrying hazardous materials derails or crashes nearby',
-  },
-  {
-    id: 17, category: 'Industrial & CBRN',
-    name: 'Natural Gas Pipeline Leak / Explosion',
-    description: 'Underground or surface pipeline failure causing fire, explosion, or gas exposure',
-  },
-  {
-    id: 18, category: 'Industrial & CBRN',
-    name: 'Nuclear / Radiological Incident',
-    description: 'Release from power plant, medical facility, or dirty bomb event',
-  },
-  {
-    id: 19, category: 'Industrial & CBRN',
-    name: 'Agricultural Chemical Drift',
-    description: 'Pesticide or fertilizer spray drift from nearby farms or crop dusting',
-  },
-  {
-    id: 20, category: 'Industrial & CBRN',
-    name: 'Mine / Quarry Hazard',
-    description: 'Blasting, dust, runoff, or structural failure from nearby mining operations',
-  },
-  {
-    id: 21, category: 'Industrial & CBRN',
-    name: 'Wastewater / Sewage Release',
-    description: 'Sewage system overflow or treatment plant failure contaminating water sources',
-  },
-  {
-    id: 22, category: 'Industrial & CBRN',
-    name: 'Biological Release / Pandemic',
-    description: 'Infectious disease outbreak requiring quarantine and healthcare surge',
-  },
-  {
-    id: 23, category: 'Industrial & CBRN',
-    name: 'Air Quality Crisis',
-    description: 'Persistent poor air quality requiring shelter-in-place and respiratory protection',
-  },
-
-  // ── Outages & Service Interruptions ─────────────────────────
-  {
-    id: 24, category: 'Outages & Service Interruptions',
-    name: 'Extended Power Outage (3+ days)',
-    description: 'Grid failure from storm, equipment failure, or cyber attack',
-  },
-  {
-    id: 25, category: 'Outages & Service Interruptions',
-    name: 'Short-Term Power Outage (<3 days)',
-    description: 'Brief grid disruption affecting daily function and medical devices',
-  },
-  {
-    id: 26, category: 'Outages & Service Interruptions',
-    name: 'Natural Gas Service Interruption',
-    description: 'Loss of gas for heating, cooking, and water heating',
-  },
-  {
-    id: 27, category: 'Outages & Service Interruptions',
-    name: 'Municipal Water Outage',
-    description: 'Loss of tap water pressure or boil water advisory',
-  },
-  {
-    id: 28, category: 'Outages & Service Interruptions',
-    name: 'Wastewater / Sewer Failure',
-    description: 'Backup, overflow, or loss of sewage service',
-  },
-  {
-    id: 29, category: 'Outages & Service Interruptions',
-    name: 'Internet / Broadband Outage',
-    description: 'Loss of internet affecting communications, work, and information access',
-  },
-  {
-    id: 30, category: 'Outages & Service Interruptions',
-    name: 'Cell Network Failure',
-    description: 'Mobile communications overloaded or offline during emergency',
-  },
-  {
-    id: 31, category: 'Outages & Service Interruptions',
-    name: 'Landline / VOIP Outage',
-    description: 'Loss of fixed-line phone service',
-  },
-  {
-    id: 32, category: 'Outages & Service Interruptions',
-    name: 'Emergency Services Overwhelmed',
-    description: 'Fire, police, and EMS unable to respond in normal timeframes',
-  },
-  {
-    id: 33, category: 'Outages & Service Interruptions',
-    name: 'Hospital / Medical Facility Closure',
-    description: 'Local medical care unavailable due to damage, surge, or evacuation',
-  },
-  {
-    id: 34, category: 'Outages & Service Interruptions',
-    name: 'School / Childcare Closure',
-    description: 'Disruption to childcare requiring household coverage',
-  },
-  {
-    id: 35, category: 'Outages & Service Interruptions',
-    name: 'Public Transit Disruption',
-    description: 'Bus, rail, or ride-share services halted',
-  },
-
-  // ── Infrastructure Failures ──────────────────────────────────
-  {
-    id: 36, category: 'Infrastructure Failures',
-    name: 'Road / Bridge Closure',
-    description: 'Primary evacuation or access routes blocked or damaged',
-  },
-  {
-    id: 37, category: 'Infrastructure Failures',
-    name: 'Water Main Break',
-    description: 'Loss of municipal water pressure to homes and fire hydrants',
-  },
-  {
-    id: 38, category: 'Infrastructure Failures',
-    name: 'Fuel Supply Disruption',
-    description: 'Local fuel unavailable for vehicles and generators',
-  },
-  {
-    id: 39, category: 'Infrastructure Failures',
-    name: 'Dam Failure / Reservoir Release',
-    description: 'Catastrophic downstream flooding from dam breach',
-  },
-  {
-    id: 40, category: 'Infrastructure Failures',
-    name: 'Levee Failure',
-    description: 'Flood protection infrastructure breach causing inundation',
-  },
-  {
-    id: 41, category: 'Infrastructure Failures',
-    name: 'Electrical Grid Substation Failure',
-    description: 'Local transformer damage causing extended neighborhood outage',
-  },
-  {
-    id: 42, category: 'Infrastructure Failures',
-    name: 'Building / Structural Failure',
-    description: 'Collapse or unsafe conditions in residential or commercial structures',
-  },
-  {
-    id: 43, category: 'Infrastructure Failures',
-    name: 'Stormwater / Drainage System Failure',
-    description: 'Overwhelmed drainage causing localized flooding',
-  },
-  {
-    id: 44, category: 'Infrastructure Failures',
-    name: 'Cyber Attack on Critical Infrastructure',
-    description: 'Disruption of water, power, or communications via cyber attack',
-  },
-
-  // ── Supply Chain ─────────────────────────────────────────────
-  {
-    id: 45, category: 'Supply Chain',
-    name: 'Food Supply Shortage',
-    description: 'Regional disruption to food distribution and grocery availability',
-  },
-  {
-    id: 46, category: 'Supply Chain',
-    name: 'Medication / Pharmaceutical Shortage',
-    description: 'Prescription and OTC medications unavailable or rationed',
-  },
-  {
-    id: 47, category: 'Supply Chain',
-    name: 'Medical Equipment Shortage',
-    description: 'PPE, DME, or emergency medical supplies unavailable',
-  },
-  {
-    id: 48, category: 'Supply Chain',
-    name: 'Fuel / Energy Supply Disruption',
-    description: 'Gasoline, propane, or heating oil distribution interrupted',
-  },
-  {
-    id: 49, category: 'Supply Chain',
-    name: 'Building Materials Shortage',
-    description: 'Lumber, hardware, and repair materials unavailable post-disaster',
-  },
-  {
-    id: 50, category: 'Supply Chain',
-    name: 'Bottled Water / Purification Supply Shortage',
-    description: 'Commercial water and filtration products sold out',
-  },
-  {
-    id: 51, category: 'Supply Chain',
-    name: 'Electronic / Battery Supply Shortage',
-    description: 'Batteries, chargers, and powered equipment unavailable',
-  },
-  {
-    id: 52, category: 'Supply Chain',
-    name: 'Cash / Banking System Disruption',
-    description: 'ATMs offline, payment systems down, or bank access limited',
-  },
-
-  // ── Other & Human-Caused ─────────────────────────────────────
-  {
-    id: 53, category: 'Other & Human-Caused',
-    name: 'Civil Unrest / Social Disruption',
-    description: 'Protests, riots, or social breakdown affecting safety and movement',
-  },
-  {
-    id: 54, category: 'Other & Human-Caused',
-    name: 'Active Threat / Violence Event',
-    description: 'Shooting, attack, or armed incident in the community',
-  },
-  {
-    id: 55, category: 'Other & Human-Caused',
-    name: 'Wildland-Urban Interface Encroachment',
-    description: 'Development in fire-prone areas increasing wildfire exposure',
-  },
-  {
-    id: 56, category: 'Other & Human-Caused',
-    name: 'Economic Shock / Job Loss',
-    description: 'Sudden income loss reducing capacity to prepare and recover',
-  },
-  {
-    id: 57, category: 'Other & Human-Caused',
-    name: 'Housing Instability / Displacement',
-    description: 'Loss of housing due to disaster, economic, or policy factors',
-  },
-  {
-    id: 58, category: 'Other & Human-Caused',
-    name: 'Animal / Livestock Disease Outbreak',
-    description: 'Disease affecting local food production',
-  },
-  {
-    id: 59, category: 'Other & Human-Caused',
-    name: 'Extreme Isolation / Evacuation Difficulty',
-    description: 'Geographic factors making evacuation slow or impossible',
-  },
-  // Custom hazards 60-62 (user-editable)
-  {
-    id: 60, category: 'Other & Human-Caused',
-    name: '', // user fills in
-    description: '',
-    isCustom: true,
-    customIndex: 1,
-  },
-  {
-    id: 61, category: 'Other & Human-Caused',
-    name: '',
-    description: '',
-    isCustom: true,
-    customIndex: 2,
-  },
-  {
-    id: 62, category: 'Other & Human-Caused',
-    name: '',
-    description: '',
-    isCustom: true,
-    customIndex: 3,
-  },
+  // ── Something we missed? (user-editable) ─────────────────────
+  { id: 60, group: 'custom', category: 'Other & Human-Caused', name: '', description: '', isCustom: true, customIndex: 1 },
+  { id: 61, group: 'custom', category: 'Other & Human-Caused', name: '', description: '', isCustom: true, customIndex: 2 },
+  { id: 62, group: 'custom', category: 'Other & Human-Caused', name: '', description: '', isCustom: true, customIndex: 3 },
 ];
+
+// v2 hazard ids that were merged into a core hazard or moved to the household
+// checklist in v3.0.0. Saved states and imports drop them.
+const RETIRED_HAZARD_IDS = [14, 16, 19, 21, 25, 26, 28, 29, 30, 31, 32, 33, 34, 35, 37, 38, 39, 40, 41, 42,
+  43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 55, 56, 57, 58, 59];
+
+// The three groups on the Assess screen, in order. The household checklist
+// card sits above them (js/checklist.js).
+const HAZARD_GROUPS = [
+  { key: 'core',   icon: 'map-pin',       title: 'The 20 most likely here',
+    intro: 'These are the things most likely to happen to a home in Boulder and Denver. For each one, pick how often it could happen at your home, or mark it Does not apply here.' },
+  { key: 'rare',   icon: 'circle-dashed', title: 'Less common here (8)',
+    intro: 'These happen, but rarely on the Front Range or only in certain spots. Open this if one of them applies to you or worries you.' },
+  { key: 'custom', icon: 'plus',          title: 'Something we missed?',
+    intro: 'Add anything specific to your home or street.' },
+];
+
+function getHazard(id) {
+  id = parseInt(id, 10);
+  return HAZARD_DATA.find(h => h.id === id) || null;
+}
 
 /* ---------------------------------------------------------------
    APP STATE
@@ -406,6 +200,13 @@ function _newAssessmentId() {
   return 'a' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
 
+/** Scores a fresh assessment starts with: the naDefault hazards ruled out. */
+function _defaultScores() {
+  const scores = {};
+  HAZARD_DATA.forEach(h => { if (h.naDefault) scores[h.id] = { na: true, naAuto: true }; });
+  return scores;
+}
+
 /**
  * Fresh default state. Used on first load, as the base that saved states
  * are merged onto (so older saved states gain any new fields), and on reset.
@@ -419,7 +220,11 @@ function defaultState() {
     householdSize: '',
     hh1Name: 'Household 1',
     hh2Name: 'Household 2',
-    scores: {},     // { hazardId: { l: 0, i: 0, notes: '', l2: 0, i2: 0, isAuto: bool } }
+    // { hazardId: { l, i, l2, i2, notes, isAuto, isEstimate,
+    //   na: bool (does not apply here), naAuto: bool (pre-marked, research may clear it),
+    //   iManual / i2Manual: bool (impact set by hand, so the checklist leaves it alone) } }
+    scores: _defaultScores(),
+    checklist: { hh1: {}, hh2: {} },   // household checklist: { hh1: { itemId: true }, hh2: {...} }
     customNames: {  // custom hazard names/desc
       60: { name: '', description: '' },
       61: { name: '', description: '' },
@@ -432,8 +237,15 @@ function defaultState() {
   };
 }
 
+/** A fresh state with checklist impacts filled in for the core hazards. */
+function freshState() {
+  const st = defaultState();
+  if (typeof applyChecklistImpacts === 'function') applyChecklistImpacts(st);
+  return st;
+}
+
 // State object — single source of truth
-let state = defaultState();
+let state = freshState();
 
 /* ---------------------------------------------------------------
    UTILITY FUNCTIONS
@@ -458,7 +270,7 @@ function getRiskLevel(score) {
  */
 function calcScore(hazardId) {
   const entry = state.scores[hazardId];
-  if (!entry) return 0;
+  if (!entry || entry.na) return 0;
 
   const l = parseInt(entry.l) || 0;
   const i = parseInt(entry.i) || 0;
@@ -480,7 +292,7 @@ function calcScore(hazardId) {
  */
 function isScored(hazardId) {
   const entry = state.scores[hazardId];
-  if (!entry) return false;
+  if (!entry || entry.na) return false;
   const l = parseInt(entry.l) || 0;
   const i = parseInt(entry.i) || 0;
   if (l > 0 && i > 0) return true;
@@ -490,24 +302,41 @@ function isScored(hazardId) {
   return false;
 }
 
-/**
- * Count total scored hazards.
- */
-function countScored() {
-  return HAZARD_DATA.filter(h => {
-    if (h.isCustom && !state.customNames[h.id]?.name) return false;
-    return isScored(h.id);
-  }).length;
+/** Marked "Does not apply here" (by the user, or pre-marked). */
+function isNA(hazardId) {
+  return !!(state.scores[hazardId] && state.scores[hazardId].na);
+}
+
+/** Scored or ruled out: fills a progress slot. */
+function isDone(hazardId) {
+  return isScored(hazardId) || isNA(hazardId);
 }
 
 /**
- * Returns total number of active hazards (including named custom ones).
+ * Whether a hazard counts toward progress: every core hazard, named custom
+ * hazards, and less common hazards the user has rated or ruled out
+ * themselves (a pre-marked "Does not apply here" does not count).
+ */
+function countsTowardProgress(h) {
+  if (h.isCustom) return !!state.customNames[h.id]?.name;
+  if (h.group !== 'rare') return true;
+  const e = state.scores[h.id] || {};
+  if (e.na) return !e.naAuto;
+  return ['l', 'i', 'l2', 'i2'].some(f => (parseInt(e[f]) || 0) > 0);
+}
+
+/**
+ * Count hazards that are done (scored or ruled out) among those that count.
+ */
+function countScored() {
+  return HAZARD_DATA.filter(h => countsTowardProgress(h) && isDone(h.id)).length;
+}
+
+/**
+ * Number of hazards progress is measured against.
  */
 function totalActive() {
-  return HAZARD_DATA.filter(h => {
-    if (h.isCustom) return !!state.customNames[h.id]?.name;
-    return true;
-  }).length;
+  return HAZARD_DATA.filter(countsTowardProgress).length;
 }
 
 /**
@@ -538,8 +367,9 @@ function loadCurrentState() {
       const parsed = JSON.parse(saved);
       // Pre-v2 states have no assessmentId; the one generated below must be
       // saved right away or report edits keyed to it are lost on reload.
-      if (!parsed || !parsed.assessmentId) needsSave = true;
+      if (!parsed || !parsed.assessmentId || !parsed.checklist) needsSave = true;
       state = normalizeState(parsed);
+      if (typeof applyChecklistImpacts === 'function') applyChecklistImpacts(state);
     } catch (e) {
       console.warn('Could not parse saved state', e);
       needsSave = true;
@@ -552,14 +382,51 @@ function loadCurrentState() {
   }
 }
 
-/** Merge a (possibly older) saved state onto current defaults. */
+/**
+ * Merge a (possibly older) saved state onto current defaults.
+ * Score entries and research sources for hazards no longer in HAZARD_DATA
+ * (the v2 ids retired in v3.0.0) are dropped. A state from before v3 (no
+ * checklist) is migrated: impacts already rated on core hazards are kept as
+ * set by hand, and the naDefault hazards nobody rated are ruled out.
+ * Checklist impacts are not applied here; callers run applyChecklistImpacts().
+ */
 function normalizeState(parsed) {
   const base = defaultState();
+  const preV3 = !!parsed && typeof parsed === 'object' && !Object.prototype.hasOwnProperty.call(parsed, 'checklist');
   const merged = Object.assign(base, parsed || {});
-  merged.scores           = merged.scores || {};
   merged.customNames      = Object.assign(defaultState().customNames, merged.customNames || {});
-  merged.autoScoreOrigins = merged.autoScoreOrigins || {};
   if (!merged.assessmentId) merged.assessmentId = _newAssessmentId();
+  merged.checklist = (typeof normalizeChecklist === 'function')
+    ? normalizeChecklist(merged.checklist)
+    : (merged.checklist && typeof merged.checklist === 'object' ? merged.checklist : { hh1: {}, hh2: {} });
+
+  const known = new Set(HAZARD_DATA.map(h => String(h.id)));
+  const keepKnown = obj => {
+    const out = {};
+    if (obj && typeof obj === 'object') Object.keys(obj).forEach(k => { if (known.has(String(k))) out[k] = obj[k]; });
+    return out;
+  };
+  merged.scores           = keepKnown(merged.scores);
+  merged.autoScoreOrigins = keepKnown(merged.autoScoreOrigins);
+  if (merged.researchReport && Array.isArray(merged.researchReport.findings)) {
+    merged.researchReport = Object.assign({}, merged.researchReport, {
+      findings: merged.researchReport.findings.filter(f => f && known.has(String(f.hazardId))),
+    });
+  }
+
+  if (preV3) {
+    HAZARD_DATA.forEach(h => {
+      const e = merged.scores[h.id];
+      if (h.group === 'core' && e) {
+        if ((parseInt(e.i) || 0) > 0)  e.iManual = true;
+        if ((parseInt(e.i2) || 0) > 0) e.i2Manual = true;
+      }
+      if (h.naDefault) {
+        const rated = e && ['l', 'i', 'l2', 'i2'].some(f => (parseInt(e[f]) || 0) > 0);
+        if (!rated) merged.scores[h.id] = Object.assign(e || {}, { na: true, naAuto: true });
+      }
+    });
+  }
   return merged;
 }
 
@@ -653,7 +520,7 @@ function renderContinueCard() {
   const name = (state.location || '').replace(/^\s*\d+[A-Za-z-]*\s+/, '').trim() ||
     (state.assessmentType === 'neighborhood' ? 'Neighborhood assessment' : 'Household assessment');
   const when = state.date ? formatReportDate(state.date) : '';
-  text.textContent = `Continue: ${name}, ${scored} of ${totalActive()} hazards scored` + (when ? `, ${when}` : '');
+  text.textContent = `Continue: ${name}, ${scored} of ${totalActive()} hazards done` + (when ? `, ${when}` : '');
   card.classList.remove('hidden');
 }
 
@@ -720,7 +587,8 @@ function startAssessment(type) {
 
 /** True when the assessment on screen holds work worth keeping. */
 function _isDirtyAssessment() {
-  return countScored() > 0 || !!state.location || !!state.researchReport;
+  const ticked = (typeof checklistCount === 'function') ? checklistCount('hh1') + checklistCount('hh2') : 0;
+  return countScored() > 0 || ticked > 0 || !!state.location || !!state.researchReport;
 }
 
 /**
@@ -739,7 +607,7 @@ function newAssessment(type) {
       showToast('Could not save a copy: storage is unavailable or full. Export your work as a backup, then try again.', 6000);
       return;
     }
-    state = defaultState();
+    state = freshState();
     state.assessmentType = t;
     state.date = localToday();
     _screenScroll.assessment = 0;
@@ -777,21 +645,29 @@ function initAssessmentUI() {
   document.getElementById('hh1-name').value = state.hh1Name || 'Household 1';
   document.getElementById('hh2-name').value = state.hh2Name || 'Household 2';
 
-  // Remember which categories were open so a rebuild doesn't collapse them
+  // Remember which sheets were open so a rebuild doesn't collapse them.
+  // First build: the core list is open, and the household checklist is open
+  // until something is ticked or scored.
+  const existing = [...document.querySelectorAll('#hazard-list .category-section')];
   const openCats = new Set(
-    [...document.querySelectorAll('#hazard-list .category-section')]
+    existing
       .filter(sec => !sec.querySelector('.category-rows')?.classList.contains('collapsed'))
       .map(sec => sec.dataset.category)
   );
+  if (existing.length === 0) {
+    openCats.add('core');
+    const ticked = (typeof checklistCount === 'function') ? checklistCount('hh1') + checklistCount('hh2') : 0;
+    if (ticked === 0 && countScored() === 0) openCats.add('household');
+  }
 
   // Build hazard list
   buildHazardList();
   updateProgress();
 
-  // Open categories that hold research findings still needing an impact rating
+  // Open groups that hold research findings still needing an impact rating
   getResearchFlaggedIds()
     .filter(id => needsImpact(id))
-    .forEach(id => { const c = getCategoryForHazard(id); if (c) openCats.add(c); });
+    .forEach(id => { const c = getGroupForHazard(id); if (c) openCats.add(c); });
   document.querySelectorAll('#hazard-list .category-section').forEach(sec => {
     if (openCats.has(sec.dataset.category)) setCategoryOpen(sec, true);
   });
@@ -813,7 +689,7 @@ function getResearchFlaggedIds() {
 /** A research-flagged hazard with a likelihood but no impact yet. */
 function needsImpact(hazardId) {
   const e = state.scores[hazardId];
-  if (!e) return false;
+  if (!e || e.na) return false;
   const flagged = !!e.isAuto || !!(state.autoScoreOrigins || {})[hazardId];
   return flagged && (parseInt(e.l) || 0) > 0 && !((parseInt(e.i) || 0) > 0);
 }
@@ -836,7 +712,7 @@ function _syncResearchBanner() {
       ${ic('info')}
       <span class="auto-score-banner-text">
         Research estimated likelihood for <strong>${flagged.length} hazard${flagged.length === 1 ? '' : 's'}</strong>.
-        Rate the impact of each for your household to complete your risk scores.
+        Check the impact on each one and change any that look wrong for your household.
         <span id="auto-score-banner-remaining" class="auto-score-banner-remaining">${unrated > 0 ? `${unrated} still need an impact rating.` : 'All impacts rated.'}</span>
       </span>
       <button class="btn btn-ghost btn-small" onclick="showResearchDetails()">Research details</button>
@@ -858,61 +734,67 @@ function _updateResearchBannerCount() {
    HAZARD LIST BUILDER
 --------------------------------------------------------------- */
 
+/** One collapsible sheet: header button plus a rows container (starts collapsed). */
+function _buildSheet(key, icon, title, countText) {
+  const section = document.createElement('div');
+  section.className = 'category-section';
+  section.dataset.category = key;
+
+  const header = document.createElement('button');
+  header.type = 'button';
+  header.className = 'category-header';
+  header.setAttribute('aria-expanded', 'false');
+  header.setAttribute('aria-controls', `cat-rows-${key}`);
+  header.innerHTML = `
+      <span class="cat-icon">${ic(icon)}</span>
+      <span class="cat-text">
+        <span class="cat-name">${escHtml(title)}</span>
+        <span class="cat-count" id="cat-count-${key}">${escHtml(countText || '')}</span>
+      </span>
+      <span class="cat-strip" id="cat-strip-${key}" aria-hidden="true"></span>
+      ${ic('chevron-down', 'cat-chevron')}
+    `;
+  header.addEventListener('click', () => toggleCategory(section));
+
+  const rows = document.createElement('div');
+  rows.className = 'category-rows collapsed';
+  rows.id = `cat-rows-${key}`;
+
+  section.appendChild(header);
+  section.appendChild(rows);
+  return { section, rows };
+}
+
 /**
- * Build the full hazard list grouped by category.
+ * Build the Assess screen list: the household checklist card, then the
+ * three hazard groups (core, less common, custom) in HAZARD_DATA order.
  */
 function buildHazardList() {
   const container = document.getElementById('hazard-list');
   container.innerHTML = '';
 
-  // Group hazards by category
-  const categories = {};
-  HAZARD_DATA.forEach(h => {
-    if (!categories[h.category]) categories[h.category] = [];
-    categories[h.category].push(h);
-  });
+  // 1. About your household
+  if (typeof buildChecklistHtml === 'function') {
+    const hh = _buildSheet('household', 'list-checks', 'About your household', checklistCountText());
+    hh.section.classList.add('checklist-section');
+    hh.rows.innerHTML = buildChecklistHtml();
+    container.appendChild(hh.section);
+  }
 
-  Object.keys(categories).forEach(catName => {
-    const hazards = categories[catName];
-    const slug = slugify(catName);
-
-    // Category section (a sheet)
-    const section = document.createElement('div');
-    section.className = 'category-section';
-    section.dataset.category = catName;
-
-    // Category header (collapsible button)
-    const header = document.createElement('button');
-    header.type = 'button';
-    header.className = 'category-header';
-    header.setAttribute('aria-expanded', 'false');
-    header.setAttribute('aria-controls', `cat-rows-${slug}`);
-    header.innerHTML = `
-      <span class="cat-icon">${ic(CATEGORY_ICONS[catName] || 'circle-dashed')}</span>
-      <span class="cat-text">
-        <span class="cat-name">${escHtml(catLabel(catName))}</span>
-        <span class="cat-count" id="cat-count-${slug}">0 scored</span>
-      </span>
-      <span class="cat-strip" id="cat-strip-${slug}" aria-hidden="true"></span>
-      ${ic('chevron-down', 'cat-chevron')}
-    `;
-    header.addEventListener('click', () => toggleCategory(section));
-
-    // Hazard rows container (starts collapsed)
-    const rows = document.createElement('div');
-    rows.className = 'category-rows collapsed';
-    rows.id = `cat-rows-${slug}`;
-
-    hazards.forEach(hazard => {
-      rows.appendChild(buildHazardRow(hazard));
+  // 2 to 4. The hazard groups
+  HAZARD_GROUPS.forEach(g => {
+    const sheet = _buildSheet(g.key, g.icon, g.title, '');
+    const intro = document.createElement('p');
+    intro.className = 'group-intro';
+    intro.textContent = g.intro;
+    sheet.rows.appendChild(intro);
+    HAZARD_DATA.filter(h => h.group === g.key).forEach(hazard => {
+      sheet.rows.appendChild(buildHazardRow(hazard));
     });
-
-    section.appendChild(header);
-    section.appendChild(rows);
-    container.appendChild(section);
+    container.appendChild(sheet.section);
   });
 
-  Object.keys(categories).forEach(updateCategoryStrip);
+  HAZARD_GROUPS.forEach(g => updateCategoryCount(g.key));
 }
 
 /**
@@ -923,8 +805,9 @@ function buildHazardRow(hazard) {
   const score = calcScore(hazard.id);
   const isNeighborhood = state.assessmentType === 'neighborhood';
 
+  const na = !!entry.na;
   const row = document.createElement('div');
-  row.className = 'hazard-row' + (needsImpact(hazard.id) ? ' needs-impact' : '');
+  row.className = 'hazard-row' + (needsImpact(hazard.id) ? ' needs-impact' : '') + (na ? ' is-na' : '');
   row.id = `hazard-row-${hazard.id}`;
 
   // Custom hazard name/desc inputs (for hazards 60-62)
@@ -1006,6 +889,24 @@ function buildHazardRow(hazard) {
     `;
   }
 
+  // Ruled out: the pickers give way to a status line with Undo
+  if (na) inputsHtml = '';
+  const naHtml = na
+    ? `<div class="na-status">${ic('circle-check')}<span>Does not apply here.</span>
+        <button type="button" class="link-btn na-undo" onclick="undoNotApplicable(${hazard.id})" aria-label="Undo: ${escHtml(displayName)} does apply here">Undo</button></div>`
+    : '';
+  const naBtnHtml = (!na && !hazard.isCustom)
+    ? `<div class="row-foot"><button type="button" class="btn btn-ghost btn-small na-btn" onclick="markNotApplicable(${hazard.id})">Does not apply here</button></div>`
+    : '';
+  const notesHtml = (na && !userNotes(entry)) ? '' : `
+    <div class="notes-row field">
+      <label class="field-label" for="notes-${hazard.id}">Notes <span class="opt">(optional)</span></label>
+      <textarea class="notes-input input" id="notes-${hazard.id}"
+        onchange="updateNotes(${hazard.id}, this.value)"
+        oninput="updateNotes(${hazard.id}, this.value)"
+        rows="2">${escHtml(userNotes(entry))}</textarea>
+    </div>`;
+
   row.innerHTML = `
     ${customNameHtml}
     <div class="hazard-top">
@@ -1019,21 +920,17 @@ function buildHazardRow(hazard) {
         </div>
         <div class="hazard-desc hidden" id="desc-${hazard.id}">${escHtml(displayDesc)}</div>
       </div>
-      <div class="score-block">${scoreBlockHtml(score)}</div>
+      <div class="score-block">${na ? '<span class="badge b-unrated">Ruled out</span>' : scoreBlockHtml(score)}</div>
     </div>
+    ${naHtml}
     <div class="rate-impact-flag" id="rate-impact-${hazard.id}">
       ${ic('info')}
       <span>Research estimated likelihood. <strong>Rate impact</strong> to finish this score.</span>
     </div>
-    ${_researchOriginHtml(hazard.id)}
+    ${na ? '' : _researchOriginHtml(hazard.id)}
     ${inputsHtml}
-    <div class="notes-row field">
-      <label class="field-label" for="notes-${hazard.id}">Notes <span class="opt">(optional)</span></label>
-      <textarea class="notes-input input" id="notes-${hazard.id}"
-        onchange="updateNotes(${hazard.id}, this.value)"
-        oninput="updateNotes(${hazard.id}, this.value)"
-        rows="2">${escHtml(userNotes(entry))}</textarea>
-    </div>
+    ${notesHtml}
+    ${naBtnHtml}
   `;
 
   return row;
@@ -1090,8 +987,27 @@ function buildPickerHtml(hazardId, field, currentVal, label) {
       </div>
       <div class="seg-row">${btns}</div>
       <div class="picker-caps" aria-hidden="true"><span>${words[1]}</span><span>${words[5]}</span></div>
+      ${_isChecklistField(hazardId, field) ? `<div class="impact-source" id="isrc-${hazardId}-${field}">${impactSourceHtml(hazardId, field)}</div>` : ''}
     </div>
   `;
+}
+
+/** Impact fields on core hazards are set by the household checklist. */
+function _isChecklistField(hazardId, field) {
+  if (field !== 'i' && field !== 'i2') return false;
+  const h = getHazard(hazardId);
+  return !!(h && h.group === 'core');
+}
+
+/** "Set by checklist" while automatic; a "Reset to checklist" link once changed by hand. */
+function impactSourceHtml(hazardId, field) {
+  const e = state.scores[hazardId] || {};
+  const manual = field === 'i2' ? e.i2Manual === true : e.iManual === true;
+  if (manual) {
+    return `<span class="impact-tag is-manual">Changed by you</span>
+      <button type="button" class="link-btn impact-reset" onclick="resetImpactToChecklist(${hazardId}, '${field}')">Reset to checklist</button>`;
+  }
+  return `<span class="impact-tag">Set by checklist</span>`;
 }
 
 function _pickerWord(hazardId, field, val) {
@@ -1117,8 +1033,62 @@ function setScore(hazardId, field, value) {
     state.scores[hazardId].isAuto = false;
   }
 
+  // Impact on a core hazard: picking a value takes it off the checklist;
+  // clearing the picker hands it back to the checklist.
+  if (_isChecklistField(hazardId, field)) {
+    const flag = field === 'i2' ? 'i2Manual' : 'iManual';
+    if (next > 0) state.scores[hazardId][flag] = true;
+    else {
+      delete state.scores[hazardId][flag];
+      state.scores[hazardId][field] = computeImpact(hazardId, field === 'i2' ? 'hh2' : 'hh1');
+    }
+  }
+
   updateRowScore(hazardId);
   autoSave();
+}
+
+/** "Reset to checklist": drop the hand-set impact and recompute it. */
+function resetImpactToChecklist(hazardId, field) {
+  const e = state.scores[hazardId];
+  if (!e) return;
+  delete e[field === 'i2' ? 'i2Manual' : 'iManual'];
+  applyChecklistImpacts();
+  updateRowScore(hazardId);
+  autoSave();
+}
+
+/** Rebuild one row in place (after "Does not apply here" or Undo). */
+function _rebuildRow(hazardId) {
+  const old = document.getElementById(`hazard-row-${hazardId}`);
+  const h = getHazard(hazardId);
+  if (!old || !h) return;
+  old.replaceWith(buildHazardRow(h));
+}
+
+/** Rule a hazard out for this place. Shared by both households. */
+function markNotApplicable(hazardId) {
+  if (!state.scores[hazardId]) state.scores[hazardId] = {};
+  state.scores[hazardId].na = true;
+  delete state.scores[hazardId].naAuto;
+  _rebuildRow(hazardId);
+  updateCategoryCount(getGroupForHazard(hazardId));
+  _updateResearchBannerCount();
+  autoSave();
+  const undo = document.querySelector(`#hazard-row-${hazardId} .na-undo`);
+  if (undo) { try { undo.focus({ preventScroll: true }); } catch (e) { /* ignore */ } }
+}
+
+/** Undo "Does not apply here": back to unrated, every other field untouched. */
+function undoNotApplicable(hazardId) {
+  const e = state.scores[hazardId];
+  if (e) { delete e.na; delete e.naAuto; }
+  _rebuildRow(hazardId);
+  updateCategoryCount(getGroupForHazard(hazardId));
+  _updateResearchBannerCount();
+  autoSave();
+  const btn = document.querySelector(`#hazard-row-${hazardId} .na-btn`);
+  if (btn) { try { btn.focus({ preventScroll: true }); } catch (e) { /* ignore */ } }
 }
 
 /** Step a value up or down by one (kept for callers that adjust by delta). */
@@ -1142,6 +1112,8 @@ function refreshPicker(hazardId, field) {
   });
   const word = document.getElementById(`sl-${hazardId}-${field}`);
   if (word) word.textContent = _pickerWord(hazardId, field, val);
+  const src = document.getElementById(`isrc-${hazardId}-${field}`);
+  if (src) src.innerHTML = impactSourceHtml(hazardId, field);
 }
 
 /**
@@ -1163,7 +1135,7 @@ function updateRowScore(hazardId) {
 
   // Update main score block
   const block = row.querySelector('.score-block');
-  if (block) block.innerHTML = scoreBlockHtml(score);
+  if (block) block.innerHTML = isNA(hazardId) ? '<span class="badge b-unrated">Ruled out</span>' : scoreBlockHtml(score);
 
   // Neighborhood sub-scores
   if (state.assessmentType === 'neighborhood') {
@@ -1180,12 +1152,18 @@ function updateRowScore(hazardId) {
   _updateResearchBannerCount();
 
   updateProgress();
-  updateCategoryCount(getCategoryForHazard(hazardId));
+  updateCategoryCount(getGroupForHazard(hazardId));
 }
 
 function getCategoryForHazard(hazardId) {
-  const h = HAZARD_DATA.find(x => x.id === hazardId);
+  const h = getHazard(hazardId);
   return h ? h.category : null;
+}
+
+/** Which Assess screen group a hazard sits in: 'core', 'rare' or 'custom'. */
+function getGroupForHazard(hazardId) {
+  const h = getHazard(hazardId);
+  return h ? h.group : null;
 }
 
 /**
@@ -1226,7 +1204,7 @@ function updateProgress() {
   const scored = countScored();
   const total = totalActive();
   const el = document.getElementById('progress-indicator');
-  if (el) el.textContent = `${scored} of ${total} hazards scored`;
+  if (el) el.textContent = `${scored} of ${total} hazards done`;
   const fill = document.getElementById('progress-fill');
   if (fill) fill.style.width = (total ? Math.round((scored / total) * 100) : 0) + '%';
 
@@ -1236,34 +1214,32 @@ function updateProgress() {
     floatBtn.classList.toggle('hidden', scored < 5);
   }
 
-  // Update all category counts
-  const categories = [...new Set(HAZARD_DATA.map(h => h.category))];
-  categories.forEach(cat => updateCategoryCount(cat));
+  // Update all group counts
+  HAZARD_GROUPS.forEach(g => updateCategoryCount(g.key));
 }
 
-function updateCategoryCount(catName) {
-  if (!catName) return;
-  const catHazards = HAZARD_DATA.filter(h => h.category === catName);
-  const scored = catHazards.filter(h => {
-    if (h.isCustom && !state.customNames[h.id]?.name) return false;
-    return isScored(h.id);
-  }).length;
-  const total = catHazards.filter(h => {
-    if (h.isCustom) return !!state.customNames[h.id]?.name;
-    return true;
-  }).length;
+/** Header count for one group ('core', 'rare' or 'custom'). */
+function updateCategoryCount(groupKey) {
+  if (!groupKey) return;
+  const inGroup = HAZARD_DATA.filter(h => h.group === groupKey && !(h.isCustom && !state.customNames[h.id]?.name));
+  const done = inGroup.filter(h => isDone(h.id)).length;
+  const ruledOut = inGroup.filter(h => isNA(h.id)).length;
 
-  const el = document.getElementById(`cat-count-${slugify(catName)}`);
-  if (el) el.textContent = `${scored} of ${total} scored`;
-  updateCategoryStrip(catName);
+  const el = document.getElementById(`cat-count-${groupKey}`);
+  if (el) {
+    if (groupKey === 'custom' && inGroup.length === 0) el.textContent = 'None added';
+    else if (groupKey === 'rare') el.textContent = `${done - ruledOut} rated, ${ruledOut} ruled out`;
+    else el.textContent = `${done} of ${inGroup.length} done`;
+  }
+  updateCategoryStrip(groupKey);
 }
 
 /** Distribution strip: one segment per hazard, in band color, highest score first. */
-function updateCategoryStrip(catName) {
-  const el = document.getElementById(`cat-strip-${slugify(catName)}`);
+function updateCategoryStrip(groupKey) {
+  const el = document.getElementById(`cat-strip-${groupKey}`);
   if (!el) return;
   const segs = HAZARD_DATA
-    .filter(h => h.category === catName && !(h.isCustom && !state.customNames[h.id]?.name))
+    .filter(h => h.group === groupKey && !(h.isCustom && !state.customNames[h.id]?.name))
     .map(h => isScored(h.id) ? calcScore(h.id) : 0)
     .sort((a, b) => b - a)
     .map(sc => {
@@ -1385,7 +1361,7 @@ function buildReportData() {
   scored.forEach(it => { it.liText = formatLIText(it); });
 
   const unrated = active
-    .filter(h => researchIds.has(h.id) && !isScored(h.id))
+    .filter(h => researchIds.has(h.id) && !isScored(h.id) && !isNA(h.id))
     .map(h => {
       const e = state.scores[h.id] || {};
       const origin = getResearchOrigin(h.id) || {};
@@ -1432,6 +1408,9 @@ function buildReportData() {
 
   const location = state.location || state.researchAddress || rr?.geocoded?.displayAddress || '';
 
+  // "Considered and ruled out": every hazard marked Does not apply here
+  const ruledOut = HAZARD_DATA.filter(h => !h.isCustom && isNA(h.id)).map(h => h.name);
+
   return {
     typeKey: state.assessmentType,
     typeLabel: isNeighborhood ? 'Neighborhood' : 'Household',
@@ -1442,6 +1421,7 @@ function buildReportData() {
     hhNames: isNeighborhood ? [state.hh1Name || 'Household 1', state.hh2Name || 'Household 2'] : null,
     scored,
     unrated,
+    ruledOut,
     counts,
     research,
     footer: REPORT_FOOTER,
@@ -1500,7 +1480,7 @@ function renderResults() {
     summaryEl.innerHTML = metaHtml + `
       <div class="empty-card">
         <h3>No hazards scored yet</h3>
-        <p>Open a category and rate likelihood and impact. Results fill in as you go.</p>
+        <p>Pick a likelihood for the hazards on the Assess screen. Results fill in as you go.</p>
         <button class="btn btn-primary" onclick="showScreen('assessment')">${ic('clipboard-list')} Start assessing</button>
       </div>`;
   } else {
@@ -1675,7 +1655,7 @@ function buildRiskMatrix() {
   HAZARD_DATA.forEach(h => {
     if (h.isCustom && !state.customNames[h.id]?.name) return;
     const e = state.scores[h.id];
-    if (!e) return;
+    if (!e || e.na) return;
     const name = hazardDisplayName(h);
     addAt(parseInt(e.l) || 0, parseInt(e.i) || 0, name);
     if (state.assessmentType === 'neighborhood') addAt(parseInt(e.l2) || 0, parseInt(e.i2) || 0, name);
@@ -1769,6 +1749,7 @@ function loadAssessment(id) {
   if (!save) return;
   const go = () => {
     state = normalizeState(save.state);
+    applyChecklistImpacts(state);
     // Drop any in-memory research from the previous assessment so its address
     // and likelihoods cannot be applied on top of the one just loaded.
     if (typeof resetResearchUI === 'function') resetResearchUI();
@@ -1889,6 +1870,7 @@ function applyImport(res) {
     _writeAllReportEdits(all);
   }
 
+  applyChecklistImpacts(next);
   state = next;
   _screenScroll.assessment = 0;
   if (typeof resetResearchUI === 'function') resetResearchUI();
@@ -1917,6 +1899,7 @@ function buildExportData() {
     hh1Name: state.hh1Name,
     hh2Name: state.hh2Name,
     scores: state.scores,
+    checklist: state.checklist,
     customNames: state.customNames,
     researchAddress: state.researchAddress,
     researchReport: state.researchReport,
@@ -1978,7 +1961,7 @@ function clearAllData() {
       })).catch(() => { /* ignore */ });
     }
     // Reset state
-    state = defaultState();
+    state = freshState();
     if (typeof resetResearchUI === 'function') resetResearchUI();
     renderSavedList();
     showScreen('home');
@@ -2084,11 +2067,13 @@ function bindHeaderFields() {
     state.hh1Name = e.target.value || 'Household 1';
     autoSave();
     rebuildHazardInputLabels();
+    if (typeof refreshChecklistLabels === 'function') refreshChecklistLabels();
   });
   document.getElementById('hh2-name').addEventListener('input', e => {
     state.hh2Name = e.target.value || 'Household 2';
     autoSave();
     rebuildHazardInputLabels();
+    if (typeof refreshChecklistLabels === 'function') refreshChecklistLabels();
   });
 }
 

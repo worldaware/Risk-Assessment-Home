@@ -120,10 +120,24 @@ function _riskClass(level) {
   return rl ? 'b-' + rl.cls : 'b-unrated';
 }
 
+// Methodology text shared by the on-screen report and the PDF
+const REPORT_METHOD_TEXT = 'Each hazard gets a likelihood from 1 to 5 and an impact from 1 to 5, multiplied into a score out of 25. Likelihood is how often the hazard affects this area; impact is what it would do to your household. Impact starts from a scenario for each hazard and rises with the household checklist; any impact you changed by hand is kept. Several public sources describe your county or state, not your lot.';
+
+/** "Considered and ruled out: Hurricane, Tsunami, Volcanic ash", or '' when nothing is ruled out. */
+function ruledOutLine(data) {
+  const names = (data && Array.isArray(data.ruledOut)) ? data.ruledOut.filter(Boolean) : [];
+  return names.length ? `Considered and ruled out: ${names.join(', ')}.` : '';
+}
+
 function renderReportView() {
   const doc = document.getElementById('report-doc');
   if (!doc) return;
-  const r = buildResolvedReport();
+  doc.innerHTML = buildReportViewHtml(buildResolvedReport());
+  _bindReportEditing(doc);
+}
+
+/** HTML for the on-screen and print report. No DOM access, so tests can call it. */
+function buildReportViewHtml(r) {
   const d = r.data;
 
   const metaRows = [];
@@ -186,6 +200,8 @@ function renderReportView() {
     });
     html += `</ol>`;
   }
+  const ruledOut = ruledOutLine(d);
+  if (ruledOut) html += `<p class="rd-ruled-out">${escHtml(ruledOut)}</p>`;
   html += `</section>`;
 
   // Research findings without impact
@@ -237,14 +253,13 @@ function renderReportView() {
   html += `
     <section class="rd-section rd-howto">
       <h2>How to read these scores</h2>
-      <p>Each hazard gets a likelihood from 1 to 5 and an impact from 1 to 5, multiplied into a score out of 25. Likelihood is how often the hazard affects this area; impact is your judgment of what it would do to your household. Several public sources describe your county or state, not your lot.</p>
+      <p>${escHtml(REPORT_METHOD_TEXT)}</p>
       <p class="rd-limits">This is a planning-level screen. It is not a home inspection, an engineering assessment, an insurance appraisal, or an official flood or fire determination. For a flood determination use msc.fema.gov or your lender. For wildfire, ask your fire district. For coverage, ask your insurance agent.</p>
     </section>`;
 
   html += `</div><footer class="rd-footer"><strong>beworldaware.com</strong><span>World Aware Emergency Planning, Boulder, Colorado</span></footer>`;
 
-  doc.innerHTML = html;
-  _bindReportEditing(doc);
+  return html;
 }
 
 function _bindReportEditing(doc) {
@@ -511,6 +526,7 @@ async function buildReportPDF() {
     para('No hazards have both a likelihood and an impact rating yet.', { color: C.muted });
   }
   r.scored.forEach((it, idx) => item(it, idx + 1, scoredOpts[idx]));
+  if (ruledOutLine(d)) para(ruledOutLine(d), { size: 9.5, color: C.muted, after: 6 });
 
   // ── Unrated research findings ─────────────────────────────
   if (r.unrated.length) {
@@ -559,7 +575,7 @@ async function buildReportPDF() {
 
   // ── How to read these scores ──────────────────────────────
   heading('How to read these scores');
-  para('Each hazard gets a likelihood from 1 to 5 and an impact from 1 to 5, multiplied into a score out of 25. Likelihood is how often the hazard affects this area; impact is your judgment of what it would do to your household. Several public sources describe your county or state, not your lot.', { size: 9.5, after: 4 });
+  para(REPORT_METHOD_TEXT, { size: 9.5, after: 4 });
   para('This is a planning-level screen. It is not a home inspection, an engineering assessment, an insurance appraisal, or an official flood or fire determination. For a flood determination use msc.fema.gov or your lender. For wildfire, ask your fire district. For coverage, ask your insurance agent.', { size: 9.5, color: C.muted });
 
   // ── If you want more than a screen ────────────────────────

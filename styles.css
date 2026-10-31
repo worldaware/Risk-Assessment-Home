@@ -515,6 +515,33 @@ textarea.input { min-height: 72px; resize: vertical; }
 
 .notes-input { font-size: var(--text-base); }
 
+/* ── v3: group intros, household checklist, impact source, Does not apply here ── */
+.group-intro { margin: 0; padding: var(--space-3) var(--space-4) var(--space-4); border-top: var(--border-hair) solid var(--color-border); font-size: var(--text-sm); color: var(--color-text-muted); }
+
+.checklist { display: flex; flex-direction: column; border-top: var(--border-hair) solid var(--color-border); }
+.checklist-head, .checklist-row { display: grid; grid-template-columns: 1fr 44px; gap: var(--space-2); align-items: center; padding: var(--space-2) var(--space-4); }
+.checklist.is-two .checklist-head, .checklist.is-two .checklist-row { grid-template-columns: 1fr 64px 64px; }
+.checklist-head { padding-top: var(--space-3); padding-bottom: 0; }
+.checklist-hh-label { font-size: var(--text-sm); font-weight: var(--weight-semibold); color: var(--color-text-heading); text-align: center; overflow-wrap: anywhere; line-height: 1.2; }
+.checklist-row + .checklist-row { border-top: var(--border-hair) solid var(--color-border); }
+.checklist-text { font-size: var(--text-base); line-height: 1.4; cursor: pointer; }
+.checklist.is-two .checklist-text { cursor: default; }
+.checklist-box { display: flex; align-items: center; justify-content: center; min-height: var(--tap-min); }
+.checklist-box input { width: 24px; height: 24px; margin: 0; accent-color: var(--wa-maroon); cursor: pointer; }
+
+.impact-source { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3); font-size: var(--text-sm); }
+.impact-tag { font-weight: var(--weight-medium); padding: 0 8px; border-radius: var(--radius-sm); background: var(--color-surface-warm); color: var(--color-text-heading); }
+.impact-tag.is-manual { background: transparent; padding: 0; color: var(--color-text-muted); }
+
+.link-btn { background: transparent; border: 0; padding: 0 var(--space-1); min-height: var(--tap-min); color: var(--color-text-link); font: inherit; font-weight: var(--weight-medium); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.link-btn:hover { text-decoration-thickness: 2px; }
+
+.row-foot { display: flex; justify-content: flex-end; }
+.na-btn { color: var(--color-text-muted); }
+.na-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); font-size: var(--text-sm); color: var(--color-text-muted); }
+.na-status .i { width: 16px; height: 16px; }
+.hazard-row.is-na .hazard-name { color: var(--color-text-muted); }
+
 .float-results-btn { position: fixed; right: var(--gutter); bottom: calc(var(--bottom-nav-h) + env(safe-area-inset-bottom) + var(--space-3)); z-index: 70; box-shadow: var(--shadow-2); }
 
 /* ── Results ──────────────────────────────────────────────── */
@@ -664,6 +691,7 @@ textarea.input { min-height: 72px; resize: vertical; }
 .rd-item-meta, .rd-item-finding, .rd-item-source { font-size: var(--text-sm); color: var(--color-text-muted); overflow-wrap: anywhere; }
 .rd-notes { margin-top: var(--space-1); font-size: var(--text-sm); }
 .rd-empty { color: var(--color-text-muted); }
+.rd-ruled-out { margin-top: var(--space-3); font-size: var(--text-sm); color: var(--color-text-muted); }
 .rd-sources ul { margin: var(--space-2) 0 0 var(--space-5); font-size: var(--text-sm); color: var(--color-text-muted); }
 .rd-actions-text { white-space: pre-wrap; }
 .rd-footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--space-1) var(--space-4); padding: var(--space-4) var(--space-5); border-top: var(--border-hair) solid var(--color-border); font-size: var(--text-sm); color: var(--color-text-muted); }

@@ -18,6 +18,11 @@
      rejects the whole file.
    - The whole file may not exceed 2 MB.
    - results[] in the file is a human-readable summary and is ignored.
+   - v3.0.0: score entries may carry na, naAuto, iManual and i2Manual
+     (booleans), and the file may carry checklist { hh1: { 1..12: bool },
+     hh2: {...} }. Scores and research findings for hazard ids retired in
+     v3 (RETIRED_HAZARD_IDS in app.js) are skipped with a warning, so a v2
+     export still imports.
    ============================================================= */
 
 'use strict';
@@ -40,6 +45,15 @@ function _impHazardIds(opts) {
   if (typeof HAZARD_DATA !== 'undefined' && Array.isArray(HAZARD_DATA)) return HAZARD_DATA.map(h => String(h.id));
   return [];
 }
+
+/** v2 hazard ids retired in v3: from RETIRED_HAZARD_IDS when loaded, else an explicit list. */
+function _impRetiredIds(opts) {
+  if (opts && Array.isArray(opts.retiredIds)) return opts.retiredIds.map(String);
+  if (typeof RETIRED_HAZARD_IDS !== 'undefined' && Array.isArray(RETIRED_HAZARD_IDS)) return RETIRED_HAZARD_IDS.map(String);
+  return [];
+}
+
+const IMPORT_CHECKLIST_IDS = 12;
 
 function _impCustomIds(opts) {
   if (opts && Array.isArray(opts.customIds)) return opts.customIds.map(String);
@@ -89,6 +103,7 @@ function validateImport(obj, opts) {
 
   const hazardIds = new Set(_impHazardIds(opts));
   const customIds = new Set(_impCustomIds(opts));
+  const retiredIds = new Set(_impRetiredIds(opts));
   const idOk = k => /^\d{1,2}$/.test(k) && hazardIds.has(String(parseInt(k, 10))) && String(parseInt(k, 10)) === k;
 
   /** Read an optional string field. Returns undefined when absent. */
@@ -149,8 +164,9 @@ function validateImport(obj, opts) {
     errors.push('"scores" is missing or is not the right shape.');
   } else {
     st.scores = {};
-    let dropped = 0;
+    let dropped = 0, retired = 0;
     Object.keys(obj.scores).forEach(k => {
+      if (retiredIds.has(k)) { retired++; return; }
       if (!idOk(k)) { dropped++; return; }
       const e = obj.scores[k];
       if (!_impIsPlain(e)) { errors.push(`The score for hazard ${k} is not the right shape.`); return; }
@@ -158,13 +174,38 @@ function validateImport(obj, opts) {
       ['l', 'i', 'l2', 'i2'].forEach(f => { if (_impHas(e, f)) out[f] = rating(e[f]); });
       const notes = str(e, 'notes', `notes for hazard ${k}`, IMPORT_NOTE_MAX);
       if (notes !== undefined) out.notes = notes;
-      ['isAuto', 'isEstimate'].forEach(f => {
+      ['isAuto', 'isEstimate', 'na', 'naAuto', 'iManual', 'i2Manual'].forEach(f => {
         const b = bool(e, f, `${f} for hazard ${k}`);
         if (b !== undefined) out[f] = b;
       });
       st.scores[k] = out;
     });
     if (dropped) warnings.push(`${dropped} unknown hazard entr${dropped === 1 ? 'y was' : 'ies were'} skipped.`);
+    if (retired) warnings.push(`${retired} hazard entr${retired === 1 ? 'y was' : 'ies were'} for hazards merged or moved to the household checklist in v3, and ${retired === 1 ? 'was' : 'were'} skipped.`);
+  }
+
+  // checklist (v3.0.0, optional): { hh1: { "1".."12": true|false }, hh2: {...} }
+  if (_impHas(obj, 'checklist') && obj.checklist !== null && obj.checklist !== undefined) {
+    const cl = obj.checklist;
+    if (!_impIsPlain(cl)) {
+      errors.push('"checklist" is not the right shape.');
+    } else {
+      const out = { hh1: {}, hh2: {} };
+      ['hh1', 'hh2'].forEach(hh => {
+        if (!_impHas(cl, hh) || cl[hh] === null || cl[hh] === undefined) return;
+        if (!_impIsPlain(cl[hh])) { errors.push(`The checklist for ${hh} is not the right shape.`); return; }
+        Object.keys(cl[hh]).forEach(k => {
+          const n = parseInt(k, 10);
+          if (!/^\d{1,2}$/.test(k) || String(n) !== k || n < 1 || n > IMPORT_CHECKLIST_IDS) {
+            errors.push(`The checklist has an unknown item "${k.slice(0, 20)}".`);
+            return;
+          }
+          if (typeof cl[hh][k] !== 'boolean') { errors.push(`Checklist item ${k} must be true or false.`); return; }
+          if (cl[hh][k]) out[hh][k] = true;
+        });
+      });
+      st.checklist = out;
+    }
   }
 
   // customNames
@@ -225,9 +266,11 @@ function validateImport(obj, opts) {
       });
 
       const findings = [];
+      let retiredFindings = 0;
       rr.findings.forEach((f, idx) => {
         if (!_impIsPlain(f)) { errors.push(`Research finding ${idx + 1} is not the right shape.`); return; }
         const hid = _impHas(f, 'hazardId') ? f.hazardId : null;
+        if (typeof hid === 'number' && Number.isInteger(hid) && retiredIds.has(String(hid))) { retiredFindings++; return; }
         if (typeof hid !== 'number' || !Number.isInteger(hid) || !idOk(String(hid))) {
           errors.push(`Research finding ${idx + 1} points to an unknown hazard.`);
           return;
@@ -262,6 +305,7 @@ function validateImport(obj, opts) {
         findings.push(out);
       });
 
+      if (retiredFindings) warnings.push(`${retiredFindings} research finding${retiredFindings === 1 ? ' was' : 's were'} for hazards merged in v3 and ${retiredFindings === 1 ? 'was' : 'were'} skipped.`);
       const report = { geocoded: geo, findings };
       const ts = str(rr, 'timestamp', 'research timestamp');
       if (ts !== undefined) report.timestamp = ts;
