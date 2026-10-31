@@ -927,6 +927,22 @@ console.log('v3.0.0 hazard cut');
   }
 }
 
+console.log('Privacy statement placement (Henry, 2026-10-31)');
+{
+  const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  const home  = html.slice(html.indexOf('id="screen-home"'), html.indexOf('id="screen-assessment"'));
+  const about = html.slice(html.indexOf('id="screen-about"'), html.indexOf('id="screen-report"'));
+  const SHORT = 'Nothing leaves your device until you tap Research. World Aware does not store your address.';
+  const LONG  = 'your street address goes to OpenStreetMap';
+  const homeNote = home.indexOf('class="alert alert-info research-privacy home-privacy"');
+  check('Home has the short privacy note', homeNote > -1 && home.replace(/\s+/g, ' ').includes(SHORT + ' Your results stay in this browser.'));
+  check('Home note sits below the address card and the saved list', homeNote > home.indexOf('id="home-address-card"') && homeNote > home.indexOf('id="home-saved-list"'));
+  check('Home no longer carries the full statement', !home.includes(LONG));
+  const aboutNote = about.indexOf('id="about-privacy"');
+  check('About has the full privacy statement', aboutNote > -1 && about.includes(LONG) && about.includes('ask for your PDF, then ask them to clear it'));
+  check('About statement sits at the bottom, below the version line', aboutNote > about.indexOf('class="about-version"'));
+}
+
 asyncChecks().catch(e => { failed++; console.log('  FAIL async checks threw — ' + e.message); }).then(() => {
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
