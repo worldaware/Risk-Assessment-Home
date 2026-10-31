@@ -888,6 +888,7 @@ function _binScore(v, cuts) {
 
 /** Plain number for a finding sentence: 6.3, 0.70, 0.019. */
 function _fmtRate(v) {
+  if (!(v > 0)) return '0';
   if (v >= 10) return String(Math.round(v));
   if (v >= 1)  return v.toFixed(1);
   if (v >= 0.1) return v.toFixed(2);
@@ -954,7 +955,7 @@ function _mapNRITornado(trndAfreq, areaSqMi, countyLabel) {
   return {
     score: _binScore(d, [0.2, 0.5, 0.8, 1.0]),
     density: d,
-    finding: `About ${d.toFixed(2)} tornadoes a year per 1,000 square miles in ${countyLabel || 'this county'} (FEMA NRI). County-wide, not this address`,
+    finding: `About ${d.toFixed(2)} tornadoes a year per 1,000 square miles in ${countyLabel || 'this county'} (FEMA NRI). This is a county-wide rate; the tool cannot narrow it to this address`,
     confidence: 'Medium',
   };
 }
@@ -1058,7 +1059,7 @@ function _landslideResult(cls, inventoryCount, postfireCount) {
   let finding = head;
   if (notes.length) finding += `. Raised one level: ${notes.join(', and ')}`;
   if (skipped.length) finding += `. Not checked: ${skipped.join(' and ')}`;
-  finding += '. The map rates the slope here, not debris that can travel down to it';
+  finding += '. The map rates the slope at this point; debris can also arrive from slopes above it';
   return { score, finding, confidence: (cls === 0 || cls >= 4) ? 'High' : 'Medium', susceptibilityClass: cls };
 }
 
@@ -1082,12 +1083,20 @@ function _lsReadPixels(img, x, y, w, h) {
   const cx = canvas.getContext && canvas.getContext('2d', { willReadFrequently: true });
   if (!cx) throw new Error('No 2D canvas');
   cx.drawImage(img, 0, 0);
-  return cx.getImageData(x, y, w, h).data;
+  try {
+    return cx.getImageData(x, y, w, h).data;
+  } finally {
+    canvas.width = canvas.height = 0;   // release the bitmap right away
+  }
 }
 
 /** Most common colour of the 3 x 3 block around (px, py) in a tile. */
 async function _lsSample(tileUrl, px, py) {
   const img = await withTimeout(_lsLoadImage(tileUrl), API_CONFIG.TIMEOUT_MS, 'Landslide tile');
+  const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+  if (w !== LS_TILE_PX || h !== LS_TILE_PX) {
+    throw new Error(`Landslide tile is ${w} x ${h}, expected ${LS_TILE_PX} x ${LS_TILE_PX}`);
+  }
   const x0 = Math.max(0, Math.min(LS_TILE_PX - 3, px - 1));
   const y0 = Math.max(0, Math.min(LS_TILE_PX - 3, py - 1));
   let data;
@@ -1123,7 +1132,7 @@ async function _lsFetchLegend() {
 /** Live legend colours, or the built-in copy when the legend cannot be read (retried next run). */
 function _lsLegendTable() {
   if (!_lsLegendCache) {
-    _lsLegendCache = _lsFetchLegend().catch(e => {
+    _lsLegendCache = withTimeout(_lsFetchLegend(), API_CONFIG.TIMEOUT_MS, 'Landslide legend').catch(e => {
       console.warn('[USGS Landslide] legend not read, using built-in colours:', e.message);
       _lsLegendCache = null;
       return { table: LS_LEGEND_FALLBACK, fromService: false };
@@ -1160,6 +1169,7 @@ async function _callLandslideAPI(lat, lng) {
 
   const [inv, pf] = await Promise.all([invP, pfP]);
   const result = _landslideResult(cls, inv, pf);
+  if (!result) throw new Error(`No landslide result for class ${cls}`);
   console.log('[USGS Landslide] tile', `${t.level}/${t.row}/${t.col}`, 'px', t.px, t.py, 'rgba', rgba.join(','),
     'class', cls, 'legend from service:', legend.fromService, 'result:', result);
   return { ...result, source: LS_SRC };
@@ -1501,7 +1511,14 @@ function _compileFindings(apiResults, geocoded) {
   }
 
   // ── FEMA DECLARATION FLOORS (raise only, after everything else) ──
-  if (declarations) _applyDeclarationFloors(findings, declarations, countyLabel, stateAbbr);
+  if (declarations) {
+    // Floors are an extra; a bug here must not discard the findings.
+    try {
+      _applyDeclarationFloors(findings, declarations, countyLabel, stateAbbr);
+    } catch (e) {
+      console.warn('[OpenFEMA] floors not applied:', e.message);
+    }
+  }
 
   return findings;
 }
