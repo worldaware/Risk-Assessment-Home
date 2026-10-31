@@ -102,6 +102,66 @@ console.log('Nominatim state key');
   check('EPA query uses the zip_code column', cfg.includes('TRI_FACILITY/zip_code') && !cfg.includes('TRI_FACILITY/FACILITY_ZIP'));
 }
 
+console.log('buildShareText');
+{
+  const gs = loadSandbox(['js/shareText.js']);
+  const f = gs.buildShareText;
+  const item = (name, score, level) => ({ name, score, level });
+  const base = {
+    typeKey: 'household', location: '1234 Pearl St, Boulder, CO 80302', dateDisplay: 'October 26, 2026',
+    research: { county: 'Boulder County' },
+    scored: [item('Wildfire', 20, 'CRITICAL'), item('Flood', 16, 'CRITICAL'), item('Winter storm', 12, 'HIGH'), item('Power outage', 8, 'MEDIUM')],
+  };
+  const lines = t => t.split('\n');
+  const boulder = f(base, {});
+  const bl = lines(boulder);
+  check('Boulder: first line has name, street, city and date, no house number',
+    bl[0] === 'Our household: hazard check, Pearl St, Boulder (October 26, 2026)', bl[0]);
+  check('Boulder: scoring explanation on line 2', bl[1].startsWith('Each hazard is scored out of 25'));
+  check('Boulder: critical line lists names and scores', bl[2] === 'Act on these in the next 30 days: Wildfire, score 20; Flood, score 16.', bl[2]);
+  check('Boulder: high line', bl[3] === 'Write down a plan for these this season: Winter storm, score 12.', bl[3]);
+  check('Boulder: BOCO Alert line', boulder.includes('bocoalert.org') && boulder.includes('Genasys Protect'));
+  check('Boulder: moderate hazards are not listed', !boulder.includes('Power outage'));
+  check('Boulder: ends with the beworldaware.com line', bl[bl.length - 1].endsWith('beworldaware.com'));
+  check('line count <= 8 (full case)', bl.length <= 8, String(bl.length));
+  check('no box-drawing characters', !/[═─]/.test(boulder) && !/[─-╿]/.test(boulder));
+  check('no ALL CAPS banner lines', bl.every(l => !/^[^a-z]*[A-Z]{4,}[^a-z]*$/.test(l)));
+
+  const other = f({ ...base, location: '88 Main Street, Fort Collins, CO', research: { county: 'Larimer County' } }, {});
+  check('non-Boulder: generic alerts line', other.includes("sign up for your county's emergency alerts and learn two ways out") && !other.includes('bocoalert'));
+  check('non-Boulder: location street and city', lines(other)[0] === 'Our household: hazard check, Main Street, Fort Collins (October 26, 2026)', lines(other)[0]);
+  const countyOnly = f({ ...base, location: '5 Elm Rd, Lyons', research: { county: 'Boulder County' } }, {});
+  check('Boulder county alone triggers the BOCO line', countyOnly.includes('bocoalert.org'));
+
+  const nb = f({ ...base, typeKey: 'neighborhood' }, {});
+  check('neighborhood default name', nb.startsWith('Our neighborhood: hazard check'));
+  const named = f(base, { preparedFor: 'The Rivera family' });
+  check('prepared-for name replaces the default', named.startsWith('The Rivera family: hazard check'));
+
+  const mid = f({ ...base, scored: [item('Heat wave', 8, 'MEDIUM'), item('Drought', 4, 'LOW')] }, {});
+  check('no high/critical: highest line', mid.includes('Nothing scored high or critical. Highest: Heat wave, score 8 out of 25.'), mid);
+  check('no high/critical: no action lines', !mid.includes('Act on these') && !mid.includes('Write down a plan'));
+
+  const empty = f({ typeKey: 'household', location: '', dateDisplay: '', research: null, scored: [] }, {});
+  check('empty: says no hazards scored yet', lines(empty).includes('No hazards scored yet.'));
+  check('empty: first line has no stray commas', lines(empty)[0] === 'Our household: hazard check', lines(empty)[0]);
+  check('empty: line count <= 8', lines(empty).length <= 8);
+  check('empty: no crash on missing input', typeof f(undefined, undefined) === 'string');
+
+  const strip = gs.stripHouseNumber;
+  check('strips 1234', strip('1234 Pearl St') === 'Pearl St');
+  check('strips 12B', strip('12B Oak Ave') === 'Oak Ave');
+  check('strips 1234 with extra spaces', strip('  1234   Pearl St') === 'Pearl St');
+  check('strips 12-14', strip('12-14 Oak Ave') === 'Oak Ave');
+  check('keeps street names that start with a word', strip('Pearl St') === 'Pearl St');
+  check('keeps ordinal street names', strip('4th Street') === '4th Street' && strip('12th St') === '12th St', strip('4th Street'));
+
+  const many = Array.from({ length: 12 }, (_, i) => item('Hazard ' + i, 20 - i % 3, 'CRITICAL'));
+  const long = f({ ...base, scored: many }, {});
+  check('long lists are capped and say how many more', long.includes('; and 7 more.'), long);
+  check('line count <= 8 (long list)', lines(long).length <= 8);
+}
+
 console.log('Service worker');
 {
   const sw = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
@@ -214,7 +274,8 @@ async function asyncChecks() {
       check('GET allowed target: 200 with ACAO for our origin', r.status === 200 && r.headers.get('Access-Control-Allow-Origin') === ORIGIN);
       check('passes upstream body and content type', (await r.text()) === '{"ok":1}' && /application\/json/.test(r.headers.get('Content-Type')));
       check('Cache-Control public, max-age=3600', r.headers.get('Cache-Control') === 'public, max-age=3600');
-      check('upstream gets Accept: application/json', seen && seen.init.headers.Accept === 'application/json');
+      check('upstream Accept prefers application/json', seen && /^application\/json/.test(seen.init.headers.Accept));
+      check('upstream gets the relay User-Agent', seen && /WorldAwareRiskRelay/.test(seen.init.headers['User-Agent'] || ''));
       check('upstream gets no Referer', seen && !('Referer' in seen.init.headers) && !('referer' in seen.init.headers));
       check('upstream URL is the decoded target', seen && seen.url === target);
 
@@ -250,6 +311,229 @@ async function asyncChecks() {
       globalThis.fetch = realFetch;
     }
   }
+}
+
+console.log('Import from JSON (js/importValidator.js)');
+{
+  // app.js is loaded for HAZARD_DATA, defaultState, normalizeState and buildExportData.
+  const noop = () => {};
+  const ctx = {
+    console: { log: noop, warn: noop, error: console.error },
+    document: { getElementById: () => null, querySelector: () => null, querySelectorAll: () => [], addEventListener: noop },
+    localStorage: { getItem: () => null, setItem: noop, removeItem: noop },
+    setTimeout, clearTimeout, URL, Number, String, Math, Date, Array, Object, JSON, RegExp, Error, Promise,
+  };
+  ctx.window = ctx; ctx.globalThis = ctx; ctx.addEventListener = noop; ctx.navigator = {};
+  vm.createContext(ctx);
+  ['js/importValidator.js', 'app.js'].forEach(f => vm.runInContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), ctx, { filename: f }));
+  const ev = code => vm.runInContext(code, ctx);
+
+  // Same keys in the same order, so objects from different realms compare by value.
+  const canon = v => JSON.stringify(v, (k, x) => (x && typeof x === 'object' && !Array.isArray(x))
+    ? Object.keys(x).sort().reduce((o, key) => { o[key] = x[key]; return o; }, {}) : x);
+  const base = () => ({ tool: 'World Aware Risk Assessment', assessmentType: 'household', scores: {} });
+  const run = o => ctx.validateImport(JSON.parse(JSON.stringify(o)));
+
+  // Round trip: build a full state, export, import, compare
+  ev(`state = normalizeState(${JSON.stringify({
+    assessmentId: 'abc123',
+    assessmentType: 'neighborhood',
+    location: '123 Main Street, Boulder CO 80302',
+    date: '2026-10-26',
+    householdSize: '4',
+    hh1Name: 'The Smiths',
+    hh2Name: 'Next door',
+    scores: {
+      1:  { l: 4, i: 3, notes: 'Creek is close', isAuto: true, isEstimate: false, l2: 2, i2: 5 },
+      12: { l: 2, i: 2, notes: '' },
+      60: { l: 3, i: 4, notes: 'Custom one' },
+    },
+    customNames: { 60: { name: 'Rockfall', description: 'Cliff above the road' }, 61: { name: '', description: '' }, 62: { name: '', description: '' } },
+    researchAddress: '123 Main Street, Boulder CO 80302',
+    researchReport: {
+      geocoded: { lat: 40.015, lng: -105.2705, zip: '80302', stateAbbr: 'CO', county: 'Boulder County', city: 'Boulder',
+                  stateFips: '08', countyFips: '013', fips5: '08013', displayAddress: '123 Main Street, Boulder, CO 80302' },
+      findings: [
+        { hazardId: 1, hazardName: 'Flood (riverine)', category: 'Natural Hazards', scoreAssigned: 4,
+          source: 'FEMA', finding: 'Zone AE', confidence: 'High', status: 'success', isOverridden: false,
+          femaMapUrl: 'https://msc.fema.gov/portal/search#40.015%2C-105.2705' },
+        { hazardId: 3, hazardName: 'Tornado', category: 'Natural Hazards', scoreAssigned: null,
+          source: 'x', finding: 'Data temporarily unavailable', confidence: 'N/A', status: 'error', isOverridden: false },
+      ],
+      timestamp: '2026-10-26T12:00:00.000Z',
+    },
+    autoScoreOrigins: { 1: { source: 'FEMA', finding: 'Zone AE', confidence: 'High', status: 'success' } },
+  })});`);
+  ev(`function getReportEdits() { return { title: 'My report', preparedFor: 'Pat', summary: 'Line one.\\nLine two.', actions: 'Buy a radio', notes: { '1': 'Move the car' } }; }`);
+  const exported = JSON.parse(JSON.stringify(ev('buildExportData()')));
+  check('export carries assessmentId, research data and report edits',
+    exported.assessmentId === 'abc123' && exported.researchReport && exported.autoScoreOrigins && exported.reportEdits.title === 'My report');
+  check('export keeps the old fields', exported.tool && exported.version && Array.isArray(exported.results) && exported.scores && exported.customNames);
+  const text = JSON.stringify(exported, null, 2);
+  const parsed = ctx.parseImportText(text);
+  check('parseImportText accepts an export', parsed.ok);
+  const res = ctx.validateImport(parsed.obj);
+  check('a valid export validates', res.ok && res.errors.length === 0, JSON.stringify(res.errors));
+  check('round trip gives an identical normalized state',
+    canon(ev('normalizeState')(res.state)) === canon(ev('state')),
+    canon(ev('normalizeState')(res.state)));
+  check('round trip gives identical report edits', canon(res.edits) === canon(ev('getReportEdits()')));
+  check('an export from before v2.3 (no research fields) still imports', (() => {
+    const old = JSON.parse(text);
+    ['assessmentId', 'researchAddress', 'researchReport', 'autoScoreOrigins', 'reportEdits'].forEach(k => delete old[k]);
+    const r = ctx.validateImport(old);
+    return r.ok && r.edits === null && r.state.assessmentId === undefined;
+  })());
+
+  // Hostile and broken input
+  const evil = ctx.validateImport(JSON.parse(
+    '{"tool":"World Aware Risk Assessment","assessmentType":"household","__proto__":{"polluted":true,"assessmentType":"neighborhood"},' +
+    '"scores":{"__proto__":{"l":5,"i":5},"1":{"l":2,"i":3,"__proto__":{"x":1},"constructor":"y"},"constructor":{"l":1}}}'));
+  check('__proto__ keys are ignored', evil.ok && Object.keys(evil.state.scores).join() === '1' &&
+    evil.state.scores['1'].x === undefined && Object.keys(evil.state.scores['1']).sort().join() === 'i,l');
+  check('__proto__ does not pollute Object', ({}).polluted === undefined && ev('({}).polluted') === undefined && evil.state.polluted === undefined);
+  check('unknown top-level keys are dropped', (() => {
+    const o = base(); o.extra = 'x'; o.results = [{ id: 1 }]; o.exportedAt = 'now';
+    const r = run(o);
+    return r.ok && !('extra' in r.state) && !('results' in r.state) && !('exportedAt' in r.state);
+  })());
+
+  const bad = (name, mutate) => {
+    const o = base(); mutate(o);
+    const r = run(o);
+    check(name, !r.ok && r.errors.length > 0 && r.state === null, JSON.stringify(r.errors));
+  };
+  bad('scores as a string is rejected', o => { o.scores = 'hello'; });
+  bad('scores as an array is rejected', o => { o.scores = [1, 2]; });
+  bad('missing scores is rejected', o => { delete o.scores; });
+  bad('a score entry that is not an object is rejected', o => { o.scores = { 1: 'high' }; });
+  bad('location as an object is rejected', o => { o.location = { a: 1 }; });
+  bad('location as an array is rejected', o => { o.location = ['x']; });
+  bad('notes as an array is rejected', o => { o.scores = { 1: { l: 1, i: 1, notes: ['a'] } }; });
+  bad('unknown assessmentType is rejected', o => { o.assessmentType = 'business'; });
+  bad('wrong tool name is rejected', o => { o.tool = 'Something else'; });
+  bad('bad date is rejected', o => { o.date = 'yesterday'; });
+  bad('bad assessmentId is rejected', o => { o.assessmentId = '<script>'; });
+  bad('research report with the wrong shape is rejected', o => { o.researchReport = { geocoded: 'x', findings: 'y' }; });
+  bad('a finding for an unknown hazard is rejected', o => { o.researchReport = { geocoded: {}, findings: [{ hazardId: 99 }] }; });
+  check('arrays and null at the root are rejected',
+    !ctx.validateImport([]).ok && !ctx.validateImport(null).ok && !ctx.validateImport('hello').ok && !ctx.validateImport(42).ok);
+
+  // Ratings: whole numbers 0 to 5 are kept; anything else becomes 0 (unscored) with a warning
+  {
+    const o = base();
+    o.scores = { 1: { l: 9, i: 5, l2: -1, i2: 2.5 }, 2: { l: '3', i: 'x' }, 3: { l: null, i: [4] } };
+    const r = run(o);
+    const s = r.state && r.state.scores;
+    check('l=9 becomes 0 (unscored), not 5', r.ok && s[1].l === 0 && s[1].i === 5);
+    check('negative and fractional ratings become 0', s[1].l2 === 0 && s[1].i2 === 0);
+    check('digit string "3" is accepted, "x" becomes 0', s[2].l === 3 && s[2].i === 0);
+    check('null and array ratings become 0', s[3].l === 0 && s[3].i === 0);
+    check('out-of-range ratings produce a warning', r.warnings.some(w => /outside 0 to 5/.test(w)));
+  }
+
+  // Hazard ids
+  {
+    const o = base();
+    o.scores = { 1: { l: 1, i: 1 }, 999: { l: 1, i: 1 }, abc: { l: 1, i: 1 }, '01': { l: 1, i: 1 }, '-1': { l: 1, i: 1 } };
+    o.customNames = { 60: { name: 'A', description: 'B' }, 5: { name: 'not custom' }, 999: { name: 'nope' } };
+    const r = run(o);
+    check('unknown hazard ids are dropped', r.ok && Object.keys(r.state.scores).join() === '1', JSON.stringify(r.errors));
+    check('only the custom hazard ids keep names', Object.keys(r.state.customNames).join() === '60');
+  }
+
+  // Strings and size
+  {
+    const o = base(); o.location = 'x'.repeat(900); o.scores = { 1: { l: 1, i: 1, notes: 'n'.repeat(2500) } };
+    const r = run(o);
+    check('long strings are cut to 500 characters', r.ok && r.state.location.length === 500);
+    check('hazard notes keep up to 2000 characters', r.state.scores[1].notes.length === 2000);
+    check('shortened text produces a warning', r.warnings.length >= 2);
+  }
+  {
+    const o = base(); o.scores = { 1: { l: 1, i: 1, notes: 'z'.repeat(3 * 1024 * 1024) } };
+    const r = ctx.validateImport(o);
+    check('a 3 MB string is rejected', !r.ok && /2 MB/.test(r.errors[0]), JSON.stringify(r.errors));
+    const t = ctx.parseImportText(JSON.stringify(o));
+    check('a 3 MB file is rejected before parsing', !t.ok && /2 MB/.test(t.errors[0]));
+    check('a 1 MB note is cut, not accepted whole', (() => {
+      const p = base(); p.scores = { 1: { l: 1, i: 1, notes: 'z'.repeat(1024 * 1024) } };
+      const q = ctx.validateImport(p);
+      return q.ok && q.state.scores[1].notes.length === 2000;
+    })());
+  }
+  check('text that is not JSON is rejected', !ctx.parseImportText('{not json').ok && !ctx.parseImportText('').ok);
+
+  // Links inside imported research
+  {
+    const o = base();
+    o.researchReport = { geocoded: { lat: 40, lng: -105 }, findings: [
+      { hazardId: 1, scoreAssigned: 3, femaMapUrl: 'javascript:alert(1)' },
+      { hazardId: 2, scoreAssigned: 9, femaMapUrl: 'https://evil.example/x', status: 'success' },
+    ] };
+    const r = run(o);
+    check('only msc.fema.gov links survive', r.ok && r.state.researchReport.findings.every(f => f.femaMapUrl === null));
+    check('finding scores are 0 to 5 or null', r.state.researchReport.findings[1].scoreAssigned === 0);
+  }
+
+  // Files and wiring
+  const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  const sw   = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
+  check('importValidator.js is cached by the service worker', sw.includes("'./js/importValidator.js'"));
+  check('importValidator.js loads before app.js',
+    html.indexOf('js/importValidator.js') > 0 && html.indexOf('js/importValidator.js') < html.indexOf('src="app.js"'));
+  check('importValidator.js touches no DOM', !/\b(document|window|localStorage|navigator)\b/.test(fs.readFileSync(path.join(ROOT, 'js/importValidator.js'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')));
+}
+
+console.log('buildDefaultActions');
+{
+  const a = loadSandbox(['js/actions.js']);
+  const hz = (id, name, level, score) => ({ id, name, level, score });
+  const boulder = {
+    location: '1234 Sunshine Canyon Dr, Boulder, CO 80302', householdSize: '3',
+    scored: [hz(1, 'Wildfire', 'CRITICAL', 20)],
+  };
+  const bl = a.buildDefaultActions(boulder);
+  check('Boulder: has a BOCO Alert line', bl.some(l => l.includes('BOCO Alert') && l.includes('www.BOCOAlert.org')), bl.join(' / '));
+  check('Boulder: has a Wildfire Partners line', bl.some(l => l.includes('Wildfire Partners')));
+  check('Boulder: mentions Genasys Protect', bl.some(l => l.includes('Genasys Protect')));
+  check('Boulder: starts with this week', /^This week:/.test(bl[0]));
+  check('Boulder: insurance line mentions the Marshall Fire', bl.some(l => /^Before your insurance renews:/.test(l) && l.includes('Marshall Fire')));
+
+  const researched = {
+    location: '', scored: [hz(1, 'Wildfire', 'HIGH', 12)],
+    research: { county: 'Boulder County', stateAbbr: 'CO', timestamp: '2026-10-20T15:00:00Z' },
+  };
+  check('Boulder County from research data', a.buildDefaultActions(researched).some(l => l.includes('BOCO Alert')));
+
+  const denver = { location: '100 Main St, Denver, CO 80202', scored: [hz(1, 'Wildfire', 'CRITICAL', 20)] };
+  const dl = a.buildDefaultActions(denver);
+  check('Non-Boulder: generic alert line', dl.some(l => /^This week: sign up for your county's emergency alert system/.test(l)), dl.join(' / '));
+  check('Non-Boulder: no BOCO Alert, Genasys or Wildfire Partners', !dl.some(l => /BOCO|Genasys|Wildfire Partners|Xcel/.test(l)));
+  check('Boulder City NV is not Boulder County', !a.buildDefaultActions({ location: 'Boulder City, NV 89005', scored: [] }).some(l => l.includes('BOCO')));
+
+  const many = { location: 'Boulder, CO', scored: [1, 2, 3, 5, 8, 9, 10, 15, 44, 24].map((id, i) => hz(id, 'Hazard ' + id, 'CRITICAL', 25 - i)) };
+  const ml = a.buildDefaultActions(many);
+  check('Cap of 10 lines holds with many Critical hazards', ml.length === 10, String(ml.length));
+  check('Highest-scoring hazard gets the first hazard line', ml[5] && ml[5].startsWith('Hazard 1:'), ml[5]);
+  check('Low and Moderate hazards add no lines', a.buildDefaultActions({ location: 'Denver, CO', scored: [hz(1, 'Wildfire', 'MEDIUM', 8), hz(2, 'Earthquake', 'LOW', 3)] }).length === 5);
+  check('Nothing scored still gives the base steps', a.buildDefaultActions({ scored: [] }).length === 5);
+
+  const all = [bl, dl, ml, a.buildDefaultActions(researched)].reduce((x, y) => x.concat(y), []);
+  check('No line contains "!"', !all.some(l => l.includes('!')));
+  check('No em-dash asides', !all.some(l => l.includes('—') || / -- /.test(l)));
+  check('Hazard lines keep proper nouns capitalized', !all.some(l => /: (xcel|fema|boco)/.test(l)));
+  check('Every line is a non-empty string', all.every(l => typeof l === 'string' && l.trim().length > 0));
+}
+
+console.log('Walk-through CTA and booking link');
+{
+  const app = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+  check('BOOKING_URL is defined', /const BOOKING_URL = 'https:\/\/[^']+';/.test(app));
+  const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  check('actions.js loads before report.js', html.indexOf('js/actions.js') > -1 && html.indexOf('js/actions.js') < html.indexOf('js/report.js'));
+  const sw = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
+  check('actions.js is in the app shell', sw.includes("'./js/actions.js'"));
 }
 
 asyncChecks().catch(e => { failed++; console.log('  FAIL async checks threw — ' + e.message); }).then(() => {

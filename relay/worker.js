@@ -35,6 +35,9 @@ export const ALLOWED_HOSTS = new Set([
 ]);
 
 /** Pages allowed to read relay responses in a browser. */
+/** Sent on every upstream request. Identifies the relay, never the visitor. */
+export const UPSTREAM_USER_AGENT = 'Mozilla/5.0 (compatible; WorldAwareRiskRelay/1.0; +https://beworldaware.com)';
+
 export const ALLOWED_ORIGINS = [
   'https://worldaware.github.io',
   'https://risk.beworldaware.com',
@@ -122,7 +125,13 @@ async function fetchUpstream(target, signal) {
     // Fresh headers: nothing from the browser (Referer, cookies, IP) is passed on.
     const resp = await fetch(url, {
       method: 'GET',
-      headers: { Accept: 'application/json' },
+      // A named User-Agent: Workers send none by default, and FEMA's and the
+      // Forest Service's edges answer 403 to requests without one. Nothing
+      // about the visitor is in it.
+      headers: {
+        Accept: 'application/json, text/plain;q=0.9, */*;q=0.8',
+        'User-Agent': UPSTREAM_USER_AGENT,
+      },
       redirect: 'manual',
       signal,
       // Let Cloudflare's edge cache successful answers for an hour.

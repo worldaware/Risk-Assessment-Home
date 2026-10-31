@@ -78,12 +78,16 @@ function buildResolvedReport() {
   const edits = getReportEdits();
   const pick  = (v, d) => (typeof v === 'string' ? v : d);
   const noteFor = it => pick(edits.notes[it.id], it.notes || '');
+  // Action items: the user's own text once they have typed some, otherwise the generated list
+  const typedActions = (typeof edits.actions === 'string' && edits.actions.trim()) ? edits.actions : null;
+  const defaultActions = (typeof buildDefaultActions === 'function') ? buildDefaultActions(data).join('\n') : '';
   return {
     data,
     title:       pick(edits.title, _defaultReportTitle(data)),
     preparedFor: pick(edits.preparedFor, ''),
     summary:     pick(edits.summary, buildDefaultSummary(data)),
-    actions:     pick(edits.actions, ''),
+    actions:     typedActions !== null ? typedActions : defaultActions,
+    actionsAreDefault: typedActions === null && !!defaultActions,
     scored:  data.scored.map(it  => Object.assign({}, it, { reportNotes: noteFor(it) })),
     unrated: data.unrated.map(it => Object.assign({}, it, { reportNotes: noteFor(it) })),
   };
@@ -214,6 +218,7 @@ function renderReportView() {
   html += `
     <section class="rd-section rd-actions${r.actions.trim() ? '' : ' is-empty-section'}" data-section="actions">
       <h2>Action items</h2>
+      ${r.actionsAreDefault ? '<p class="rd-section-intro rd-actions-note">Edit this list. It is a starting point.</p>' : ''}
       ${_editable('actions', r.actions, 'Type the steps you plan to take, one per line', 'div', 'rd-actions-text')}
     </section>`;
 
@@ -327,6 +332,15 @@ function _pdfSafe(text) {
     .replace(/[ \t]+\n/g, '\n');
 }
 
+/** Date the data was pulled: research time if research ran, else the assessment date. */
+function _pdfDataDate(d) {
+  const ts = d.research && d.research.timestamp ? new Date(d.research.timestamp) : null;
+  if (ts && !isNaN(ts.getTime())) {
+    return ts.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+  }
+  return d.dateDisplay || d.date;
+}
+
 function reportPdfFilename(dateIso) {
   const d = /^\d{4}-\d{2}-\d{2}$/.test(dateIso || '') ? dateIso : localToday();
   return `World-Aware-Risk-Report-${d}.pdf`;
@@ -418,6 +432,7 @@ async function buildReportPDF() {
   const meta = [['Location', d.location || 'Not specified'], ['Date', d.dateDisplay || d.date], ['Assessment type', d.typeLabel]];
   if (d.householdSize) meta.push(['Household size', d.householdSize]);
   if (d.hhNames) meta.push(['Households', d.hhNames.join(' & ')]);
+  meta.push(['Prepared with', `World Aware's risk check, ${_pdfDataDate(d)}`]);
   const labelW = 118;
   const metaRowH = v => Math.max(15, measure(v, 10, W - labelW - 20));
   const metaH = meta.reduce((acc, [, v]) => acc + metaRowH(v), 0) + 16;
@@ -547,6 +562,11 @@ async function buildReportPDF() {
   para('Each hazard gets a likelihood from 1 to 5 and an impact from 1 to 5, multiplied into a score out of 25. Likelihood is how often the hazard affects this area; impact is your judgment of what it would do to your household. Several public sources describe your county or state, not your lot.', { size: 9.5, after: 4 });
   para('This is a planning-level screen. It is not a home inspection, an engineering assessment, an insurance appraisal, or an official flood or fire determination. For a flood determination use msc.fema.gov or your lender. For wildfire, ask your fire district. For coverage, ask your insurance agent.', { size: 9.5, color: C.muted });
 
+  // ── If you want more than a screen ────────────────────────
+  const moreText = 'This report can\'t see your roof vents or the five feet around your house. It doesn\'t know whether your insurance would rebuild at today\'s prices, or how your street gets out if the main road closes. Those take someone on site. World Aware does home and HOA walk-throughs in Boulder County. Contact us to schedule a walk-through: beworldaware.com/aboutus';
+  heading('If you want more than a screen', measure(moreText, 10.5, W) + 8);
+  para(moreText, { after: 4 });
+
   // ── Footer on every page ──────────────────────────────────
   waFooters(doc, F, 'World Aware Emergency Planning, Boulder, Colorado');
 
@@ -614,9 +634,19 @@ function _downloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
+/** Share-sheet payload: the PDF plus the short text, so the message body is pre-filled. */
+function _sharePayload(r) {
+  const payload = { files: [r.file], title: 'Hazard check from World Aware' };
+  try {
+    const text = typeof buildTextSummary === 'function' ? buildTextSummary() : '';
+    if (text) payload.text = text;
+  } catch (e) { console.warn('Could not build share text', e); }
+  return payload;
+}
+
 function _shareOrDownload(r) {
   if (_canShareFile(r.file)) {
-    return navigator.share({ files: [r.file], title: r.filename }).catch(err => {
+    return navigator.share(_sharePayload(r)).catch(err => {
       if (err && err.name === 'AbortError') return;            // user closed the sheet
       _downloadBlob(r.blob, r.filename);                      // share blocked: save instead
     });
@@ -642,10 +672,10 @@ function sharePdf(btnEl) {
     if (btn) { btn.disabled = false; btn.innerHTML = label; }
     if (!r) { (typeof showToast === 'function' ? showToast : alert)('Could not create the PDF. Please try again.'); return; }
     if (_canShareFile(r.file)) {
-      navigator.share({ files: [r.file], title: r.filename }).catch(err => {
+      navigator.share(_sharePayload(r)).catch(err => {
         if (err && err.name === 'AbortError') return;
         if (btn) { btn.innerHTML = label; }
-        (typeof showToast === 'function' ? showToast : alert)('Your PDF is ready. Tap PDF / Share again to open it.');
+        (typeof showToast === 'function' ? showToast : alert)('Your PDF is ready. Tap the share button again to open it.');
       });
     } else {
       _downloadBlob(r.blob, r.filename);

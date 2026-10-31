@@ -7,7 +7,10 @@
 
 // Single source of truth for the version shown in About, the JSON export and the console.
 // Keep sw.js CACHE_NAME in step with it when shipping.
-const APP_VERSION = '2.3.0';
+const APP_VERSION = '2.4.0';
+
+// Where every "Contact us" link goes: the Say Hello form on beworldaware.com.
+const BOOKING_URL = 'https://www.beworldaware.com/aboutus';
 
 /* ---------------------------------------------------------------
    CONSTANTS & CONFIGURATION
@@ -632,7 +635,26 @@ document.addEventListener('scroll', () => {
 
 function initHomeScreen() {
   _syncAddressTypePill();
+  renderContinueCard();
   if (typeof initResearchScreen === 'function') initResearchScreen();
+}
+
+/** Show the "Continue" card on Home when an assessment is already under way. */
+function renderContinueCard() {
+  const card = document.getElementById('home-continue-card');
+  const text = document.getElementById('home-continue-text');
+  if (!card || !text) return;
+  const scored = countScored();
+  if (!(scored > 0 || state.location)) {
+    card.classList.add('hidden');
+    return;
+  }
+  // Home is the projector screen in a workshop: show street name and city, never the house number
+  const name = (state.location || '').replace(/^\s*\d+[A-Za-z-]*\s+/, '').trim() ||
+    (state.assessmentType === 'neighborhood' ? 'Neighborhood assessment' : 'Household assessment');
+  const when = state.date ? formatReportDate(state.date) : '';
+  text.textContent = `Continue: ${name}, ${scored} of ${totalActive()} hazards scored` + (when ? `, ${when}` : '');
+  card.classList.remove('hidden');
 }
 
 function _syncAddressTypePill() {
@@ -694,6 +716,40 @@ function startAssessment(type) {
   // v2.0: both start buttons lead to the address entry on Home
   showScreen('home');
   focusAddressEntry();
+}
+
+/** True when the assessment on screen holds work worth keeping. */
+function _isDirtyAssessment() {
+  return countScored() > 0 || !!state.location || !!state.researchReport;
+}
+
+/**
+ * Home start buttons. With work in progress, save it as a copy first and
+ * then begin a blank assessment. Without, behave like startAssessment.
+ * (startAssessment stays for the ?start= shortcut in the manifest.)
+ */
+function newAssessment(type) {
+  const t = type === 'neighborhood' ? 'neighborhood' : 'household';
+  if (!_isDirtyAssessment()) {
+    startAssessment(t);
+    return;
+  }
+  showConfirm('Start a new assessment? The one you are working on will be saved as a copy first.', () => {
+    if (!_snapshotCurrent()) {
+      showToast('Could not save a copy: storage is unavailable or full. Export your work as a backup, then try again.', 6000);
+      return;
+    }
+    state = defaultState();
+    state.assessmentType = t;
+    state.date = localToday();
+    _screenScroll.assessment = 0;
+    if (typeof resetResearchUI === 'function') resetResearchUI();
+    autoSave();
+    renderSavedList();
+    showScreen('home');
+    focusAddressEntry();
+    showToast('Your last assessment was saved as a copy under About.');
+  }, { confirmLabel: 'Save a copy and start new' });
 }
 
 /**
@@ -1416,6 +1472,19 @@ function buildDefaultSummary(data) {
    RESULTS SCREEN
 --------------------------------------------------------------- */
 
+/** Walk-through card shown under the top Critical or High band on Results. */
+function walkthroughCtaHtml(top, rl) {
+  return `
+      <aside class="cta-card" aria-labelledby="cta-card-title">
+        <h3 id="cta-card-title">${escHtml(top.name)} came out ${escHtml(rl.label.toLowerCase())}.</h3>
+        <p>The score says what to worry about. It can't see your roof vents, the five feet around your house, or whether your insurance would rebuild at today's prices. A home walk-through can: Henry comes to the property, checks these numbers against what is there, and leaves a written plan in the order to do it. Contact us to schedule a walk-through.</p>
+        <div class="cta-card-actions">
+          <a class="btn btn-amber" href="${escHtml(BOOKING_URL)}" target="_blank" rel="noopener">${ic('external-link')} Contact us</a>
+          <a class="cta-card-ghost" href="${escHtml(BOOKING_URL)}" target="_blank" rel="noopener">Bring a workshop to your HOA</a>
+        </div>
+      </aside>`;
+}
+
 function renderResults() {
   const data = buildReportData();
   const items = data.scored;
@@ -1442,8 +1511,12 @@ function renderResults() {
       <p class="summary-chips"><span class="chip chip-total">${items.length} total scored</span>${data.unrated.length > 0 ? `<span class="chip chip-unrated">${data.unrated.length} impact not rated</span>` : ''}</p>`;
   }
 
+  const actionsEl = document.getElementById('results-actions');
+  if (actionsEl) actionsEl.hidden = items.length === 0;
+
   const listEl = document.getElementById('results-list');
   let html = '';
+  let ctaShown = false;
 
   RISK_BANDS.forEach(band => {
     const bandItems = items.filter(it => it.level === band.key);
@@ -1484,6 +1557,12 @@ function renderResults() {
     });
 
     html += `</section>`;
+
+    // One walk-through card per page, right after the first Critical or High band
+    if (!ctaShown && (band.key === 'CRITICAL' || band.key === 'HIGH')) {
+      html += walkthroughCtaHtml(bandItems[0], rl);
+      ctaShown = true;
+    }
   });
 
   if (data.unrated.length > 0) {
@@ -1575,63 +1654,7 @@ function showTextExportDialog(text) {
 function buildTextSummary() {
   const data = buildReportData();
   const edits = (typeof getReportEdits === 'function') ? getReportEdits() : {};
-  const rule = '='.repeat(40);
-
-  let out = `WORLD AWARE RISK ASSESSMENT RESULTS\n`;
-  if (edits.title) out += `${edits.title}\n`;
-  out += `${rule}\n`;
-  out += `Type: ${data.typeLabel}\n`;
-  out += `Location: ${data.location || 'Not specified'}\n`;
-  out += `Date: ${data.dateDisplay || data.date}\n`;
-  if (data.householdSize) out += `Household size: ${data.householdSize}\n`;
-  if (data.hhNames) out += `Households: ${data.hhNames.join(' & ')}\n`;
-  if (edits.preparedFor) out += `Prepared for: ${edits.preparedFor}\n`;
-  out += `${rule}\n`;
-
-  const summary = edits.summary || buildDefaultSummary(data);
-  if (summary) out += `\n${summary}\n`;
-
-  RISK_BANDS.forEach(band => {
-    const bandItems = data.scored.filter(it => it.level === band.key);
-    if (bandItems.length === 0) return;
-    out += `\n── ${RISK_LEVELS[band.key].label.toUpperCase()} ──\n`;
-    bandItems.forEach(it => {
-      out += `  [${it.score}] ${it.name}  (${it.category})\n       ${it.liText}\n`;
-      const notes = (edits.notes && edits.notes[it.id] !== undefined) ? edits.notes[it.id] : it.notes;
-      if (notes) out += `       Notes: ${notes}\n`;
-    });
-  });
-
-  if (data.unrated.length) {
-    out += `\n── IDENTIFIED BY RESEARCH — IMPACT NOT YET RATED ──\n`;
-    data.unrated.forEach(it => {
-      out += `  ${it.name}  (${it.category})  Likelihood ${it.l} – ${it.likelihoodLabel}\n`;
-      if (it.finding) out += `       Finding: ${it.finding}\n`;
-      if (it.source)  out += `       Source: ${it.source}${it.confidence ? ' (confidence: ' + it.confidence + ')' : ''}\n`;
-      const notes = (edits.notes && edits.notes[it.id] !== undefined) ? edits.notes[it.id] : it.notes;
-      if (notes) out += `       Notes: ${notes}\n`;
-    });
-  }
-
-  if (!data.scored.length && !data.unrated.length) {
-    out += `\nNo hazards scored yet.\n`;
-  }
-
-  if (edits.actions) {
-    out += `\n── ACTION ITEMS ──\n${edits.actions}\n`;
-  }
-
-  if (data.research) {
-    const r = data.research;
-    out += `\n── RESEARCH SOURCES ──\n`;
-    if (r.matchedAddress) out += `Matched address: ${r.matchedAddress}\n`;
-    out += `Likelihood estimated for ${r.findingCount} hazards (confidence: ${r.confidence.High} high, ${r.confidence.Medium} medium, ${r.confidence.Low} low).\n`;
-    r.sources.forEach(src => { out += `  - ${src}\n`; });
-  }
-
-  out += `\n${rule}\n`;
-  out += `${data.footer}\n`;
-  return out;
+  return buildShareText(data, edits);
 }
 
 /* ---------------------------------------------------------------
@@ -1695,10 +1718,16 @@ function buildRiskMatrix() {
    SAVE / LOAD / EXPORT
 --------------------------------------------------------------- */
 
-function saveAssessment() {
+/**
+ * Write a copy of the current assessment to the saved list (no toast, no re-render).
+ * Returns the saved summary, or null when storage is unavailable or full.
+ */
+function _snapshotCurrent() {
   const saves = getSavedAssessments();
   const timestamp = new Date().toISOString();
-  const id = 'wa_save_' + Date.now();
+  // Suffix keeps two copies made in the same millisecond from overwriting each other
+  let id = 'wa_save_' + Date.now();
+  while (saves[id]) id += 'x';
   const summary = {
     id,
     timestamp,
@@ -1711,11 +1740,19 @@ function saveAssessment() {
   try {
     localStorage.setItem('wa_saves', JSON.stringify(saves));
   } catch (e) {
+    return null;
+  }
+  return summary;
+}
+
+function saveAssessment() {
+  const summary = _snapshotCurrent();
+  if (!summary) {
     showToast('Could not save: storage is unavailable or full. Export your work as a backup.', 6000);
     return;
   }
   renderSavedList();
-  showToast(`Copy saved: ${new Date(timestamp).toLocaleString()}`);
+  showToast(`Copy saved: ${new Date(summary.timestamp).toLocaleString()}`);
 }
 
 function getSavedAssessments() {
@@ -1793,11 +1830,86 @@ function renderSavedList() {
   container.innerHTML = html;
 }
 
-function exportJSON() {
+/* ---------------------------------------------------------------
+   IMPORT FROM JSON  (validation lives in js/importValidator.js)
+--------------------------------------------------------------- */
+
+/** Open the file picker. */
+function importJSON() {
+  const input = document.getElementById('import-json-input');
+  if (input) input.click();
+}
+
+/** File picked: read it as text and hand it on. */
+function handleImportFile(input) {
+  const file = input && input.files && input.files[0];
+  if (!file) return;
+  const done = () => { try { input.value = ''; } catch (e) { /* ignore */ } };
+  if (file.size > IMPORT_MAX_BYTES) {
+    showToast('That file is larger than 2 MB, so it is not one of our exports.', 6000);
+    done();
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => { done(); importAssessmentText(String(reader.result || '')); };
+  reader.onerror = () => { done(); showToast('Could not read that file.', 6000); };
+  reader.readAsText(file);
+}
+
+/** Parse, validate and, after a confirm, apply the text of an exported file. */
+function importAssessmentText(text) {
+  const parsed = parseImportText(text);
+  const res = parsed.ok ? validateImport(parsed.obj) : { ok: false, errors: parsed.errors, warnings: [] };
+  if (!res.ok) {
+    const more = res.errors.length > 1 ? ` (${res.errors.length - 1} more problem${res.errors.length > 2 ? 's' : ''})` : '';
+    showToast(`Could not import: ${res.errors[0]}${more}`, 8000);
+    return;
+  }
+  const msg = _isDirtyAssessment()
+    ? 'Import this assessment? Your current work will be saved as a copy first.'
+    : 'Import this assessment?';
+  showConfirm(msg, () => applyImport(res), { confirmLabel: 'Import' });
+}
+
+/** Replace the current assessment with a validated import. */
+function applyImport(res) {
+  if (_isDirtyAssessment() && !_snapshotCurrent()) {
+    showToast('Could not save a copy: storage is unavailable or full. Export your work as a backup, then try again.', 6000);
+    return;
+  }
+  const next = normalizeState(res.state);
+  // Never reuse the id of the assessment being replaced: its copy and its report edits stay separate.
+  if (!res.state.assessmentId || res.state.assessmentId === state.assessmentId) next.assessmentId = _newAssessmentId();
+
+  const e = res.edits;
+  const hasEdits = e && (e.title || e.preparedFor || e.summary || e.actions || Object.keys(e.notes || {}).length);
+  if (hasEdits && typeof _readAllReportEdits === 'function' && typeof _writeAllReportEdits === 'function') {
+    const all = _readAllReportEdits();
+    all[next.assessmentId] = e;
+    _writeAllReportEdits(all);
+  }
+
+  state = next;
+  _screenScroll.assessment = 0;
+  if (typeof resetResearchUI === 'function') resetResearchUI();
+  autoSave();
+  renderSavedList();
+  if (res.warnings && res.warnings.length) console.warn('Import adjustments:', res.warnings);
+  showToast(`Imported: ${state.location || (state.assessmentType === 'neighborhood' ? 'Neighborhood assessment' : 'Household assessment')}` +
+    (res.warnings && res.warnings.length ? '. Some values were adjusted.' : ''));
+  showScreen('assessment');
+}
+
+/**
+ * The object exportJSON() writes. Everything Import from JSON needs sits at
+ * the top level; results[] is a human-readable summary the importer ignores.
+ */
+function buildExportData() {
   const data = {
     exportedAt: new Date().toISOString(),
     tool: 'World Aware Risk Assessment',
     version: APP_VERSION,
+    assessmentId: state.assessmentId,
     assessmentType: state.assessmentType,
     location: state.location,
     date: state.date,
@@ -1806,6 +1918,10 @@ function exportJSON() {
     hh2Name: state.hh2Name,
     scores: state.scores,
     customNames: state.customNames,
+    researchAddress: state.researchAddress,
+    researchReport: state.researchReport,
+    autoScoreOrigins: state.autoScoreOrigins,
+    reportEdits: (typeof getReportEdits === 'function') ? getReportEdits() : {},
     results: HAZARD_DATA
       .filter(h => {
         if (h.isCustom && !state.customNames[h.id]?.name) return false;
@@ -1823,7 +1939,11 @@ function exportJSON() {
       }))
       .sort((a, b) => b.score - a.score),
   };
+  return data;
+}
 
+function exportJSON() {
+  const data = buildExportData();
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -2058,6 +2178,12 @@ function escHtml(str) {
 function slugify(str) {
   return str.toLowerCase().replace(/[^a-z0-9]/g, '-');
 }
+
+/** Point every static booking link in index.html (data-booking-link) at BOOKING_URL. */
+function applyBookingLinks() {
+  document.querySelectorAll('a[data-booking-link]').forEach(a => { a.href = BOOKING_URL; });
+}
+document.addEventListener('DOMContentLoaded', applyBookingLinks);
 
 /* ---------------------------------------------------------------
    BOOT
