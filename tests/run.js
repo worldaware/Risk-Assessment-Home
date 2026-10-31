@@ -102,6 +102,66 @@ console.log('Nominatim state key');
   check('EPA query uses the zip_code column', cfg.includes('TRI_FACILITY/zip_code') && !cfg.includes('TRI_FACILITY/FACILITY_ZIP'));
 }
 
+console.log('buildShareText');
+{
+  const gs = loadSandbox(['js/shareText.js']);
+  const f = gs.buildShareText;
+  const item = (name, score, level) => ({ name, score, level });
+  const base = {
+    typeKey: 'household', location: '1234 Pearl St, Boulder, CO 80302', dateDisplay: 'October 26, 2026',
+    research: { county: 'Boulder County' },
+    scored: [item('Wildfire', 20, 'CRITICAL'), item('Flood', 16, 'CRITICAL'), item('Winter storm', 12, 'HIGH'), item('Power outage', 8, 'MEDIUM')],
+  };
+  const lines = t => t.split('\n');
+  const boulder = f(base, {});
+  const bl = lines(boulder);
+  check('Boulder: first line has name, street, city and date, no house number',
+    bl[0] === 'Our household: hazard check, Pearl St, Boulder, (October 26, 2026)', bl[0]);
+  check('Boulder: scoring explanation on line 2', bl[1].startsWith('Each hazard is scored out of 25'));
+  check('Boulder: critical line lists names and scores', bl[2] === 'Act on these in the next 30 days: Wildfire, score 20; Flood, score 16.', bl[2]);
+  check('Boulder: high line', bl[3] === 'Write down a plan for these this season: Winter storm, score 12.', bl[3]);
+  check('Boulder: BOCO Alert line', boulder.includes('bocoalert.org') && boulder.includes('Genasys Protect'));
+  check('Boulder: moderate hazards are not listed', !boulder.includes('Power outage'));
+  check('Boulder: ends with the beworldaware.com line', bl[bl.length - 1].endsWith('beworldaware.com'));
+  check('line count <= 8 (full case)', bl.length <= 8, String(bl.length));
+  check('no box-drawing characters', !/[═─]/.test(boulder) && !/[─-╿]/.test(boulder));
+  check('no ALL CAPS banner lines', bl.every(l => !/^[^a-z]*[A-Z]{4,}[^a-z]*$/.test(l)));
+
+  const other = f({ ...base, location: '88 Main Street, Fort Collins, CO', research: { county: 'Larimer County' } }, {});
+  check('non-Boulder: generic alerts line', other.includes("sign up for your county's emergency alerts and learn two ways out") && !other.includes('bocoalert'));
+  check('non-Boulder: location street and city', lines(other)[0] === 'Our household: hazard check, Main Street, Fort Collins, (October 26, 2026)', lines(other)[0]);
+  const countyOnly = f({ ...base, location: '5 Elm Rd, Lyons', research: { county: 'Boulder County' } }, {});
+  check('Boulder county alone triggers the BOCO line', countyOnly.includes('bocoalert.org'));
+
+  const nb = f({ ...base, typeKey: 'neighborhood' }, {});
+  check('neighborhood default name', nb.startsWith('Our neighborhood: hazard check'));
+  const named = f(base, { preparedFor: 'The Rivera family' });
+  check('prepared-for name replaces the default', named.startsWith('The Rivera family: hazard check'));
+
+  const mid = f({ ...base, scored: [item('Heat wave', 8, 'MEDIUM'), item('Drought', 4, 'LOW')] }, {});
+  check('no high/critical: highest line', mid.includes('Nothing scored high or critical. Highest: Heat wave, score 8 out of 25.'), mid);
+  check('no high/critical: no action lines', !mid.includes('Act on these') && !mid.includes('Write down a plan'));
+
+  const empty = f({ typeKey: 'household', location: '', dateDisplay: '', research: null, scored: [] }, {});
+  check('empty: says no hazards scored yet', lines(empty).includes('No hazards scored yet.'));
+  check('empty: first line has no stray commas', lines(empty)[0] === 'Our household: hazard check', lines(empty)[0]);
+  check('empty: line count <= 8', lines(empty).length <= 8);
+  check('empty: no crash on missing input', typeof f(undefined, undefined) === 'string');
+
+  const strip = gs.stripHouseNumber;
+  check('strips 1234', strip('1234 Pearl St') === 'Pearl St');
+  check('strips 12B', strip('12B Oak Ave') === 'Oak Ave');
+  check('strips 1234 with extra spaces', strip('  1234   Pearl St') === 'Pearl St');
+  check('strips 12-14', strip('12-14 Oak Ave') === 'Oak Ave');
+  check('keeps street names that start with a word', strip('Pearl St') === 'Pearl St');
+  check('keeps ordinal street names', strip('4th Street') === '4th Street' && strip('12th St') === '12th St', strip('4th Street'));
+
+  const many = Array.from({ length: 12 }, (_, i) => item('Hazard ' + i, 20 - i % 3, 'CRITICAL'));
+  const long = f({ ...base, scored: many }, {});
+  check('long lists are capped and say how many more', long.includes('; and 7 more.'), long);
+  check('line count <= 8 (long list)', lines(long).length <= 8);
+}
+
 console.log('Service worker');
 {
   const sw = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');

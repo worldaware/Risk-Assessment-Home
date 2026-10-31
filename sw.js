@@ -44,6 +44,7 @@ const APP_SHELL = [
   './js/apiConfig.js',
   './js/scoreMapper.js',
   './js/research.js',
+  './js/shareText.js',
   './js/wa-pdf-theme.js',
   // Report view + offline PDF generation
   './js/actions.js',

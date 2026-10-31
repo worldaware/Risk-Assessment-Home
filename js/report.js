@@ -634,9 +634,19 @@ function _downloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
+/** Share-sheet payload: the PDF plus the short text, so the message body is pre-filled. */
+function _sharePayload(r) {
+  const payload = { files: [r.file], title: 'Hazard check from World Aware' };
+  try {
+    const text = typeof buildTextSummary === 'function' ? buildTextSummary() : '';
+    if (text) payload.text = text;
+  } catch (e) { console.warn('Could not build share text', e); }
+  return payload;
+}
+
 function _shareOrDownload(r) {
   if (_canShareFile(r.file)) {
-    return navigator.share({ files: [r.file], title: r.filename }).catch(err => {
+    return navigator.share(_sharePayload(r)).catch(err => {
       if (err && err.name === 'AbortError') return;            // user closed the sheet
       _downloadBlob(r.blob, r.filename);                      // share blocked: save instead
     });
@@ -662,10 +672,10 @@ function sharePdf(btnEl) {
     if (btn) { btn.disabled = false; btn.innerHTML = label; }
     if (!r) { (typeof showToast === 'function' ? showToast : alert)('Could not create the PDF. Please try again.'); return; }
     if (_canShareFile(r.file)) {
-      navigator.share({ files: [r.file], title: r.filename }).catch(err => {
+      navigator.share(_sharePayload(r)).catch(err => {
         if (err && err.name === 'AbortError') return;
         if (btn) { btn.innerHTML = label; }
-        (typeof showToast === 'function' ? showToast : alert)('Your PDF is ready. Tap PDF / Share again to open it.');
+        (typeof showToast === 'function' ? showToast : alert)('Your PDF is ready. Tap the share button again to open it.');
       });
     } else {
       _downloadBlob(r.blob, r.filename);
