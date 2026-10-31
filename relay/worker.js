@@ -129,8 +129,15 @@ async function fetchUpstream(target, signal) {
       cf: { cacheTtlByStatus: { '200-299': 3600, '300-599': 0 }, cacheEverything: true },
     });
     if (resp.status >= 300 && resp.status < 400 && resp.headers.get('Location')) {
-      const next = new URL(resp.headers.get('Location'), url).toString();
-      if (!isAllowedTarget(next)) return { blocked: true };
+      const nextUrl = new URL(resp.headers.get('Location'), url);
+      // Some government servers redirect to plain http:// on their own host.
+      // Upgrade that to https:// (and drop an explicit :80) for allowed hosts only.
+      if (nextUrl.protocol === 'http:' && ALLOWED_HOSTS.has(nextUrl.hostname.toLowerCase())) {
+        nextUrl.protocol = 'https:';
+        if (nextUrl.port === '80') nextUrl.port = '';
+      }
+      const next = nextUrl.toString();
+      if (!isAllowedTarget(next)) return { blocked: true, host: new URL(next).hostname };
       url = next;
       continue;
     }
@@ -169,7 +176,7 @@ export async function handleRequest(request) {
   } finally {
     clearTimeout(timer);
   }
-  if (result.blocked) return plain(403, 'Upstream redirected to a host that is not allowed', origin);
+  if (result.blocked) return plain(403, 'Upstream redirected to a host that is not allowed: ' + result.host, origin);
   if (result.tooMany) return plain(502, 'Too many upstream redirects', origin);
 
   const up = result.resp;
