@@ -43,7 +43,7 @@ function actionsLocale(data) {
  */
 const ACTION_GROUPS = [
   {
-    key: 'wildfire', ids: [1, 55],
+    key: 'wildfire', ids: [1],
     lines: loc => [
       'Clear the first 5 feet around the house of anything that burns, such as firewood, wood mulch, dead plants, doormats and stored items.',
       loc.boulderCounty
@@ -52,14 +52,14 @@ const ACTION_GROUPS = [
     ],
   },
   {
-    key: 'flood', ids: [3, 4, 39, 40, 43],
+    key: 'flood', ids: [3, 4],
     lines: () => [
       'Look up your address on the FEMA flood map at msc.fema.gov and note which way water would reach the house.',
       'Price flood insurance now. Standard homeowners policies leave out flood, and a new flood policy usually has a 30-day wait before it pays.',
     ],
   },
   {
-    key: 'power', ids: [8, 24, 25, 41],
+    key: 'power', ids: [8, 24],
     lines: loc => [
       'Plan for 3 days without power, including how you will run any medical device, stay warm with the furnace off and keep phones charged.',
       loc.boulderCounty
@@ -81,6 +81,13 @@ const ACTION_GROUPS = [
     ],
   },
   {
+    key: 'wind', ids: [63],
+    lines: () => [
+      'Trim branches that hang over the roof, and bring in or tie down patio furniture, trash bins and trampolines when high wind is forecast.',
+      'Stay well away from any downed power line, assume it is live, and call 911 and your utility.',
+    ],
+  },
+  {
     key: 'heat', ids: [9],
     lines: () => [
       'Pick the coolest room in the house for heat waves, plan how to keep it cool if the power goes out, and write down who you will check on.',
@@ -93,15 +100,87 @@ const ACTION_GROUPS = [
     ],
   },
   {
-    key: 'chemical', ids: [15, 16, 18, 19, 23],
+    key: 'smoke', ids: [23],
     lines: () => [
-      'Learn to shelter in place: pick an inside room, keep tape and plastic sheeting there, and practice turning off the furnace, air conditioning and fans quickly.',
+      'Set up one clean-air room with a portable HEPA air cleaner, or a box fan with a MERV 13 filter strapped to it, and keep N95 masks for everyone.',
+      'On smoky days check the air quality at airnow.gov and keep windows shut while it reads unhealthy.',
     ],
   },
   {
-    key: 'cash', ids: [29, 30, 31, 44, 52],
+    key: 'landslide', ids: [11],
     lines: () => [
+      'If a burn scar sits uphill, treat a flash flood warning as the signal to get to higher ground, away from the channel, right away.',
+      'Watch for new cracks in walls or the ground, tilting trees or fences, and doors that start to stick, and report them to your county.',
+    ],
+  },
+  {
+    key: 'radon', ids: [64],
+    lines: () => [
+      'Test the lowest lived-in floor for radon with a short-term test kit from a hardware store or your county health department.',
+      'If a test reads 4 pCi/L or higher, get quotes from a certified radon mitigation contractor.',
+    ],
+  },
+  {
+    key: 'housefire', ids: [65],
+    lines: () => [
+      'Put a smoke alarm in every bedroom, outside each sleeping area and on every floor, and test them once a month.',
+      'Keep a fire extinguisher in the kitchen, clean the dryer lint screen after every load, and agree on a meeting spot outside.',
+    ],
+  },
+  {
+    key: 'chemical', ids: [15],
+    lines: () => [
+      'Learn to shelter in place: pick an inside room, keep tape and plastic sheeting there, and practice turning off the furnace, air conditioning and fans quickly.',
+      'Find out which rail lines and freight routes run near you, so a shelter-in-place order makes sense the moment it comes.',
+    ],
+  },
+  {
+    key: 'nuclear', ids: [18],
+    lines: () => [
+      'If you are told of a radiation release, get inside, close windows and vents, turn off fans and the furnace, and stay in until officials say it is safe.',
+      'Take potassium iodide only if health officials tell you to, and sign up for county alerts so those instructions reach you.',
+    ],
+  },
+  {
+    key: 'gas', ids: [17],
+    lines: () => [
+      'Find the gas shutoff at the meter and keep the right wrench next to it. Turn it off only if you smell gas or are told to.',
+      'Put a carbon monoxide alarm on every floor, and if you smell gas, get out first and call from outside.',
+    ],
+  },
+  {
+    key: 'water', ids: [27],
+    lines: () => [
+      'Store two weeks of water, about 1 gallon per person per day, and swap it out every six months.',
+      'Find the main water shutoff valve and make sure every adult in the house can turn it.',
+    ],
+  },
+  {
+    key: 'road', ids: [36],
+    lines: () => [
+      'Map two ways out of your neighborhood by car and one on foot, and drive the second route once so it is familiar.',
+      'Keep the gas tank at least half full in fire season and before winter storms.',
+    ],
+  },
+  {
+    key: 'outbreak', ids: [22],
+    lines: () => [
+      'Keep two weeks of food, prescriptions and household supplies on hand, and write down who looks after whom if the adults get sick.',
       'Keep some cash at home in small bills, plus paper copies of key phone numbers, accounts and prescriptions, for when cards and phones stop working.',
+    ],
+  },
+  {
+    key: 'tornado', ids: [6],
+    lines: () => [
+      'Pick your shelter spot: a basement, or an inside room on the lowest floor with no windows, and practice getting there.',
+      'Turn on emergency alerts on every phone and keep a weather radio, since outdoor sirens are not meant to be heard indoors.',
+    ],
+  },
+  {
+    key: 'soil', ids: [66],
+    lines: () => [
+      'Make sure gutters and downspouts carry water well away from the foundation, and keep sprinklers off the ground right next to the house.',
+      'Watch for new cracks in the foundation or drywall and doors that start to stick, and have a structural engineer look before the cracks grow.',
     ],
   },
 ];

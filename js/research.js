@@ -22,60 +22,78 @@ const H_ID = {
   EXTREME_HEAT:       9,
   DROUGHT:            10,
   LANDSLIDE:          11,
-  DUST_STORM:         14,
   CHEMICAL_PLANT:     15,
-  WASTEWATER:         21,
-  AIR_QUALITY:        23,
-  WUI:                55,
+  AIR_QUALITY:        23,   // "Smoke and bad air days" (absorbed dust storm in v3)
+};
+// v3.0.0 dropped the dust storm (14), wastewater (21) and WUI (55) findings:
+// those hazards merged into smoke, water outage and wildfire.
+
+/* Names and categories as in HAZARD_DATA (app.js), so findings read the same as the Assess screen. */
+const H_NAME = {
+  1:  'Wildfire',
+  2:  'Earthquake',
+  3:  'River and creek flood',
+  4:  'Flash flood',
+  5:  'Hail and severe thunderstorms',
+  6:  'Tornado',
+  7:  'Hurricane',
+  8:  'Winter storm and extreme cold',
+  9:  'Extreme heat',
+  10: 'Drought and watering limits',
+  11: 'Landslide, rockfall and debris flow after fire',
+  15: 'Chemical spill from road, rail or a nearby plant',
+  23: 'Smoke and bad air days',
+};
+const H_CAT = { 15: 'Industrial & CBRN' };
+function _hCat(id) { return H_CAT[id] || 'Natural Hazards'; }
+
+/* Hazards no public source can score for an address, with what to check instead */
+const MANUAL_REASONS = {
+  17: 'For big gas transmission lines, check the PHMSA pipeline map at pvnpms.phmsa.dot.gov. For the main on your street, you know it better than any map.',
+  18: 'Nuclear facility proximity requires the NRC facility search at nrc.gov.',
+  20: 'Old mine workings and quarries are on county and Colorado Geological Survey maps. Local knowledge helps.',
+  22: 'Disease outbreaks are regional. No address-level data exists.',
+  24: 'Outage history is not public. Check your utility\'s planned shutoff map (Xcel publishes one) and how often your street loses power.',
+  27: 'Water main breaks and boil orders are tracked by your water provider. Enter what you know.',
+  36: 'Depends on how many roads lead out of your neighborhood and what could block them. Local knowledge required.',
+  53: 'Civil unrest depends on where you live and work. Enter what you know.',
+  54: 'Active threat risk depends on local context. Enter what you know.',
+  63: 'High wind is county-wide weather. Rate it from what you see on your street: downed limbs, roof damage, shutoffs.',
+  64: 'Radon is only known by testing the house. Haven\'t tested: rate it 3. Tested high: 5. Tested low: 1.',
+  65: 'House fire depends on the home itself: heating, wiring, dryer and cooking. Enter what you know.',
+  66: 'Swelling clay is mapped by the Colorado Geological Survey. Cracked foundations or sticking doors are a sign.',
+  60: 'Custom hazard. Enter manually.',
+  61: 'Custom hazard. Enter manually.',
+  62: 'Custom hazard. Enter manually.',
 };
 
-/* Hazards that require manual input — with explanatory text */
-const MANUAL_REASONS = {
-  16: 'No free address-level API for hazmat route proximity. Check nearby rail/highway routes manually.',
-  17: 'Pipeline proximity data requires PHMSA Public Viewer at pvnpms.phmsa.dot.gov.',
-  18: 'Nuclear facility proximity requires NRC facility search at nrc.gov.',
-  19: 'Agricultural chemical drift depends on nearby farm operations — local knowledge required.',
-  20: 'Mine/quarry hazard requires local/county GIS or state mining office data.',
-  22: 'Pandemic/biological risk is a contextual hazard — no address-level API exists.',
-  24: 'Power outage history is not available via public API. Contact your utility provider.',
-  25: 'Short-term outage risk mirrors Extended Power Outage — enter manually.',
-  26: 'Natural gas service history is utility-specific — enter manually.',
-  27: 'Municipal water service history is utility-specific — enter manually.',
-  28: 'Sewer failure history is utility-specific — enter manually.',
-  29: 'Internet outage risk is provider-specific — enter manually.',
-  30: 'Cell network reliability is carrier-specific — enter manually.',
-  31: 'Landline service is carrier-specific — enter manually.',
-  32: 'Emergency services capacity requires local knowledge.',
-  33: 'Hospital proximity/capacity requires local knowledge.',
-  34: 'School/childcare closure risk is household-specific.',
-  35: 'Public transit risk depends on your specific commute routes.',
-  36: 'Road/bridge closure risk requires local knowledge of evacuation routes.',
-  37: 'Water main break history is utility-specific — enter manually.',
-  38: 'Fuel supply risk depends on local storage and access — enter manually.',
-  39: 'Dam failure risk: check your local Emergency Action Plan for upstream dams.',
-  40: 'Levee failure risk: check USACE / FEMA Levee screening data for your area.',
-  41: 'Electrical substation risk requires utility infrastructure data.',
-  42: 'Building structural condition is assessed by visual inspection.',
-  43: 'Stormwater system capacity is known to local public works departments.',
-  44: 'Cyber attack risk is context-dependent — enter manually.',
-  45: 'Food supply disruption risk depends on local supply chain — enter manually.',
-  46: 'Medication shortage risk depends on household pharmaceutical needs.',
-  47: 'Medical equipment shortage depends on household medical needs.',
-  48: 'Energy supply disruption risk depends on local storage capacity.',
-  49: 'Building materials shortage follows regional disaster frequency.',
-  50: 'Bottled water availability depends on local retail capacity.',
-  51: 'Electronics/battery availability is regional — enter manually.',
-  52: 'Banking disruption risk is contextual — enter manually.',
-  53: 'Civil unrest risk is highly contextual — enter manually.',
-  54: 'Active threat risk is highly contextual — enter manually.',
-  56: 'Economic shock risk depends on household employment situation.',
-  57: 'Housing instability depends on tenure, mortgage, and local market.',
-  58: 'Animal/livestock disease depends on local agricultural context.',
-  59: 'Isolation/evacuation difficulty requires local road knowledge.',
-  60: 'Custom hazard — enter manually.',
-  61: 'Custom hazard — enter manually.',
-  62: 'Custom hazard — enter manually.',
-};
+/**
+ * Whether research should leave a hazard alone because it is marked
+ * "Does not apply here". A pre-marked hazard (naAuto) still gets research
+ * when the address is outside Colorado, since that mark assumed Colorado.
+ */
+function _researchSkipsNa(hazardId, stateAbbr) {
+  const e = (typeof state !== 'undefined' && state && state.scores) ? state.scores[hazardId] : null;
+  if (!e || !e.na) return false;
+  if (e.naAuto && _outsideColorado(stateAbbr)) return false;
+  return true;
+}
+
+function _outsideColorado(stateAbbr) {
+  const s = String(stateAbbr || '').toUpperCase();
+  return !!s && s !== 'CO';
+}
+
+/** Clear the pre-marked "Does not apply here" marks (naAuto). Used when the address is outside Colorado. */
+function clearAutoNotApplicable() {
+  if (typeof state === 'undefined' || !state || !state.scores) return [];
+  const cleared = [];
+  Object.keys(state.scores).forEach(id => {
+    const e = state.scores[id];
+    if (e && e.naAuto) { delete e.na; delete e.naAuto; cleared.push(parseInt(id, 10)); }
+  });
+  return cleared;
+}
 
 /* ---------------------------------------------------------------
    RESEARCH STATE
@@ -897,22 +915,21 @@ function _compileFindings(apiResults, geocoded) {
     ? `https://msc.fema.gov/portal/search#${encodeURIComponent(geocoded.lat + ',' + geocoded.lng)}`
     : null;
   const floodWithUrl = flood ? { ...flood, femaMapUrl: flood.femaMapUrl || femaMapUrl } : null;
-  addFinding(H_ID.FLOOD_RIVERINE, 'Flood (riverine)', 'Natural Hazards', 'flood', floodWithUrl, floodSrc, _floodFallback, { femaMapUrl });
-  addFinding(H_ID.FLASH_FLOOD,    'Flash Flood',      'Natural Hazards', 'flood', floodWithUrl, floodSrc, _floodFallback, { femaMapUrl });
+  addFinding(H_ID.FLOOD_RIVERINE, H_NAME[3], _hCat(3), 'flood', floodWithUrl, floodSrc, _floodFallback, { femaMapUrl });
+  addFinding(H_ID.FLASH_FLOOD,    H_NAME[4], _hCat(4), 'flood', floodWithUrl, floodSrc, _floodFallback, { femaMapUrl });
 
   // ── EARTHQUAKE ────────────────────────────────────────────
-  addFinding(H_ID.EARTHQUAKE, 'Earthquake', 'Natural Hazards',
+  addFinding(H_ID.EARTHQUAKE, H_NAME[2], _hCat(2),
     'earthquake', earthquake, 'USGS NEHRP 2020 Seismic Design Values — Peak Ground Acceleration',
     () => _quakeFallback(stateAbbr));
 
-  // ── WILDFIRE + WUI + AQ boost ────────────────────────────
+  // ── WILDFIRE + AQ boost ───────────────────────────────────
+  // (The v2 WUI finding repeated this one; WUI merged into Wildfire in v3.)
   const whpSrc = 'USFS Wildfire Hazard Potential 2023 (270 m) — national fuel/landscape conditions';
-  addFinding(H_ID.WILDFIRE, 'Wildfire', 'Natural Hazards', 'wildfire', wildfire, whpSrc,
+  addFinding(H_ID.WILDFIRE, H_NAME[1], _hCat(1), 'wildfire', wildfire, whpSrc,
     () => _wildfireFallback(stateAbbr));
-  addFinding(H_ID.WUI, 'Wildland-Urban Interface Encroachment', 'Other & Human-Caused',
-    'wildfire', wildfire, whpSrc, () => _wildfireFallback(stateAbbr));
 
-  // WUI sub-note: also drives AQ
+  // Wildfire hazard also drives the smoke estimate
   const whpScore = wildfire?.score || 2;
 
   // Air quality — derived. If either input was a placeholder, so is this.
@@ -921,7 +938,7 @@ function _compileFindings(apiResults, geocoded) {
   const aqDerivedFromData = !!(wildfire && epa);
   const aqRelayOff = !wildfire && (_research.failCodes || {}).wildfire === RELAY_NOT_CONFIGURED;
   findings.push({
-    hazardId: H_ID.AIR_QUALITY, hazardName: 'Air Quality Crisis', category: 'Industrial & CBRN',
+    hazardId: H_ID.AIR_QUALITY, hazardName: H_NAME[23], category: _hCat(23),
     scoreAssigned: aqResult.score,
     source: aqDerivedFromData
       ? 'Derived from USFS wildfire hazard and EPA TRI industrial proximity'
@@ -942,18 +959,20 @@ function _compileFindings(apiResults, geocoded) {
   const weatherSrc = 'World Aware state-level rule of thumb (not NOAA data)';
 
   const weatherMap = [
-    { id: H_ID.SEVERE_THUNDERSTORM, name: 'Severe Thunderstorm', key: 'severeThunderstorm' },
-    { id: H_ID.TORNADO,             name: 'Tornado',             key: 'tornado' },
-    { id: H_ID.HURRICANE,           name: 'Hurricane / Tropical Storm', key: 'hurricane' },
-    { id: H_ID.WINTER_STORM,        name: 'Winter Storm / Ice Storm',   key: 'winterStorm' },
-    { id: H_ID.EXTREME_HEAT,        name: 'Extreme Heat',        key: 'extremeHeat' },
-    { id: H_ID.DUST_STORM,          name: 'Dust Storm / Haboob', key: 'dustStorm' },
+    { id: H_ID.SEVERE_THUNDERSTORM, key: 'severeThunderstorm' },
+    { id: H_ID.TORNADO,             key: 'tornado' },
+    { id: H_ID.HURRICANE,           key: 'hurricane' },
+    { id: H_ID.WINTER_STORM,        key: 'winterStorm' },
+    { id: H_ID.EXTREME_HEAT,        key: 'extremeHeat' },
   ];
 
-  weatherMap.forEach(({ id, name, key }) => {
+  weatherMap.forEach(({ id, key }) => {
+    // A hazard ruled out for this place gets no estimate (Hurricane arrives
+    // ruled out for Colorado; an address elsewhere clears that mark).
+    if (_researchSkipsNa(id, stateAbbr)) return;
     const score = weatherScores[key] || 2;
     findings.push({
-      hazardId: id, hazardName: name, category: 'Natural Hazards',
+      hazardId: id, hazardName: H_NAME[id], category: _hCat(id),
       scoreAssigned: score,
       source: weatherSrc,
       finding: `${score === 4 ? 'Likely' : score === 3 ? 'Possible' : 'Unlikely'}. ${weatherNote}`,
@@ -963,39 +982,22 @@ function _compileFindings(apiResults, geocoded) {
   });
 
   // ── DROUGHT ───────────────────────────────────────────────
-  addFinding(H_ID.DROUGHT, 'Drought', 'Natural Hazards',
+  addFinding(H_ID.DROUGHT, H_NAME[10], _hCat(10),
     'drought', drought, 'US Drought Monitor — county-level drought conditions',
     () => ({ score: 2, finding: `${FALLBACK_PREFIX} Colorado moves in and out of drought most years; check droughtmonitor.unl.edu.`, confidence: 'Low', isFallback: true }));
 
-  // ── EPA TRI — Chemical + Wastewater ──────────────────────
-  const epaChemResult = epa ? { score: epa.chemScore, finding: epa.finding, confidence: epa.confidence } : null;
-  addFinding(H_ID.CHEMICAL_PLANT, 'Chemical Plant / Refinery Release', 'Industrial & CBRN',
+  // ── EPA TRI: chemical spill ──────────────────────────────
+  // EPA covers plants in the ZIP code only; rail lines and freight highways
+  // are part of this hazard too, so the finding says to check them.
+  const railNote = 'Rail lines and freight highways are not in this data; check the routes near you yourself.';
+  const epaChemResult = epa ? { score: epa.chemScore, finding: `${epa.finding}. ${railNote}`, confidence: epa.confidence } : null;
+  addFinding(H_ID.CHEMICAL_PLANT, H_NAME[15], _hCat(15),
     'epa', epaChemResult,
     'EPA Toxics Release Inventory (TRI) — regulated industrial facilities in ZIP code',
-    () => ({ score: 2, finding: `${FALLBACK_PREFIX} Industrial proximity unknown.`, confidence: 'Low', isFallback: true }));
-
-  if (epa) {
-    const potw = epa.potwCount > 0;
-    findings.push({
-      hazardId: H_ID.WASTEWATER, hazardName: 'Wastewater / Sewage Release', category: 'Industrial & CBRN',
-      scoreAssigned: potw ? 2 : 1,
-      source: 'EPA TRI — wastewater treatment facility proximity',
-      finding: potw
-        ? `${epa.potwCount} wastewater/treatment facilit${epa.potwCount > 1 ? 'ies' : 'y'} found in ZIP ${geocoded.zip}`
-        : `No wastewater treatment facilities found in ZIP ${geocoded.zip}`,
-      confidence: 'Medium', status: 'success', isOverridden: false,
-    });
-  } else {
-    findings.push({
-      hazardId: H_ID.WASTEWATER, hazardName: 'Wastewater / Sewage Release', category: 'Industrial & CBRN',
-      scoreAssigned: null, source: 'EPA TRI',
-      finding: 'Data temporarily unavailable — enter manually',
-      confidence: 'N/A', status: 'error', isOverridden: false,
-    });
-  }
+    () => ({ score: 2, finding: `${FALLBACK_PREFIX} Industrial proximity unknown. ${railNote}`, confidence: 'Low', isFallback: true }));
 
   // ── LANDSLIDE ─────────────────────────────────────────────
-  addFinding(H_ID.LANDSLIDE, 'Landslide / Mudslide', 'Natural Hazards',
+  addFinding(H_ID.LANDSLIDE, H_NAME[11], _hCat(11),
     'landslide', landslide, 'USGS National Landslide Susceptibility dataset',
     _landslideFallback);
 
@@ -1169,9 +1171,16 @@ function applyResearchScores() {
     return;
   }
 
-  // Include both 'success' and 'estimated' (fallback) findings
+  // Hurricane, tsunami and volcanic ash arrive ruled out because they assume
+  // Colorado. An address in another state clears those marks.
+  if (_outsideColorado(_research.geocoded?.stateAbbr)) clearAutoNotApplicable();
+
+  // Include both 'success' and 'estimated' (fallback) findings, and skip
+  // hazards marked "Does not apply here" or no longer in HAZARD_DATA
+  const known = id => typeof HAZARD_DATA === 'undefined' || HAZARD_DATA.some(h => h.id === id);
   const successFindings = _research.findings.filter(
-    f => (f.status === 'success' || f.status === 'estimated') && f.scoreAssigned !== null
+    f => (f.status === 'success' || f.status === 'estimated') && f.scoreAssigned !== null &&
+         known(f.hazardId) && !(state.scores[f.hazardId] && state.scores[f.hazardId].na)
   );
 
   // STEP 1: Write likelihood scores to state. Impact is never invented:
@@ -1401,6 +1410,8 @@ function applyManualScore(hazardId, score, source) {
   }
 }
 
+const H_NAME_MANUAL = { 17: 'Gas leak or explosion', 18: 'Nuclear or radiological incident' };
+
 /**
  * Build a rich interactive manual-lookup card for pipeline (17) or nuclear (18).
  */
@@ -1410,11 +1421,11 @@ function _buildManualLookupCard(hazardId) {
 
   if (!IS_PIPELINE && !IS_NUCLEAR) return '';
 
-  const title   = IS_PIPELINE ? 'Natural Gas Pipeline Leak / Explosion' : 'Nuclear / Radiological Incident';
+  const title   = IS_PIPELINE ? H_NAME_MANUAL[17] : H_NAME_MANUAL[18];
   const badge   = 'Manual lookup required';
   const message = IS_PIPELINE
-    ? 'Pipeline proximity data cannot be retrieved automatically — PHMSA does not provide a public address-level API.'
-    : 'Nuclear facility proximity requires manual lookup — NRC does not provide a CORS-compatible public API.';
+    ? 'Pipeline proximity cannot be looked up automatically. PHMSA has no public address-level API.'
+    : 'Nuclear facility proximity needs a manual lookup. NRC has no public API this tool can call.';
   const linkUrl = IS_PIPELINE
     ? 'https://pvnpms.phmsa.dot.gov/PublicViewer/'
     : 'https://www.nrc.gov/info-finder/facilities/';
@@ -1489,12 +1500,28 @@ function _renderReport() {
   const geo        = _research.geocoded;
   const findings   = _research.findings;
   // 'estimated' = placeholder used; shown alongside success but counted separately
-  const successful = findings.filter(f => f.status === 'success' || f.status === 'estimated');
-  const fromData   = findings.filter(f => f.status === 'success');
-  const estimated  = findings.filter(f => f.status === 'estimated');
-  const failed     = findings.filter(f => f.status === 'error');
+  // Hazards marked "Does not apply here" are not filled in, so they are
+  // left out of every count and list and named once below.
+  // Same rule as applyResearchScores: a pre-mark is cleared for an address outside Colorado.
+  const isRuledOut = f => _researchSkipsNa(f.hazardId, geo && geo.stateAbbr);
+  const ruledOut   = findings.filter(isRuledOut);
+  const live       = findings.filter(f => !isRuledOut(f));
+  const successful = live.filter(f => f.status === 'success' || f.status === 'estimated');
+  const fromData   = live.filter(f => f.status === 'success');
+  const estimated  = live.filter(f => f.status === 'estimated');
+  const failed     = live.filter(f => f.status === 'error');
 
-  const manualCount = Object.keys(MANUAL_REASONS).length;
+  // Hazards that need the user's judgment: not covered by a finding and not ruled out
+  const findingIds = new Set(findings.map(f => f.hazardId));
+  const manualIds = Object.keys(MANUAL_REASONS).map(Number).filter(id => {
+    if (findingIds.has(id)) return false;
+    const hz = (typeof HAZARD_DATA !== 'undefined') ? HAZARD_DATA.find(h => h.id === id) : null;
+    if (typeof HAZARD_DATA !== 'undefined' && !hz) return false;
+    // Custom slots are listed only once the user has named them
+    if (hz && hz.isCustom && !(typeof state !== 'undefined' && state.customNames && state.customNames[id] && state.customNames[id].name)) return false;
+    return !(typeof state !== 'undefined' && state.scores && state.scores[id] && state.scores[id].na);
+  });
+  const manualCount = manualIds.length;
 
   // Street name and city only: this card is often on a projector in a workshop.
   const countyLabel = geo.county ? `${escHtml(String(geo.county).replace(/ County$/i, ''))} County` : '';
@@ -1533,7 +1560,7 @@ function _renderReport() {
       <button class="btn btn-primary btn-large" id="research-continue-btn" onclick="applyResearchScores()">
         Continue to assessment
       </button>
-      <p class="report-actions-note">Likelihood estimates are added to your assessment. You rate the impact for your household.</p>
+      <p class="report-actions-note">Likelihood estimates are added to your assessment. The household checklist sets the impact, and you can change it.</p>
       <button class="btn btn-ghost" id="research-restart-btn" onclick="clearAutoScores()">
         Research a different address
       </button>
@@ -1553,8 +1580,9 @@ function _renderReport() {
     // Group by category
     const cats = {};
     successful.forEach(f => {
-      if (!cats[f.category]) cats[f.category] = [];
-      cats[f.category].push(f);
+      const cat = _findingCategory(f);
+      if (!cats[cat]) cats[cat] = [];
+      cats[cat].push(f);
     });
 
     Object.keys(cats).forEach(cat => {
@@ -1566,6 +1594,10 @@ function _renderReport() {
     });
   }
 
+  if (ruledOut.length > 0) {
+    html += `<p class="report-ruled-out-note">Not applied because you marked ${ruledOut.length === 1 ? 'it' : 'them'} Does not apply here: ${ruledOut.map(f => escHtml(_findingName(f))).join('; ')}.</p>`;
+  }
+
   // ── FAILED API CALLS ────────────────────────────────────────
   if (failed.length > 0) {
     html += `
@@ -1574,29 +1606,28 @@ function _renderReport() {
         <div>
           <p class="alert-title">${failed.length} data source${failed.length > 1 ? 's' : ''} unavailable</p>
           <p>These hazards were not auto-scored.</p>
-          <ul>${failed.map(f => `<li>${escHtml(f.hazardName)}</li>`).join('')}</ul>
+          <ul>${failed.map(f => `<li>${escHtml(_findingName(f))}</li>`).join('')}</ul>
         </div>
       </div>
     `;
   }
 
   // ── MANUAL HAZARDS ────────────────────────────────────────
-  html += `<h3 class="report-section-heading">${ic('pencil')} Needs your judgment (${Object.keys(MANUAL_REASONS).length} hazards)</h3>
+  html += `<h3 class="report-section-heading">${ic('pencil')} Needs your judgment (${manualCount} hazard${manualCount === 1 ? '' : 's'})</h3>
   <p class="report-manual-intro">No public map covers these. You know them better than any database does. Most take a few seconds; skip any that do not apply.</p>
   <div class="report-manual-list">`;
 
-  // Only show hazards that aren't already in the auto-scored list
-  const autoScoredIds = new Set(findings.map(f => f.hazardId));
-  Object.entries(MANUAL_REASONS).forEach(([id, reason]) => {
-    if (autoScoredIds.has(parseInt(id))) return; // already handled
-    const numId = parseInt(id);
+  // Only hazards without a finding that are not ruled out
+  manualIds.forEach(numId => {
+    const id = numId;
+    const reason = MANUAL_REASONS[numId];
     // Pipeline (17) and Nuclear (18) get rich interactive cards
     if (numId === 17 || numId === 18) {
       html += _buildManualLookupCard(numId);
       return;
     }
     const hazard = (typeof HAZARD_DATA !== 'undefined') ? HAZARD_DATA.find(h => h.id === numId) : null;
-    const name   = hazard ? hazard.name : `Hazard #${id}`;
+    const name   = hazard ? (typeof hazardDisplayName === 'function' ? hazardDisplayName(hazard) : hazard.name) : `Hazard #${id}`;
     html += `
       <div class="report-manual-item">
         <strong>${escHtml(name)}</strong>
@@ -1609,6 +1640,16 @@ function _renderReport() {
   html += `</div>`; // end .research-details
 
   container.innerHTML = html;
+}
+
+/** Current hazard name for a finding (saved reports may carry a v2 name). */
+function _findingName(f) {
+  const h = (typeof HAZARD_DATA !== 'undefined') ? HAZARD_DATA.find(x => x.id === f.hazardId) : null;
+  return (h && h.name) || f.hazardName || '';
+}
+function _findingCategory(f) {
+  const h = (typeof HAZARD_DATA !== 'undefined') ? HAZARD_DATA.find(x => x.id === f.hazardId) : null;
+  return (h && h.category) || f.category || '';
 }
 
 function _buildFindingCard(f) {
@@ -1628,7 +1669,7 @@ function _buildFindingCard(f) {
     <div class="finding-card" id="finding-card-${f.hazardId}">
       <div class="finding-card-top">
         <div class="finding-left">
-          <span class="finding-name">${escHtml(f.hazardName)}</span>
+          <span class="finding-name">${escHtml(_findingName(f))}</span>
           <span class="finding-tags">${scoredBadge}${overrideBadge}</span>
         </div>
         ${f.scoreAssigned !== null ? `

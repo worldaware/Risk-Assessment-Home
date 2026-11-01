@@ -325,7 +325,7 @@ console.log('Import from JSON (js/importValidator.js)');
   };
   ctx.window = ctx; ctx.globalThis = ctx; ctx.addEventListener = noop; ctx.navigator = {};
   vm.createContext(ctx);
-  ['js/importValidator.js', 'app.js'].forEach(f => vm.runInContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), ctx, { filename: f }));
+  ['js/importValidator.js', 'js/checklist.js', 'app.js'].forEach(f => vm.runInContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), ctx, { filename: f }));
   const ev = code => vm.runInContext(code, ctx);
 
   // Same keys in the same order, so objects from different realms compare by value.
@@ -534,6 +534,397 @@ console.log('Walk-through CTA and booking link');
   check('actions.js loads before report.js', html.indexOf('js/actions.js') > -1 && html.indexOf('js/actions.js') < html.indexOf('js/report.js'));
   const sw = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
   check('actions.js is in the app shell', sw.includes("'./js/actions.js'"));
+}
+
+console.log('v3.0.0 hazard cut');
+{
+  // Full app in one sandbox: research, actions, report, validator, checklist, app.
+  const noop = () => {};
+  const store = {};
+  const ctx = {
+    console: { log: noop, warn: noop, error: console.error },
+    document: { getElementById: () => null, querySelector: () => null, querySelectorAll: () => [], addEventListener: noop },
+    localStorage: { getItem: k => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); }, removeItem: k => { delete store[k]; } },
+    AbortController: class { constructor() { this.signal = {}; } abort() {} },
+    setTimeout, clearTimeout, URL, Number, String, Math, Date, Array, Object, JSON, RegExp, Error, Promise, Set,
+    fetch: () => Promise.reject(new Error('no network in tests')),
+  };
+  ctx.window = ctx; ctx.globalThis = ctx; ctx.addEventListener = noop; ctx.navigator = {};
+  vm.createContext(ctx);
+  ['js/apiConfig.js', 'js/scoreMapper.js', 'js/research.js', 'js/actions.js', 'js/report.js',
+   'js/importValidator.js', 'js/checklist.js', 'app.js']
+    .forEach(f => vm.runInContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), ctx, { filename: f }));
+  const ev = code => vm.runInContext(code, ctx);
+  const HD = ev('HAZARD_DATA');
+  const REMOVED = [14, 16, 19, 21, 25, 26, 28, 29, 30, 31, 32, 33, 34, 35, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 55, 56, 57, 58, 59];
+  const CORE = [1, 23, 5, 63, 8, 24, 4, 3, 10, 9, 2, 11, 64, 65, 15, 17, 27, 36, 22, 6];
+  const RARE = [7, 12, 13, 18, 20, 53, 54, 66];
+  const ids = g => HD.filter(h => h.group === g).map(h => h.id);
+  const fresh = () => ev('state = freshState(); state');
+  const canon = v => JSON.stringify(v, (k, x) => (x && typeof x === 'object' && !Array.isArray(x))
+    ? Object.keys(x).sort().reduce((o, key) => { o[key] = x[key]; return o; }, {}) : x);
+
+  // HAZARD_DATA shape
+  check('HAZARD_DATA: 20 core in screen order', JSON.stringify(ids('core')) === JSON.stringify(CORE), JSON.stringify(ids('core')));
+  check('HAZARD_DATA: 8 rare in screen order', JSON.stringify(ids('rare')) === JSON.stringify(RARE), JSON.stringify(ids('rare')));
+  check('HAZARD_DATA: 3 custom (60, 61, 62)', JSON.stringify(ids('custom')) === '[60,61,62]');
+  check('HAZARD_DATA: 31 entries, no other groups', HD.length === 31);
+  check('HAZARD_DATA: no removed ids', !HD.some(h => REMOVED.includes(h.id)));
+  check('RETIRED_HAZARD_IDS lists the 35 removed ids', JSON.stringify([...ev('RETIRED_HAZARD_IDS')].sort((a, b) => a - b)) === JSON.stringify(REMOVED));
+  check('every core hazard has baseImpact 1 to 5', HD.filter(h => h.group === 'core').every(h => Number.isInteger(h.baseImpact) && h.baseImpact >= 1 && h.baseImpact <= 5));
+  check('rare and custom hazards have no baseImpact', HD.filter(h => h.group !== 'core').every(h => h.baseImpact === undefined));
+  check('naDefault on 7, 12, 13 only', JSON.stringify(HD.filter(h => h.naDefault).map(h => h.id)) === '[7,12,13]');
+  check('every hazard keeps a category string', HD.every(h => typeof h.category === 'string' && h.category.length > 0));
+  check('Tornado is core', HD.find(h => h.id === 6).group === 'core');
+  const copy = HD.map(h => h.name + ' ' + h.description).concat(ev('CHECKLIST_DATA').map(c => c.text)).concat(ev('HAZARD_GROUPS').map(g => g.title + ' ' + g.intro));
+  check('hazard, checklist and group copy: no em dash or exclamation point', !copy.some(t => /[—!]/.test(t)), copy.filter(t => /[—!]/.test(t)).join(' | '));
+
+  // Checklist
+  const CL = ev('CHECKLIST_DATA');
+  check('CHECKLIST_DATA: 12 items, ids 1 to 12', CL.length === 12 && CL.every((c, i) => c.id === i + 1));
+  check('checklist raises only core hazard ids', CL.every(c => c.raises.every(id => CORE.includes(id))));
+  check('item 2 raises the hazards that force you out', JSON.stringify(CL[1].raises.slice().sort((a, b) => a - b)) === '[1,3,4,6,11,15,17,36]');
+  const ci = (id, hh1) => ctx.computeImpact(id, 'hh1', { hh1: hh1 || {}, hh2: {} });
+  check('computeImpact: empty checklist gives baseImpact', HD.filter(h => h.group === 'core').every(h => ci(h.id) === h.baseImpact));
+  check('computeImpact: item 1 ticked -> power outage (24) impact >= 4', ci(24, { 1: true }) >= 4, String(ci(24, { 1: true })));
+  check('computeImpact: item 1 ticked -> extreme heat (9) floors at 4 (base 2 + 1 = 3)', ci(9, { 1: true }) === 4, String(ci(9, { 1: true })));
+  check('computeImpact: item 1 ticked -> winter storm (8) is 4', ci(8, { 1: true }) === 4);
+  check('computeImpact: no floor without item 1 (heat with item 11 is not raised, stays 2)', ci(9, { 11: true }) === 2);
+  check('computeImpact: items 3, 5, 6 ticked -> wildfire 4 + 3 capped at 5', ci(1, { 3: true, 5: true, 6: true }) === 5);
+  check('computeImpact: item 7 ticked -> drought 2 + 1 = 3', ci(10, { 7: true }) === 3);
+  check('computeImpact: items 9 and 11 -> power outage 3 + 2 = 5', ci(24, { 9: true, 11: true }) === 5);
+  check('computeImpact: radon and house fire are not raised by the checklist', ci(64, Object.fromEntries(CL.map(c => [c.id, true]))) === 3 && ci(65, {}) === 5);
+  check('computeImpact: null for rare and custom hazards', ci(7) === null && ci(66) === null && ci(60) === null && ci(14) === null);
+  check('computeImpact: household 2 reads its own column', ctx.computeImpact(9, 'hh2', { hh1: {}, hh2: { 1: true } }) === 4 && ctx.computeImpact(9, 'hh1', { hh1: {}, hh2: { 1: true } }) === 2);
+  check('normalizeChecklist keeps only ids 1 to 12 set to true', canon(ctx.normalizeChecklist({ hh1: { 1: true, 2: false, 13: true, x: true }, hh2: { 12: true }, hh3: { 1: true } })) === canon({ hh1: { 1: true }, hh2: { 12: true } }));
+
+  // applyChecklistImpacts
+  {
+    const st = fresh();
+    check('fresh state: every core hazard has impact from the checklist', CORE.every(id => st.scores[id].i === HD.find(h => h.id === id).baseImpact && st.scores[id].i2 === st.scores[id].i));
+    check('fresh state: no likelihoods set', CORE.every(id => !st.scores[id].l));
+    ev('state.checklist.hh1[1] = true; state.scores[9].iManual = true; state.scores[9].i = 1; state.checklist.hh2[3] = true; state.scores[1].i2Manual = true; state.scores[1].i2 = 2; applyChecklistImpacts();');
+    const s2 = ev('state');
+    check('applyChecklistImpacts: iManual keeps a hand-set impact', s2.scores[9].i === 1);
+    check('applyChecklistImpacts: i2 is still computed when only iManual is set', s2.scores[9].i2 === 2);
+    check('applyChecklistImpacts: other hazards follow the checklist', s2.scores[24].i === 4 && s2.scores[8].i === 4);
+    check('applyChecklistImpacts: i2Manual keeps household 2 hand-set impact', s2.scores[1].i2 === 2 && s2.scores[1].i === 5);
+    check('applyChecklistImpacts: rare hazards untouched', !('i' in s2.scores[7]) && s2.scores[18] === undefined);
+  }
+
+  // Does not apply here, scoring and progress
+  {
+    fresh();
+    check('fresh state: 7, 12, 13 marked na and naAuto', [7, 12, 13].every(id => ev(`state.scores[${id}].na === true && state.scores[${id}].naAuto === true`)));
+    check('fresh state: progress is 0 of 20 (pre-marked hazards do not count)', ev('countScored()') === 0 && ev('totalActive()') === 20);
+    check('fresh state: not a dirty assessment', ev('_isDirtyAssessment()') === false);
+    ev('state.scores[1].l = 4;');
+    check('likelihood on a core hazard scores it with checklist impact', ev('isScored(1)') && ev('calcScore(1)') === 16 && ev('countScored()') === 1);
+    ev('state.scores[1].na = true;');
+    check('na: calcScore returns 0 and the hazard is not scored', ev('calcScore(1)') === 0 && ev('isScored(1)') === false);
+    check('na on a core hazard fills its progress slot', ev('countScored()') === 1 && ev('totalActive()') === 20);
+    ev('state.scores[18] = { na: true };');
+    check('na set by the user on a rare hazard adds it to progress, done', ev('totalActive()') === 21 && ev('countScored()') === 2);
+    ev('state.scores[53] = { l: 2 };');
+    check('a rare hazard with only a likelihood counts but is not done', ev('totalActive()') === 22 && ev('countScored()') === 2);
+    ev('state.scores[53].i = 3;');
+    check('rating its impact finishes it', ev('countScored()') === 3);
+    ev('state.customNames[60].name = "Rockfall"; state.scores[60] = { l: 2, i: 2 };');
+    check('named custom hazards count', ev('totalActive()') === 23 && ev('countScored()') === 4);
+    const rd = ev('buildReportData()');
+    check('report data: na hazards not ranked', !rd.scored.some(it => it.id === 1 || it.id === 18));
+    check('report data: ruledOut lists every na hazard by name, in screen order', JSON.stringify(rd.ruledOut) === JSON.stringify(['Wildfire', 'Hurricane', 'Tsunami', 'Volcanic ash', 'Nuclear or radiological incident']), JSON.stringify(rd.ruledOut));
+    check('export carries the checklist and na flags', (() => { const x = ev('buildExportData()'); return x.checklist && x.checklist.hh1 && x.scores[7].na === true && x.version === '3.0.0'; })());
+  }
+
+  // normalizeState: v2 saved state
+  {
+    const v2 = {
+      assessmentId: 'v2state', assessmentType: 'household',
+      scores: { 1: { l: 4, i: 3 }, 2: { l: 2, i: 0 }, 14: { l: 3, i: 3 }, 55: { l: 4, i: 4 }, 59: { l: 1, i: 1 }, 7: { l: 1, i: 1 }, 18: { l: 1, i: 2 } },
+      autoScoreOrigins: { 1: { source: 'x' }, 55: { source: 'y' } },
+      researchReport: { geocoded: { stateAbbr: 'CO' }, findings: [{ hazardId: 1 }, { hazardId: 55 }, { hazardId: 14 }, { hazardId: 21 }], timestamp: 't' },
+      customNames: { 60: { name: '', description: '' } },
+    };
+    const n = ev(`normalizeState(${JSON.stringify(v2)})`);
+    check('normalizeState drops score entries for removed ids', ['14', '55', '59'].every(k => !(k in n.scores)), Object.keys(n.scores).join());
+    check('normalizeState keeps kept ids', n.scores[1].l === 4 && n.scores[2].l === 2 && n.scores[18].i === 2);
+    check('normalizeState drops research sources and findings for removed ids',
+      Object.keys(n.autoScoreOrigins).join() === '1' && n.researchReport.findings.map(f => f.hazardId).join() === '1');
+    check('v2 migration: an impact rated on a core hazard becomes hand-set', n.scores[1].iManual === true && n.scores[2].iManual === undefined);
+    check('v2 migration: unrated 12 and 13 are ruled out, rated 7 is not', n.scores[12].na === true && n.scores[13].naAuto === true && !n.scores[7].na);
+    check('v2 migration: gets an empty checklist', canon(n.checklist) === canon({ hh1: {}, hh2: {} }));
+    ev(`state = normalizeState(${JSON.stringify(v2)}); applyChecklistImpacts();`);
+    check('v2 migration: checklist leaves the old impact alone and fills the rest', ev('state.scores[1].i') === 3 && ev('state.scores[2].i') === 3 && ev('state.scores[24].i') === 3);
+    const v3 = ev('normalizeState(JSON.parse(JSON.stringify(state)))');
+    check('a v3 state normalizes to itself', canon(v3) === canon(ev('state')));
+    check('a v3 state with an undone pre-mark stays undone', (() => {
+      const o = JSON.parse(JSON.stringify(ev('state'))); delete o.scores[12]; return !ev('normalizeState')(o).scores[12];
+    })());
+  }
+
+  // Import: v3 round trip and v2 exports
+  {
+    ev(`state = freshState(); state.assessmentId = 'v3rt'; state.assessmentType = 'neighborhood';
+        state.checklist.hh1[1] = true; state.checklist.hh2[12] = true; applyChecklistImpacts();
+        state.scores[1].l = 4; state.scores[1].l2 = 3; state.scores[9].i = 5; state.scores[9].iManual = true;
+        state.scores[18] = { na: true }; delete state.scores[12].na; delete state.scores[12].naAuto;
+        function getReportEdits() { return { notes: {} }; }`);
+    const exported = JSON.parse(JSON.stringify(ev('buildExportData()')));
+    const res = ctx.validateImport(exported);
+    check('v3 export validates with no warnings', res.ok && res.warnings.length === 0, JSON.stringify(res.errors.concat(res.warnings)));
+    check('v3 round trip keeps checklist, na, naAuto, iManual and i2', (() => {
+      const n = ev('normalizeState')(res.state); ev('applyChecklistImpacts')(n);
+      return canon(n) === canon(ev('state'));
+    })());
+    const v2 = { tool: 'World Aware Risk Assessment', version: '2.4.0', assessmentType: 'household',
+      scores: { 1: { l: 4, i: 3 }, 25: { l: 2, i: 2 }, 55: { l: 4, i: 4 }, 44: { l: 1, i: 1 } },
+      researchReport: { geocoded: { stateAbbr: 'CO' }, findings: [
+        { hazardId: 1, scoreAssigned: 4, status: 'success' }, { hazardId: 55, scoreAssigned: 4, status: 'success' },
+        { hazardId: 14, scoreAssigned: 2, status: 'estimated' }, { hazardId: 21, scoreAssigned: 1, status: 'success' }] },
+      autoScoreOrigins: { 1: { source: 'USFS' }, 55: { source: 'USFS' } } };
+    const r2 = ctx.validateImport(JSON.parse(JSON.stringify(v2)));
+    check('v2 export with removed ids still imports', r2.ok, JSON.stringify(r2.errors));
+    check('v2 removed score ids pass to normalizeState with a warning, which drops them', r2.warnings.some(w => /merged or moved/.test(w)) &&
+      Object.keys(ev('normalizeState')(r2.state).scores).every(k => !REMOVED.includes(Number(k))), JSON.stringify(r2.warnings));
+    check('v2 research findings for removed ids are skipped with a warning', r2.state.researchReport.findings.map(f => f.hazardId).join() === '1' && r2.warnings.some(w => /research finding/.test(w)));
+    check('v2 import gets migrated by normalizeState', (() => { const n = ev('normalizeState')(r2.state); return n.scores[1].iManual === true && n.scores[7].na === true; })());
+    const bad = o => ctx.validateImport(Object.assign({ tool: 'World Aware Risk Assessment', assessmentType: 'household', scores: {} }, o));
+    check('checklist item 13 is rejected', !bad({ checklist: { hh1: { 13: true } } }).ok);
+    check('checklist value that is not a boolean is rejected', !bad({ checklist: { hh1: { 1: 'yes' } } }).ok);
+    check('checklist as an array is rejected', !bad({ checklist: [1, 2] }).ok);
+    check('na as a string is rejected', !bad({ scores: { 7: { na: 'true' } } }).ok);
+    check('iManual and i2Manual booleans are kept', (() => { const r = bad({ scores: { 9: { i: 4, iManual: true, i2Manual: false } } }); return r.ok && r.state.scores[9].iManual === true && r.state.scores[9].i2Manual === false; })());
+    check('an id that was never a hazard still rejects a finding', !bad({ researchReport: { geocoded: {}, findings: [{ hazardId: 99 }] } }).ok);
+  }
+
+  // Research findings
+  {
+    const geo = { lat: 40.015, lng: -105.27, zip: '80302', stateAbbr: 'CO', county: 'Boulder County' };
+    const ok = { score: 3, finding: 'x', confidence: 'High' };
+    const full = { flood: ok, earthquake: ok, wildfire: ok, weather: { stateAbbr: 'CO' }, drought: ok,
+      epa: { chemScore: 2, finding: '2 facilities', confidence: 'Medium', highHazardCount: 1, potwCount: 1 }, landslide: ok };
+    const none = { flood: null, earthquake: null, wildfire: null, weather: null, drought: null, epa: null, landslide: null };
+    const names = Object.fromEntries(HD.map(h => [h.id, h.name]));
+    fresh();
+    const runs = [ctx._compileFindings(full, geo), ctx._compileFindings(none, geo), ctx._compileFindings(none, { stateAbbr: 'FL' })];
+    const all = runs.reduce((a, b) => a.concat(b), []);
+    check('findings never reference removed ids', all.every(f => !REMOVED.includes(f.hazardId)), all.map(f => f.hazardId).join());
+    check('every finding points at a hazard in HAZARD_DATA', all.every(f => names[f.hazardId] !== undefined));
+    check('finding names match HAZARD_DATA names', all.every(f => f.hazardName === names[f.hazardId]), all.filter(f => f.hazardName !== names[f.hazardId]).map(f => f.hazardName).join(' | '));
+    check('finding categories match HAZARD_DATA', all.every(f => f.category === HD.find(h => h.id === f.hazardId).category));
+    check('no dust storm, wastewater or WUI finding', !all.some(f => [14, 21, 55].includes(f.hazardId)));
+    check('Colorado: Hurricane is ruled out, so no estimate', !runs[0].some(f => f.hazardId === 7) && !runs[1].some(f => f.hazardId === 7));
+    check('outside Colorado: pre-marked Hurricane still gets an estimate', runs[2].some(f => f.hazardId === 7));
+    check('chemical finding mentions rail and freight routes', runs[0].find(f => f.hazardId === 15).finding.includes('Rail lines and freight highways'));
+    ev('state.scores[7] = { na: true };');
+    check('outside Colorado: a Hurricane the user ruled out gets no estimate', !ctx._compileFindings(none, { stateAbbr: 'FL' }).some(f => f.hazardId === 7));
+    const manual = Object.keys(ev('MANUAL_REASONS')).map(Number);
+    check('MANUAL_REASONS only lists hazards in HAZARD_DATA', manual.every(id => names[id] !== undefined), manual.filter(id => names[id] === undefined).join());
+    check('MANUAL_REASONS covers 63, 64, 65, 66', [63, 64, 65, 66].every(id => manual.includes(id)));
+    check('MANUAL_REASONS text has no em dash', !Object.values(ev('MANUAL_REASONS')).some(t => t.includes('—')));
+    check('H_ID has no removed ids', Object.values(ev('H_ID')).every(id => !REMOVED.includes(id)));
+    fresh();
+    ev('state.scores[12].naAuto = true; clearAutoNotApplicable();');
+    check('clearAutoNotApplicable removes only pre-marks', !ev('state.scores[7].na') && !ev('state.scores[12].na') && !ev('state.scores[13].na'));
+  }
+
+  // Actions
+  {
+    const grp = id => ctx._actionGroupFor(id);
+    const loc = { boulderCounty: true, inColorado: true };
+    check('actions: every core id has lines', CORE.every(id => grp(id) && grp(id).lines(loc).length >= 1), CORE.filter(id => !grp(id)).join());
+    check('actions: 63, 64, 65, 66 have two lines each', [63, 64, 65, 66].every(id => grp(id) && grp(id).lines(loc).length === 2));
+    check('actions: no group lists a removed id', !ev('ACTION_GROUPS').some(g => g.ids.some(id => REMOVED.includes(id))));
+    const lines = ev('ACTION_GROUPS').reduce((a, g) => a.concat(g.lines(loc), g.lines({ boulderCounty: false, inColorado: false })), []);
+    check('actions: no "!" or em dash in any hazard line', !lines.some(l => /[!—]/.test(l)));
+    const out = ctx.buildDefaultActions({ location: 'Boulder, CO', scored: [{ id: 65, name: 'House fire', level: 'CRITICAL', score: 20 }, { id: 64, name: 'Radon', level: 'HIGH', score: 12 }] });
+    check('actions: house fire and radon get report lines', out.some(l => l.startsWith('House fire: put a smoke alarm')) && out.some(l => l.startsWith('Radon: test the lowest')), out.join(' / '));
+  }
+
+  // Report
+  {
+    fresh();
+    ev('state.scores[1].l = 4; state.scores[12].na = false; delete state.scores[7].na; delete state.scores[13].na;');
+    const noNa = ev('buildReportViewHtml(buildResolvedReport())');
+    check('report HTML has no ruled-out line when nothing is ruled out', !noNa.includes('Considered and ruled out'));
+    fresh();
+    ev('state.scores[1].l = 4;');
+    const withNa = ev('buildReportViewHtml(buildResolvedReport())');
+    check('report HTML lists the ruled-out hazards, joined with semicolons', withNa.includes('Considered and ruled out: Hurricane; Tsunami; Volcanic ash.'));
+    check('ruled-out line sits after the ranked list and before the methodology',
+      withNa.indexOf('rd-list') < withNa.indexOf('Considered and ruled out') && withNa.indexOf('Considered and ruled out') < withNa.indexOf('How to read these scores'));
+    check('methodology mentions the household checklist', withNa.includes('Impact starts from a scenario for each hazard and rises with the household checklist; any impact you changed by hand is kept.'));
+    const pdfSrc = fs.readFileSync(path.join(ROOT, 'js/report.js'), 'utf8');
+    check('PDF prints the ruled-out line and the shared methodology text', /ruledOutLine\(d\)\) para\(ruledOutLine\(d\)/.test(pdfSrc) && pdfSrc.includes('para(REPORT_METHOD_TEXT'));
+  }
+
+  // Review fixes (B1, B2, S1, S2, S7, N1 to N12)
+  {
+    // B1: formatLIText
+    fresh();
+    ev(`state.assessmentType = 'household'; state.scores[1].l = 4;`);
+    let it = ev('buildReportData()').scored.find(x => x.id === 1);
+    check('formatLIText household: likelihood and impact words', it.liText === 'Likelihood 4 (Likely) × Impact 4 (Major)', it.liText);
+    ev(`state.assessmentType = 'neighborhood'; state.hh1Name = 'Smiths'; state.hh2Name = 'Next door';`);
+    it = ev('buildReportData()').scored.find(x => x.id === 1);
+    check('formatLIText neighborhood: checklist impact on the unrated household is not reported', it.liText === 'Smiths: L4 × I4 = 16', it.liText);
+    ev('state.scores[1].l = 0; state.scores[1].l2 = 3;');
+    it = ev('buildReportData()').scored.find(x => x.id === 1);
+    check('formatLIText neighborhood: only household 2 rated', it.liText === 'Next door: L3 × I4 = 12', it.liText);
+    ev('state.scores[1].l = 4;');
+    it = ev('buildReportData()').scored.find(x => x.id === 1);
+    check('formatLIText neighborhood: both rated shows the higher', it.liText === 'Smiths: L4 × I4 = 16; Next door: L3 × I4 = 12; higher of the two: 16', it.liText);
+    ev('state.scores[24].l = 4; state.scores[24].i2 = 5; state.scores[24].i2Manual = true;');
+    it = ev('buildReportData()').scored.find(x => x.id === 24);
+    check('formatLIText neighborhood: an impact set by hand without likelihood is still reported', it.liText === 'Smiths: L4 × I3 = 12; Next door: I5, likelihood not rated', it.liText);
+    ev('state.scores[53] = { l: 2, i: 3, i2: 4 };');
+    it = ev('buildReportData()').scored.find(x => x.id === 53);
+    check('formatLIText neighborhood: rare hazard impact is always by hand', /Next door: I4, likelihood not rated/.test(it.liText), it.liText);
+    check('report HTML (neighborhood) has no stray "likelihood not rated" from the checklist',
+      !/Smiths: I\d, likelihood not rated/.test(ev('buildReportViewHtml(buildResolvedReport())')));
+
+    // B2 and S2: pre-v3 migration of research-only naDefault likelihoods
+    const v2co = {
+      assessmentId: 'v2co', assessmentType: 'household',
+      scores: { 1: { l: 4, isAuto: true }, 7: { l: 1, isAuto: true, isEstimate: true } },
+      autoScoreOrigins: { 1: { source: 'USFS' }, 7: { source: 'rule of thumb', status: 'estimated' } },
+      researchReport: { geocoded: { stateAbbr: 'CO' }, findings: [{ hazardId: 1, status: 'success', scoreAssigned: 4 }, { hazardId: 7, status: 'estimated', scoreAssigned: 1 }] },
+    };
+    let n = ev(`normalizeState(${JSON.stringify(v2co)})`);
+    check('B2: research-only Hurricane in CO is ruled out', n.scores[7].na === true && n.scores[7].naAuto === true);
+    check('B2: its auto likelihood and research source are removed', !n.scores[7].l && !n.scores[7].isAuto && !n.scores[7].isEstimate && !('7' in n.autoScoreOrigins));
+    check('B2: other research likelihoods are kept', n.scores[1].l === 4 && n.scores[1].isAuto === true && '1' in n.autoScoreOrigins);
+    ev(`state = normalizeState(${JSON.stringify(v2co)}); applyChecklistImpacts();`);
+    check('B2: Hurricane is not flagged for impact or added to progress', !ev('getResearchFlaggedIds()').includes(7) && ev('totalActive()') === 20);
+    check('B2: report rules out Hurricane, Tsunami and Volcanic ash', JSON.stringify(ev('buildReportData()').ruledOut) === '["Hurricane","Tsunami","Volcanic ash"]');
+    const noResearch = { assessmentType: 'household', scores: { 7: { l: 1, isAuto: true } } };
+    check('B2: no research report counts as Colorado', ev(`normalizeState(${JSON.stringify(noResearch)})`).scores[7].na === true);
+    const v2fl = JSON.parse(JSON.stringify(v2co)); v2fl.researchReport.geocoded.stateAbbr = 'FL';
+    n = ev(`normalizeState(${JSON.stringify(v2fl)})`);
+    check('S2: researched outside Colorado, nothing is pre-marked', !n.scores[7].na && n.scores[7].l === 1 && !n.scores[12] && !n.scores[13]);
+    const handRated = { assessmentType: 'household', scores: { 7: { l: 1 } } };
+    check('B2: a likelihood the user set (not isAuto) still counts as rated', !ev(`normalizeState(${JSON.stringify(handRated)})`).scores[7].na);
+
+    // S1: notes from retired hazards
+    const v2notes = {
+      assessmentType: 'household',
+      scores: {
+        1: { l: 4, i: 4, notes: 'Creek behind the house' },
+        55: { l: 4, i: 5, notes: 'WUI note' },
+        29: { l: 4, i: 3, notes: 'internet matters for work' },
+        14: { l: 3, i: 2 },
+        45: { l: 2, i: 2, notes: '[Auto-scored from: old research]' },
+        59: { notes: '' },
+      },
+    };
+    const info = {};
+    n = ctx.normalizeState(JSON.parse(JSON.stringify(v2notes)), info);
+    check('S1: a retired note is carried onto the absorbing hazard with the old name',
+      n.scores[1].notes === 'Creek behind the house\nFrom Wildland-Urban Interface Encroachment: WUI note', JSON.stringify(n.scores[1].notes));
+    check('S1: a checklist-moved note lands on its mapped core hazard', n.scores[24].notes === 'From Internet / Broadband Outage: internet matters for work', JSON.stringify(n.scores[24]));
+    check('S1: retired scores are dropped, ratings are not carried', ['55', '29', '14', '45', '59'].every(k => !(k in n.scores)) && n.scores[1].i === 4 && !n.scores[24].l);
+    check('S1: legacy auto notes are not carried', !Object.values(n.scores).some(e => /Auto-scored/.test(e.notes || '')));
+    check('S1: info counts merged items and carried notes', info.merged === 4 && info.notesCarried === 2, JSON.stringify(info));
+    check('S1: toast text', ev('migrationNoticeText')(info) === 'Your saved ratings were moved to the new shorter hazard list; 4 items were merged. Notes were kept.', ev('migrationNoticeText')(info));
+    check('S1: no toast when nothing was merged', ev('migrationNoticeText')({ merged: 0 }) === '');
+    const again = {};
+    const n2 = ctx.normalizeState(JSON.parse(JSON.stringify(Object.assign({}, v2notes, { scores: Object.assign({}, n.scores, { 55: { notes: 'WUI note' } }) }))), again);
+    check('S1: carrying the same note twice does not duplicate it', (n2.scores[1].notes.match(/WUI note/g) || []).length === 1);
+    check('RETIRED_HAZARDS covers every removed id and targets a core hazard', REMOVED.every(id => {
+      const r = ev('RETIRED_HAZARDS')[id]; return r && typeof r[0] === 'string' && CORE.includes(r[1]);
+    }));
+    const imp = ctx.validateImport({ tool: 'World Aware Risk Assessment', version: '2.4.0', assessmentType: 'household',
+      scores: { 1: { l: 4, i: 4 }, 55: { l: 4, i: 5, notes: 'WUI note', isAuto: 'junk' } } });
+    const impInfo = {};
+    const impState = imp.ok ? ctx.normalizeState(imp.state, impInfo) : null;
+    check('S1: an imported v2 note is carried too', imp.ok && impState.scores[1].notes === 'From Wildland-Urban Interface Encroachment: WUI note' && impInfo.merged === 1, JSON.stringify(imp.errors));
+
+    // S7: ruled-out hazards out of research counts
+    fresh();
+    ev(`state.researchReport = { geocoded: { stateAbbr: 'CO' }, timestamp: 't', findings: [
+          { hazardId: 1, status: 'success', scoreAssigned: 4, source: 'USFS' },
+          { hazardId: 5, status: 'estimated', scoreAssigned: 3, source: 'rule' },
+          { hazardId: 2, status: 'estimated', scoreAssigned: 2, source: 'rule' } ] };
+        state.scores[1].l = 4; state.scores[1].isAuto = true; state.scores[5].l = 3; state.scores[5].isAuto = true;
+        state.scores[2].l = 2; state.scores[2].isAuto = true; state.scores[2].na = true;
+        state.autoScoreOrigins = { 1: { source: 'USFS', status: 'success' }, 5: { source: 'rule', status: 'estimated' }, 2: { source: 'rule', status: 'estimated' } };`);
+    const rs = ev('buildReportData()').research;
+    check('S7: ruled-out hazard left out of report research counts', rs.findingCount === 2 && rs.estimatedCount === 1, JSON.stringify(rs));
+    check('S7: ruled-out hazard left out of the flagged ids (banner)', JSON.stringify(ev('getResearchFlaggedIds()')) === '[1,5]');
+
+    // UI handlers in the node sandbox (DOM stub returns null)
+    fresh();
+    const changed = ev(`toggleChecklistItem('hh1', 1, true)`);
+    check('toggleChecklistItem stores the tick and raises impacts', ev('state.checklist.hh1[1]') === true && ev('state.scores[9].i') === 4 && ev('state.scores[24].i') === 4);
+    check('toggleChecklistItem returns the hazards it changed', JSON.stringify([...changed].sort((a, b) => a - b)) === '[1,8,9,24,63]', JSON.stringify(changed));
+    check('checklistChangeText', ev('checklistChangeText(5)') === 'Impact updated for 5 hazards.' && ev('checklistChangeText(1)') === 'Impact updated for 1 hazard.' && ev('checklistChangeText(0)') === 'No impacts changed.');
+    ev(`toggleChecklistItem('hh1', 1, false)`);
+    check('toggleChecklistItem off removes the tick and lowers impacts', !('1' in ev('state.checklist.hh1')) && ev('state.scores[9].i') === 2);
+    ev(`setScore(9, 'i', 5)`);
+    check('setScore on core impact marks it set by hand', ev('state.scores[9].i') === 5 && ev('state.scores[9].iManual') === true);
+    ev(`setScore(9, 'i', 5)`);
+    check('setScore clearing a core impact hands it back to the checklist', ev('state.scores[9].i') === 2 && ev('state.scores[9].iManual') === undefined);
+    ev(`setScore(9, 'i', 1); toggleChecklistItem('hh1', 1, true)`);
+    check('hand-set impact survives a checklist change', ev('state.scores[9].i') === 1);
+    ev(`resetImpactToChecklist(9, 'i')`);
+    check('resetImpactToChecklist recomputes and clears the flag', ev('state.scores[9].i') === 4 && ev('state.scores[9].iManual') === undefined);
+    ev(`setScore(9, 'i2', 3)`);
+    check('setScore on i2 sets i2Manual only', ev('state.scores[9].i2Manual') === true && ev('state.scores[9].iManual') === undefined);
+    ev(`setScore(53, 'i', 3)`);
+    check('setScore on a rare impact sets no manual flag', ev('state.scores[53].i') === 3 && ev('state.scores[53].iManual') === undefined);
+    ev(`state.scores[5].l = 3; state.scores[5].notes = 'old roof'; markNotApplicable(5)`);
+    check('markNotApplicable sets na and zeroes the score', ev('state.scores[5].na') === true && ev('calcScore(5)') === 0);
+    ev(`markNotApplicable(7)`);
+    check('markNotApplicable on a pre-marked hazard makes it the user\'s own', ev('state.scores[7].na') === true && ev('state.scores[7].naAuto') === undefined && ev('totalActive()') === 22);
+    ev(`undoNotApplicable(5)`);
+    check('undoNotApplicable clears na and keeps every other field', ev('state.scores[5].na') === undefined && ev('state.scores[5].l') === 3 && ev('state.scores[5].notes') === 'old roof' && ev('calcScore(5)') === 9);
+
+    // N4, N5: validator
+    const imp3 = ctx.validateImport({ tool: 'World Aware Risk Assessment', version: '3.0.0', assessmentType: 'household', scores: { 1: { l: 4, i: 4 } } });
+    check('N4: a v3 file without a checklist is not migrated as v2', imp3.ok && imp3.state.checklist && ctx.normalizeState(imp3.state).scores[1].iManual === undefined);
+    const imp2 = ctx.validateImport({ tool: 'World Aware Risk Assessment', version: '2.4.0', assessmentType: 'household', scores: { 1: { l: 4, i: 4 } } });
+    check('N4: a v2 file is still migrated', imp2.ok && ctx.normalizeState(imp2.state).scores[1].iManual === true);
+    const imp5 = ctx.validateImport({ tool: 'World Aware Risk Assessment', assessmentType: 'household',
+      scores: { 1: { na: true, naAuto: true }, 12: { naAuto: true }, 13: { na: true, naAuto: true }, 60: { na: true, l: 2 } },
+      checklist: { hh1: {}, hh2: {}, hh3: { 1: true } } });
+    check('N5: naAuto kept only with na on a naDefault hazard', imp5.ok && imp5.state.scores[13].naAuto === true && imp5.state.scores[1].na === true &&
+      imp5.state.scores[1].naAuto === undefined && imp5.state.scores[12].naAuto === undefined, JSON.stringify(imp5.state && imp5.state.scores));
+    check('N5: na is dropped on custom hazards', imp5.state.scores[60].na === undefined && imp5.state.scores[60].l === 2);
+    check('N5: unknown checklist parts warn', imp5.warnings.some(w => /checklist had 1 unknown part/.test(w)) && !('hh3' in imp5.state.checklist));
+
+    // N8: report notes for retired ids are purged
+    store.wa_report_edits = JSON.stringify({ a1: { title: 'T', notes: { 55: 'gone', 1: 'kept' } }, a2: { notes: { 29: 'gone' } } });
+    check('N8: purgeRetiredReportNotes removes notes on retired ids only', ev('purgeRetiredReportNotes()') === 2 &&
+      canon(JSON.parse(store.wa_report_edits)) === canon({ a1: { title: 'T', notes: { 1: 'kept' } }, a2: { notes: {} } }));
+
+    // N3: saved copies count the v3 way
+    check('N3: saved copy count is recomputed from its state', ev(`_savedDoneCount({ scored: 14, state: ${JSON.stringify(v2notes)} })`) === 1);
+
+    // N12: nuclear has its own lines
+    const nuc = ctx._actionGroupFor(18);
+    check('N12: nuclear has two lines of its own, with potassium iodide only if told to', nuc && nuc.key === 'nuclear' && nuc.lines().length === 2 &&
+      /potassium iodide only if/.test(nuc.lines()[1]) && !nuc.lines().some(l => /rail/.test(l)));
+
+    // S6: stale copy
+    const homeHtml = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+    const resSrc = fs.readFileSync(path.join(ROOT, 'js/research.js'), 'utf8');
+    check('S6: no "You rate the impact" copy left', !/You (then )?rate the impact/.test(homeHtml + resSrc));
+    // N9
+    check('N9: isImpactFromChecklist removed', typeof ctx.isImpactFromChecklist === 'undefined');
+  }
+
+  // Files and wiring
+  {
+    const sw = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
+    check('sw.js APP_SHELL lists js/checklist.js', /const APP_SHELL = \[[\s\S]*'\.\/js\/checklist\.js'[\s\S]*\];/.test(sw));
+    const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+    check('checklist.js loads before app.js', html.indexOf('js/checklist.js') > 0 && html.indexOf('js/checklist.js') < html.indexOf('src="app.js"'));
+    check('checklist.js loads in a sandbox with no DOM', (() => {
+      const c = { console }; c.window = c; vm.createContext(c);
+      try { vm.runInContext(fs.readFileSync(path.join(ROOT, 'js/checklist.js'), 'utf8'), c); return typeof c.computeImpact === 'function'; } catch (e) { return false; }
+    })());
+  }
 }
 
 console.log('Privacy statement placement (Henry, 2026-10-31)');
