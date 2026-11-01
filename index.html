@@ -183,23 +183,6 @@
           You then rate the impact for your situation.
         </p>
 
-        <div class="alert alert-info research-privacy">
-          <svg class="i" aria-hidden="true" focusable="false"><use href="#i-info"/></svg>
-          <div>
-            <p class="alert-title">Privacy</p>
-            <p>Nothing leaves your device until you tap Research. Skip sends nothing.
-            When you tap Research, your street address goes to OpenStreetMap to find the location.
-            If that fails, it goes to the U.S. Census Bureau.
-            Your approximate coordinates then go to the FCC, FEMA, USGS, the U.S. Forest Service,
-            the National Weather Service, the Drought Monitor and the EPA. The Census, FEMA, USGS,
-            Forest Service and Drought Monitor requests pass through a relay World Aware runs on
-            Cloudflare that keeps no logs; those services do not accept requests straight from a web page.
-            World Aware does not store your address.
-            Your results stay in this browser. If someone else runs this for you, your results are
-            saved on their device, not yours: ask for your PDF, then ask them to clear it.</p>
-          </div>
-        </div>
-
         <!-- Address input section -->
         <div id="research-input-section" class="research-input-section">
           <div class="field">
@@ -247,6 +230,16 @@
         <h2 class="section-title">Saved assessments</h2>
         <div id="home-saved-items" class="saved-list"></div>
       </div>
+
+      <div class="alert alert-info research-privacy home-privacy">
+        <svg class="i" aria-hidden="true" focusable="false"><use href="#i-info"/></svg>
+        <div>
+          <p class="alert-title">Privacy</p>
+          <p>Nothing leaves your device until you tap Research. World Aware does not store your address.
+          Your results stay in this browser. <a href="#" onclick="showScreen('about'); return false;">Full privacy statement</a></p>
+        </div>
+      </div>
+
       </div>
     </section>
 
@@ -479,6 +472,23 @@
       <div class="about-version">
         <p>World Aware Risk Assessment v2.4.0</p>
         <p>Data stored locally on your device. No account required.</p>
+      </div>
+
+      <div class="alert alert-info research-privacy about-privacy" id="about-privacy">
+        <svg class="i" aria-hidden="true" focusable="false"><use href="#i-info"/></svg>
+        <div>
+          <p class="alert-title">Privacy</p>
+          <p>Nothing leaves your device until you tap Research. Skip sends nothing.
+          When you tap Research, your street address goes to OpenStreetMap to find the location.
+          If that fails, it goes to the U.S. Census Bureau.
+          Your approximate coordinates then go to the FCC, FEMA, USGS, the U.S. Forest Service,
+          the National Weather Service, the Drought Monitor and the EPA. The Census, FEMA, USGS,
+          Forest Service and Drought Monitor requests pass through a relay World Aware runs on
+          Cloudflare that keeps no logs; those services do not accept requests straight from a web page.
+          World Aware does not store your address.
+          Your results stay in this browser. If someone else runs this for you, your results are
+          saved on their device, not yours: ask for your PDF, then ask them to clear it.</p>
+        </div>
       </div>
       </div>
     </section>
