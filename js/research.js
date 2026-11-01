@@ -66,7 +66,7 @@ const MANUAL_REASONS = {
   36: 'Depends on how many roads lead out of your neighborhood and what could block them. Local knowledge required.',
   53: 'Civil unrest depends on where you live and work. Enter what you know.',
   54: 'Active threat risk depends on local context. Enter what you know.',
-  63: 'FEMA wind records did not load for this address. Rate it from what you see on your street: downed limbs, roof damage, shutoffs.',
+  63: 'NWS warning records and FEMA wind records did not load for this address. Rate it from what you see on your street: downed limbs, roof damage, shutoffs.',
   64: 'Radon is only known by testing the house. Haven\'t tested: rate it 3. Tested high: 5. Tested low: 1.',
   65: 'House fire depends on the home itself: heating, wiring, dryer and cooking. Enter what you know.',
   66: 'The USDA soil lookup found no mapped soil layers at this address, or did not load. Look up linear extensibility on Web Soil Survey at https://websoilsurvey.nrcs.usda.gov/ and the Colorado Geological Survey swelling-soil maps. Cracked foundations or sticking doors are a sign.',
@@ -138,6 +138,9 @@ const STEPS = [
   { id: 'declarations', label: 'Checking FEMA disaster declarations for your county' },
   { id: 'water',      label: 'Checking your drinking-water system (EPA)' },
   { id: 'soil',       label: 'Checking soil shrink-swell (USDA)' },
+  { id: 'warnings',   label: 'Counting NWS warnings over this point (Iowa Environmental Mesonet)' },
+  { id: 'normals',    label: 'Checking NOAA climate normals for the nearest station' },
+  { id: 'airdays',    label: 'Counting bad-air days for your county (EPA)' },
 ];
 
 /* ---------------------------------------------------------------
@@ -262,6 +265,27 @@ async function directPostForm(url, fields) {
     throw new Error(`Upstream error ${data.error.code || ''} ${data.error.message || ''}`.trim());
   }
   return data;
+}
+
+/* The relay attempt in relayThenDirect gets this long, so that a direct
+   retry (TIMEOUT_MS) still lands inside _tracked's cap
+   (TIMEOUT_MS + PROXY_EXTRA_MS + 3000). */
+const RELAY_FIRST_BUDGET_MS = 7000;
+
+/**
+ * For a host that answers direct but asks to be shielded from browser
+ * traffic (Iowa Environmental Mesonet): go through the relay, which caches,
+ * and call direct only when the relay is not set up or fails.
+ */
+async function relayThenDirect(url) {
+  if (String(API_CONFIG.RELAY_URL || '').trim()) {
+    try {
+      return await withTimeout(relayFetch(url), RELAY_FIRST_BUDGET_MS, 'Relay');
+    } catch (e) {
+      console.warn('[Relay] failed, calling direct:', e.message);
+    }
+  }
+  return directFetch(url);
 }
 
 /**
@@ -964,17 +988,31 @@ function _mapNRIWind(afreq) {
   };
 }
 
-/** Winter storm and extreme cold (id 8): tract WNTW_AFREQ, plus one level for frequent cold waves. */
-function _mapNRIWinter(wntwAfreq, cwavAfreq) {
+/**
+ * Winter storm and extreme cold (id 8): tract WNTW_AFREQ, plus one level for
+ * deep cold. With station normals (v3.2.0), 5 or more nights a year at or
+ * below 0 F add the level; without them, NRI cold wave days of 2 or more do.
+ */
+function _mapNRIWinter(wntwAfreq, cwavAfreq, normals) {
   const w = _nriNum(wntwAfreq);
   if (w === null) return null;
-  const c = _nriNum(cwavAfreq);
   const base = _binScore(w, [2, 5, 10, 15]);
+  const head = `About ${_fmtRate(w)} winter weather days a year recorded for this tract (FEMA NRI)`;
+  const nights = normals && normals.station ? _normalsNum(normals.d0) : null;
+  if (nights !== null) {
+    const cold = nights >= COLD_NIGHTS_RAISE;
+    return {
+      score: cold ? Math.min(5, base + 1) : base,
+      finding: head + (cold ? `; ${_fmt1(nights)} nights a year at or below 0 F at ${normals.station.name} (${NORMALS_PERIOD}) add one level` : ''),
+      confidence: 'High',
+      coldFromNormals: cold,
+    };
+  }
+  const c = _nriNum(cwavAfreq);
   const cold = c !== null && c >= 2;
   return {
     score: cold ? Math.min(5, base + 1) : base,
-    finding: `About ${_fmtRate(w)} winter weather days a year recorded for this tract (FEMA NRI)` +
-             (cold ? `; about ${_fmtRate(c)} cold wave days a year add one level` : ''),
+    finding: head + (cold ? `; about ${_fmtRate(c)} cold wave days a year add one level` : ''),
     confidence: 'High',
   };
 }
@@ -1530,6 +1568,343 @@ async function _callSoilAPI(lat, lng) {
   return result;
 }
 
+/** Rate or count for a sentence: 33, 2.4, 0.6, 0; a tiny non-zero value reads "less than 0.1". */
+function _fmt1(v) {
+  if (!(v > 0)) return '0';
+  if (v >= 10) return String(Math.round(v));
+  const s = String(Number(v.toFixed(1)));
+  return s === '0' ? 'less than 0.1' : s;
+}
+
+/* ---------------------------------------------------------------
+   API 11 — NWS WARNINGS OVER THE POINT (Iowa Environmental Mesonet)
+   Route: relay first (the Worker caches IEM for 30 days, which IEM asks
+   for), then direct (CORS, checked 2026-10-31). Every warning whose zone or
+   county covers the point since 2015-01-01, up to 1 January of this year.
+   The same warning is listed once per UGC (forecast zone and county), so
+   events are deduplicated on office, product, significance, event number
+   and year (event numbers restart each year). High Wind Warnings set the
+   high wind score; winter, heat and cold counts ride along on the result.
+--------------------------------------------------------------- */
+
+const IEM_FIRST_YEAR = 2015;
+/* Product groups. NWS renamed Wind Chill (WC) to Extreme Cold (EC) around
+   2024-10-01 and Excessive Heat (EH) to Extreme Heat (XH) around
+   2025-03-04, so each pair counts together. */
+const IEM_GROUPS = {
+  highWind: ['HW.W'],
+  winter:   ['WS.W', 'BZ.W'],
+  heat:     ['EH.W', 'XH.W'],
+  cold:     ['WC.W', 'EC.W'],
+};
+
+/** Years covered: 2015 through last year; edate is 1 January of this year. */
+function _iemPeriod(now) {
+  const y = (now || new Date()).getFullYear();
+  return { firstYear: IEM_FIRST_YEAR, lastYear: y - 1, years: y - IEM_FIRST_YEAR, sdate: `${IEM_FIRST_YEAR}-01-01`, edate: `${y}-01-01` };
+}
+
+/** Rounded to 2 decimals (about 1 km) so neighbours share one cached relay answer. */
+function _iemUrl(lat, lng, now) {
+  const p = _iemPeriod(now);
+  return `${API_CONFIG.IEM_VTEC_BYPOINT}?lat=${Number(lat).toFixed(2)}&lon=${Number(lng).toFixed(2)}` +
+    `&sdate=${p.sdate}&edate=${p.edate}`;
+}
+
+/** Year of an IEM timestamp such as "2024-01-01T12:00:00Z", or null. */
+function _iemYear(v) {
+  const m = /^(\d{4})/.exec(String(v === undefined || v === null ? '' : v));
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * Count deduplicated warnings by group over the period.
+ * Returns { firstYear, lastYear, years, counts, perYear, byYear }.
+ */
+function _countIemEvents(events, now) {
+  const p = _iemPeriod(now);
+  const groupOf = {};
+  Object.keys(IEM_GROUPS).forEach(g => IEM_GROUPS[g].forEach(code => { groupOf[code] = g; }));
+  const counts = {}, byYear = {};
+  Object.keys(IEM_GROUPS).forEach(g => { counts[g] = 0; });
+  const seen = new Set();
+  (Array.isArray(events) ? events : []).forEach(e => {
+    if (!e || typeof e !== 'object') return;
+    const code = `${String(e.phenomena || '').toUpperCase()}.${String(e.significance || '').toUpperCase()}`;
+    const g = groupOf[code];
+    if (!g) return;
+    const year = _iemYear(e.issue);
+    if (year === null || year < p.firstYear || year > p.lastYear) return;
+    const key = [String(e.wfo || '').toUpperCase(), code, String(e.eventid), year].join('|');
+    if (seen.has(key)) return;
+    seen.add(key);
+    counts[g] += 1;
+    if (!byYear[year]) byYear[year] = {};
+    byYear[year][g] = (byYear[year][g] || 0) + 1;
+  });
+  const perYear = {};
+  Object.keys(counts).forEach(g => { perYear[g] = p.years > 0 ? counts[g] / p.years : 0; });
+  return { firstYear: p.firstYear, lastYear: p.lastYear, years: p.years, counts, perYear, byYear };
+}
+
+/** High Wind Warnings a year to Likelihood: below 0.25 = 1, 0.25 to 1 = 2, 1 to 3 = 3, 3 to 6 = 4, 6 and up = 5. */
+function _windWarningScore(perYear) {
+  return _binScore(perYear, [0.25, 1, 3, 6]);
+}
+
+async function _callWarningsAPI(lat, lng) {
+  const now = new Date();
+  console.log('[IEM] Starting NWS warning count');
+  const data = await relayThenDirect(_iemUrl(lat, lng, now));
+  if (!data || !Array.isArray(data.events)) throw new Error('Unexpected IEM response');
+  const result = _countIemEvents(data.events, now);
+  if (!(result.years > 0)) throw new Error('No full year to count');
+  console.log('[IEM] Result:', result.counts, 'over', result.years, 'years');
+  return result;
+}
+
+/**
+ * High wind (63): the larger of the IEM High Wind Warning score and the NRI
+ * thunderstorm wind score. Null when IEM did not answer (the caller keeps
+ * the v3.1 NRI-only finding).
+ */
+function _mapWindWarnings(warnings, nriSwnd) {
+  if (!warnings || !warnings.perYear || !(warnings.years > 0)) return null;
+  const rate = warnings.perYear.highWind || 0;
+  const iemScore = _windWarningScore(rate);
+  const nriRate = _nriNum(nriSwnd);
+  const nri = nriRate !== null ? _mapNRIWind(nriRate) : null;
+  const period = `${warnings.firstYear} to ${warnings.lastYear}`;
+  const head = rate > 0
+    ? `${_fmt1(rate)} High Wind Warning${_fmt1(rate) === '1' ? '' : 's'} a year here (NWS, ${period})`
+    : `No High Wind Warnings here (NWS, ${period})`;
+  return {
+    score: Math.max(iemScore, nri ? nri.score : 1),
+    finding: head + (nri ? ` and ${_fmt1(nriRate)} thunderstorm wind events a year (FEMA NRI)` : ''),
+    confidence: 'High',
+    source: `NWS warnings via Iowa Environmental Mesonet, ${period}` + (nri ? ', and FEMA NRI' : ''),
+    iemScore,
+  };
+}
+
+/* ---------------------------------------------------------------
+   API 12 — NOAA 1991-2020 CLIMATE NORMALS (NCEI)
+   Route: direct (CORS, checked 2026-10-31). Search for normals stations in
+   a box about 25 km each way, take the nearest one (or the first when the
+   search gives no coordinates), then read its days at or above 90 F and
+   100 F and nights at or below 0 F.
+--------------------------------------------------------------- */
+
+const NORMALS_DATASET = 'normals-annualseasonal-1991-2020';
+const NORMALS_BOX_DEG = 0.25;
+const NORMALS_TYPES   = { d90: 'ANN-TMAX-AVGNDS-GRTH090', d100: 'ANN-TMAX-AVGNDS-GRTH100', d0: 'ANN-TMIN-AVGNDS-LSTH000' };
+
+function _normalsSearchUrl(lat, lng) {
+  const b = v => Number(v.toFixed(4));
+  const box = [b(lat + NORMALS_BOX_DEG), b(lng - NORMALS_BOX_DEG), b(lat - NORMALS_BOX_DEG), b(lng + NORMALS_BOX_DEG)].join(',');
+  return `${API_CONFIG.NCEI_SEARCH}?dataset=${NORMALS_DATASET}&bbox=${box}&dataTypes=${NORMALS_TYPES.d90}&limit=5`;
+}
+
+function _normalsDataUrl(stationId) {
+  return `${API_CONFIG.NCEI_DATA}?dataset=${NORMALS_DATASET}&stations=${stationId}` +
+    `&dataTypes=${[NORMALS_TYPES.d90, NORMALS_TYPES.d100, NORMALS_TYPES.d0].join(',')}&format=json`;
+}
+
+/** [lat, lon] from whichever coordinate fields an object carries, or null. */
+function _stationCoords(o) {
+  if (!o || typeof o !== 'object') return null;
+  const ok = (la, lo) => isFinite(la) && isFinite(lo) && Math.abs(la) <= 90 && Math.abs(lo) <= 180 ? [la, lo] : null;
+  const num = v => (v === null || v === undefined || v === '') ? NaN : Number(v);
+  const pairs = [['latitude', 'longitude'], ['lat', 'lon'], ['lat', 'lng'], ['LATITUDE', 'LONGITUDE']];
+  for (const [a, b] of pairs) {
+    const r = ok(num(o[a]), num(o[b]));
+    if (r) return r;
+  }
+  const loc = o.location;
+  if (loc && typeof loc === 'object') {
+    let c = loc.coordinates;
+    while (Array.isArray(c) && Array.isArray(c[0])) c = c[0];
+    if (Array.isArray(c) && c.length >= 2) return ok(num(c[1]), num(c[0]));   // GeoJSON order: lon, lat
+    return _stationCoords(Object.assign({}, loc, { location: undefined }));
+  }
+  if (typeof loc === 'string') {
+    const m = /^\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)\s*$/.exec(loc);
+    if (m) return ok(Number(m[1]), Number(m[2]));
+  }
+  return null;
+}
+
+/** Distance in km between two points (haversine). */
+function _kmBetween(la1, lo1, la2, lo2) {
+  const r = Math.PI / 180;
+  const a = Math.sin((la2 - la1) * r / 2) ** 2 + Math.cos(la1 * r) * Math.cos(la2 * r) * Math.sin((lo2 - lo1) * r / 2) ** 2;
+  return 6371 * 2 * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+/**
+ * Station to read from an NCEI search reply: the nearest one with
+ * coordinates, or the first one listed when none carry coordinates.
+ */
+function _pickNormalsStation(search, lat, lng) {
+  const list = [];
+  (search && Array.isArray(search.results) ? search.results : []).forEach(res => {
+    (res && Array.isArray(res.stations) ? res.stations : []).forEach(st => {
+      const id = String((st && st.id) || '').trim().toUpperCase();
+      if (!/^[A-Z0-9]{6,20}$/.test(id) || list.some(x => x.id === id)) return;
+      const name = String((st && st.name) || '').replace(/[<>&"]/g, '').trim() || id;
+      list.push({ id, name, coords: _stationCoords(st) || null });
+    });
+  });
+  if (list.length === 0) return null;
+  const located = list.filter(s => s.coords);
+  if (located.length === 0) return { id: list[0].id, name: list[0].name, km: null };
+  located.forEach(s => { s.km = _kmBetween(lat, lng, s.coords[0], s.coords[1]); });
+  located.sort((a, b) => a.km - b.km);
+  return { id: located[0].id, name: located[0].name, km: located[0].km };
+}
+
+/** A normals day count, or null for a missing, blank or negative (sentinel) value. */
+function _normalsNum(v) {
+  if (v === null || v === undefined) return null;
+  const n = parseFloat(String(v).trim());
+  return isFinite(n) && n >= 0 ? n : null;
+}
+
+/** { d90, d100, d0 } for the station from the data reply; null when it holds none of them. */
+function _parseNormals(rows, stationId) {
+  const list = Array.isArray(rows) ? rows : [];
+  const row = list.find(r => r && String(r.STATION || '').trim().toUpperCase() === stationId) || list[0];
+  if (!row || typeof row !== 'object') return null;
+  const out = { d90: _normalsNum(row[NORMALS_TYPES.d90]), d100: _normalsNum(row[NORMALS_TYPES.d100]), d0: _normalsNum(row[NORMALS_TYPES.d0]) };
+  return (out.d90 === null && out.d0 === null) ? null : out;
+}
+
+async function _callNormalsAPI(lat, lng) {
+  console.log('[NCEI normals] Searching for a station');
+  const station = _pickNormalsStation(await directFetch(_normalsSearchUrl(lat, lng)), lat, lng);
+  if (!station) throw new Error('No normals station within the search box');
+  const values = _parseNormals(await directFetch(_normalsDataUrl(station.id)), station.id);
+  if (!values) throw new Error(`No normals values for ${station.id}`);
+  const result = Object.assign({ station }, values);
+  console.log('[NCEI normals] Result:', result);
+  return result;
+}
+
+const NORMALS_PERIOD = 'NOAA normals 1991 to 2020';
+function _normalsSource(normals) {
+  return `NOAA 1991 to 2020 climate normals, ${normals.station.name}`;
+}
+
+/** Days at or above 90 F to Likelihood: below 5 = 1, 5 to 15 = 2, 15 to 45 = 3, 45 to 90 = 4, 90 and up = 5. */
+function _heatDaysScore(d90, d100) {
+  const base = _binScore(d90, [5, 15, 45, 90]);
+  return (d100 !== null && d100 !== undefined && d100 >= 10) ? Math.min(5, base + 1) : base;
+}
+
+/** Extreme heat (9) from station normals, or null when the station has no 90 F count. */
+function _mapNormalsHeat(normals) {
+  if (!normals || normals.d90 === null || normals.d90 === undefined || !normals.station) return null;
+  const has100 = normals.d100 !== null && normals.d100 !== undefined;
+  const raised = has100 && normals.d100 >= 10;
+  return {
+    score: _heatDaysScore(normals.d90, normals.d100),
+    finding: `${_fmt1(normals.d90)} days a year at or above 90 F` +
+             (has100 ? ` and ${_fmt1(normals.d100)} at or above 100 F` : '') +
+             ` at ${normals.station.name} (${NORMALS_PERIOD})` +
+             (raised ? '. Ten or more days at or above 100 F add one level' : ''),
+    confidence: 'High',
+    source: _normalsSource(normals),
+  };
+}
+
+/** Extreme heat fallback (9): NRI HWAV_AFREQ, heat wave days a year. */
+function _mapNRIHeat(afreq) {
+  const f = _nriNum(afreq);
+  if (f === null) return null;
+  return {
+    score: _binScore(f, [2, 4, 8, 15]),
+    finding: `About ${_fmtRate(f)} heat wave days a year, based on recorded heat events (FEMA NRI). ` +
+             'NOAA climate normals were not available for this area, and this count can run low where the weather office logs few heat events',
+    confidence: 'Low',
+  };
+}
+
+/** Nights at or below 0 F that raise the winter score one level. */
+const COLD_NIGHTS_RAISE = 5;
+
+/* ---------------------------------------------------------------
+   API 13 — BAD-AIR DAYS BY COUNTY (EPA AQI, geopub)
+   Route: direct (CORS, checked 2026-10-31). One row per county and month
+   with the percent of days in each AQI category. Days worse than moderate
+   (sensitive groups and up) are summed per year and averaged.
+--------------------------------------------------------------- */
+
+const AIRDAYS_FIELDS = ['YEAR', 'MONTH_NUMBER', 'Unhealthy_for_Sensitive_Group', 'Unhealthy', 'Very_Unhealthy', 'Hazardous'];
+
+function _airDaysUrl(fips5) {
+  return `${API_CONFIG.EPA_AQI_COUNTY}?where=${encodeURIComponent(`CTFIPS='${fips5}'`).replace(/'/g, '%27')}` +
+    `&outFields=${AIRDAYS_FIELDS.join(',')}&returnGeometry=false&f=json`;
+}
+
+/** Days in a month (1 to 12) of a year. */
+function _daysInMonth(year, month) {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+/**
+ * Average days a year worse than moderate from monthly percent rows.
+ * Null percentages count as 0. Returns { days, firstYear, lastYear, yearCount }
+ * or null when no usable row is present.
+ */
+function _airDaysFromRows(rows) {
+  const perYear = {};
+  (Array.isArray(rows) ? rows : []).forEach(r => {
+    const a = r && (r.attributes || r);
+    if (!a || typeof a !== 'object') return;
+    const y = parseInt(a.YEAR, 10), m = parseInt(a.MONTH_NUMBER, 10);
+    if (!(y >= 1980 && y <= 2100) || !(m >= 1 && m <= 12)) return;
+    const pct = AIRDAYS_FIELDS.slice(2).reduce((s, k) => {
+      const v = parseFloat(a[k]);
+      return s + (isFinite(v) && v > 0 ? v : 0);
+    }, 0);
+    perYear[y] = (perYear[y] || 0) + pct / 100 * _daysInMonth(y, m);
+  });
+  const years = Object.keys(perYear).map(Number).sort((a, b) => a - b);
+  if (years.length === 0) return null;
+  const total = years.reduce((s, y) => s + perYear[y], 0);
+  return { days: total / years.length, firstYear: years[0], lastYear: years[years.length - 1], yearCount: years.length, byYear: perYear };
+}
+
+/** Bad-air days a year to Likelihood: below 1 = 1, 1 to 4 = 2, 4 to 10 = 3, 10 to 25 = 4, 25 and up = 5. */
+function _airDaysScore(days) {
+  return _binScore(days, [1, 4, 10, 25]);
+}
+
+/** Smoke and bad air days (23) from the county AQI record. */
+function _mapAirDays(stats, countyLabel) {
+  if (!stats || !(stats.yearCount > 0)) return null;
+  const period = stats.firstYear === stats.lastYear ? `${stats.firstYear}` : `${stats.firstYear} to ${stats.lastYear}`;
+  const n = _fmt1(stats.days);
+  return {
+    score: _airDaysScore(stats.days),
+    finding: `About ${n} day${n === '1' ? '' : 's'} a year with air quality worse than moderate in ${countyLabel || 'this county'} (EPA, ${period}). ` +
+             'The count includes ozone days, since this source does not separate smoke from other pollution',
+    confidence: 'Medium',
+    source: `EPA Air Quality Index days by county, ${period}`,
+  };
+}
+
+async function _callAirDaysAPI(fips5) {
+  if (!/^\d{5}$/.test(String(fips5 || ''))) throw new Error('No 5-digit FIPS');
+  console.log('[EPA AQI days] Starting for county', fips5);
+  const data = await directFetch(_airDaysUrl(fips5));
+  if (!data || !Array.isArray(data.features)) throw new Error('Unexpected EPA AQI response');
+  const stats = _airDaysFromRows(data.features);
+  if (!stats) throw new Error('No AQI record for this county (no monitor)');
+  console.log('[EPA AQI days] Result:', stats);
+  return stats;
+}
+
 /* ---------------------------------------------------------------
    DERIVED: AIR QUALITY SCORE
 --------------------------------------------------------------- */
@@ -1573,6 +1948,7 @@ function _deriveAirQualityScore(whpScore, epaHighHazardCount, stateAbbr) {
 function _compileFindings(apiResults, geocoded) {
   const {
     flood, earthquake, wildfire, weather, drought, epa, landslide, nri, declarations, water, soil,
+    warnings, normals, airdays,
   } = apiResults;
 
   const stateAbbr     = geocoded.stateAbbr || weather?.stateAbbr || '';
@@ -1652,12 +2028,26 @@ function _compileFindings(apiResults, geocoded) {
   // Wildfire hazard also drives the smoke estimate
   const whpScore = wildfire?.score || 2;
 
+  // Smoke and bad air days: the county's EPA AQI record when it answers.
+  // Otherwise the v3 derivation below, with its existing labels.
+  const airFromEpa = airdays ? _mapAirDays(airdays, countyLabel) : null;
+  if (airFromEpa) {
+    findings.push({
+      hazardId: H_ID.AIR_QUALITY, hazardName: H_NAME[23], category: _hCat(23),
+      scoreAssigned: airFromEpa.score,
+      source: airFromEpa.source,
+      finding: airFromEpa.finding,
+      confidence: airFromEpa.confidence,
+      status: 'success', isOverridden: false,
+    });
+  }
+
   // Air quality — derived. If either input was a placeholder, so is this.
   const epaHigh  = epa?.highHazardCount || 0;
   const aqResult = _deriveAirQualityScore(whpScore, epaHigh, stateAbbr);
   const aqDerivedFromData = !!(wildfire && epa);
   const aqRelayOff = !wildfire && (_research.failCodes || {}).wildfire === RELAY_NOT_CONFIGURED;
-  findings.push({
+  if (!airFromEpa) findings.push({
     hazardId: H_ID.AIR_QUALITY, hazardName: H_NAME[23], category: _hCat(23),
     scoreAssigned: aqResult.score,
     source: aqDerivedFromData
@@ -1675,25 +2065,36 @@ function _compileFindings(apiResults, geocoded) {
   // when it answers. The state table in scoreMapper.js (getStateWeatherScores)
   // is the fallback; the NWS call only confirms the state, so the fallback
   // never cites NOAA.
-  // Extreme heat stays on the state rule of thumb on purpose: NRI HWAV_AFREQ
-  // rates Boulder "Very Low" (0.79 heat wave days a year) against about 33
-  // days a year at or above 90 F in the 1991-2020 normals, because it counts
-  // only heat events the local NWS office logged. v3.3 adds NOAA normals.
-  // Hurricane also stays on the rule of thumb (skipped when ruled out).
+  // Extreme heat (v3.2.0) comes from the nearest NOAA 1991-2020 normals
+  // station (days at or above 90 F). NRI HWAV_AFREQ is only the fallback,
+  // at Low confidence: it rates Boulder 0.79 heat wave days a year against
+  // about 33 days at or above 90 F, because it counts only heat events the
+  // local NWS office logged. The rule of thumb is the last resort.
+  // Station nights at or below 0 F replace the NRI cold wave rule for winter.
+  // Hurricane stays on the rule of thumb (skipped when ruled out).
   const weatherNote = stateAbbr
     ? `Statewide estimate for ${stateAbbr}, not specific to this address.`
     : 'Regional estimate; state could not be confirmed.';
   const weatherSrc = WEATHER_RULE_SRC;
+  const normalsOk   = !!(normals && normals.station);
+  const heatNormals = normalsOk ? _mapNormalsHeat(normals) : null;
+  const heatNriRow  = (nriTract && _nriNum(nriTract.HWAV_AFREQ) !== null) ? nriTract : nriCounty;
+  const heatNri     = heatNormals ? null : (heatNriRow ? _mapNRIHeat(heatNriRow.HWAV_AFREQ) : null);
+  const winterNri   = nriTract ? _mapNRIWinter(nriTract.WNTW_AFREQ, nriTract.CWAV_AFREQ, normalsOk ? normals : null) : null;
   const nriWeather = {
     [H_ID.SEVERE_THUNDERSTORM]: nriTract  ? _mapNRIHail(nriTract.HAIL_AFREQ) : null,
     [H_ID.TORNADO]:             nriCounty ? _mapNRITornado(nriCounty.TRND_AFREQ, nriCounty.AREA, countyLabel) : null,
-    [H_ID.WINTER_STORM]:        nriTract  ? _mapNRIWinter(nriTract.WNTW_AFREQ, nriTract.CWAV_AFREQ) : null,
+    [H_ID.WINTER_STORM]:        winterNri,
+    [H_ID.EXTREME_HEAT]:        heatNormals || heatNri,
   };
   const nriSource = {
     [H_ID.SEVERE_THUNDERSTORM]: NRI_SRC_TRACT,
     [H_ID.TORNADO]:             NRI_SRC_COUNTY,
-    [H_ID.WINTER_STORM]:        NRI_SRC_TRACT,
+    [H_ID.WINTER_STORM]:        (winterNri && winterNri.coldFromNormals) ? `${NRI_SRC_TRACT}; ${_normalsSource(normals)}` : NRI_SRC_TRACT,
+    [H_ID.EXTREME_HEAT]:        heatNormals ? heatNormals.source : (heatNriRow === nriTract ? NRI_SRC_TRACT : NRI_SRC_COUNTY),
   };
+  // Rule-of-thumb winter still takes the cold-night level from station normals.
+  const coldNights = normalsOk ? _normalsNum(normals.d0) : null;
 
   const weatherMap = [
     { id: H_ID.SEVERE_THUNDERSTORM, key: 'severeThunderstorm' },
@@ -1719,26 +2120,36 @@ function _compileFindings(apiResults, geocoded) {
       });
       return;
     }
-    const score = weatherScores[key] || 2;
+    let score = weatherScores[key] || 2;
+    let finding = `${score === 4 ? 'Likely' : score === 3 ? 'Possible' : 'Unlikely'}. ${weatherNote}`;
+    let source = weatherSrc;
+    if (id === H_ID.WINTER_STORM && coldNights !== null && coldNights >= COLD_NIGHTS_RAISE) {
+      score = Math.min(5, score + 1);
+      finding += ` ${_fmt1(coldNights)} nights a year at or below 0 F at ${normals.station.name} (${NORMALS_PERIOD}) add one level.`;
+      source = `${weatherSrc}; ${_normalsSource(normals)}`;
+    }
     findings.push({
       hazardId: id, hazardName: H_NAME[id], category: _hCat(id),
       scoreAssigned: score,
-      source: weatherSrc,
-      finding: `${score === 4 ? 'Likely' : score === 3 ? 'Possible' : 'Unlikely'}. ${weatherNote}`,
+      source,
+      finding,
       confidence: 'Low',
       status: 'estimated', isOverridden: false,
     });
   });
 
   // ── HIGH WIND ─────────────────────────────────────────────
-  // NRI thunderstorm wind only. There is no state rule of thumb for wind,
-  // so without NRI it stays on the "Needs your judgment" list.
-  const wind = nriTract ? _mapNRIWind(nriTract.SWND_AFREQ) : null;
+  // NWS High Wind Warnings over the point (IEM), which include downslope
+  // windstorms, and NRI thunderstorm wind: the larger score wins. Without
+  // IEM, the v3.1 NRI-only finding. There is no state rule of thumb for
+  // wind, so with neither it stays on the "Needs your judgment" list.
+  const wind = _mapWindWarnings(warnings, nriTract ? nriTract.SWND_AFREQ : null) ||
+               (nriTract ? _mapNRIWind(nriTract.SWND_AFREQ) : null);
   if (wind && !_researchSkipsNa(H_ID.HIGH_WIND, stateAbbr)) {
     findings.push({
       hazardId: H_ID.HIGH_WIND, hazardName: H_NAME[63], category: _hCat(63),
       scoreAssigned: wind.score,
-      source: NRI_SRC_TRACT,
+      source: wind.source || NRI_SRC_TRACT,
       finding: wind.finding,
       confidence: wind.confidence,
       status: 'success', isOverridden: false,
@@ -1930,7 +2341,8 @@ async function startResearch() {
   }
 
   // ── PARALLEL API CALLS (spinners update independently) ──
-  ['nri','flood','earthquake','wildfire','weather','drought','epa','airquality','landslide','declarations','water','soil']
+  ['nri','flood','earthquake','wildfire','weather','drought','epa','airquality','landslide','declarations','water','soil',
+   'warnings','normals','airdays']
     .forEach(id => _setStep(id, 'running'));
 
   const { lat, lng, zip, fips5, stateFips, countyFips } = geocoded;
@@ -1942,7 +2354,8 @@ async function startResearch() {
   // One NRI call feeds hail, wind, winter, tornado, the flood fallback and
   // the landslide fallback. Flood waits on it only if it reaches Method D.
   const nriP = _tracked('nri', _callNRIAPI(lat, lng, fips5));
-  const [nri, flood, earthquake, wildfire, weather, drought, epa, landslide, declarations, water, soil] =
+  const [nri, flood, earthquake, wildfire, weather, drought, epa, landslide, declarations, water, soil,
+         warnings, normals, airdays] =
     await Promise.all([
       nriP,
       _tracked('flood',      _callFloodAPI(lat, lng, fips5, nriP)),
@@ -1955,21 +2368,27 @@ async function startResearch() {
       _tracked('declarations', _callDeclarationsAPI(stateFips, countyFips)),
       _tracked('water',      _callWaterAPI(lat, lng)),
       _tracked('soil',       _callSoilAPI(lat, lng)),
+      _tracked('warnings',   _callWarningsAPI(lat, lng)),
+      _tracked('normals',    _callNormalsAPI(lat, lng)),
+      _tracked('airdays',    _callAirDaysAPI(fips5)),
     ]);
 
   if (run !== _research.runId) return;   // cancelled while the lookups ran
 
-  // Air quality is derived from wildfire and EPA; it is only a real result when both are
-  _setStep('airquality', (wildfire && epa) ? 'success' : 'error');
+  // The smoke row has data when the EPA AQI record answered; otherwise it is
+  // derived from wildfire and EPA TRI, which is only a real result when both are
+  _setStep('airquality', (airdays || (wildfire && epa)) ? 'success' : 'error');
 
   console.log('[Research] All API calls settled. Results:', {
-    nri, flood, earthquake, wildfire, weather, drought, epa, landslide, declarations, water, soil
+    nri, flood, earthquake, wildfire, weather, drought, epa, landslide, declarations, water, soil,
+    warnings, normals, airdays,
   });
 
   // ── COMPILE FINDINGS ──────────────────────────────────────
   try {
     _research.findings = _compileFindings(
-      { flood, earthquake, wildfire, weather, drought, epa, landslide, nri, declarations, water, soil },
+      { flood, earthquake, wildfire, weather, drought, epa, landslide, nri, declarations, water, soil,
+        warnings, normals, airdays },
       geocoded
     );
     _research.hasResults = true;

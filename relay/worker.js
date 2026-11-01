@@ -11,6 +11,11 @@
      - 10 second upstream timeout
      - the browser gets the upstream body and content type, plus
        Access-Control-Allow-Origin for World Aware origins only
+     - answers from hosts in CACHE_TTL_BY_HOST (Iowa Environmental
+       Mesonet) are kept in Cloudflare's cache for 30 days, keyed by the
+       full target URL. The Cache API only works when the Worker runs on a
+       custom domain; on *.workers.dev it does nothing and every request
+       goes upstream (see README.md)
 
    Privacy: this file logs nothing. It makes no logging calls at all,
    so even `wrangler tail` shows only Cloudflare's own request line.
@@ -32,7 +37,45 @@ export const ALLOWED_HOSTS = new Set([
   'services.arcgis.com',        // ArcGIS Online hosted layers
   'apps.fs.usda.gov',           // USFS Wildfire Hazard Potential image service
   'geocoding.geo.census.gov',   // Census geocoder (fallback when OpenStreetMap fails)
+  'mesonet.agron.iastate.edu',  // Iowa Environmental Mesonet NWS warning archive (cached, see below)
 ]);
+
+/**
+ * Hosts whose successful answers are cached in the Worker, in seconds.
+ * IEM asks not to be called from busy sites, and its warning counts change
+ * once a year (the app asks up to 1 January), so 30 days is safe. The app
+ * rounds coordinates to 2 decimals so neighbours share one entry.
+ */
+export const CACHE_TTL_BY_HOST = {
+  'mesonet.agron.iastate.edu': 30 * 24 * 3600,
+};
+
+/** Cache lifetime for a target URL in seconds, or 0 when it is not cached. */
+export function cacheTtlFor(target) {
+  try {
+    return CACHE_TTL_BY_HOST[new URL(target).hostname.toLowerCase()] || 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Cache key: the relay's own origin plus the full target URL, so the key
+ * stays on the Worker's hostname and each distinct upstream URL is one entry.
+ */
+export function cacheKeyFor(requestUrl, target) {
+  return new URL(requestUrl).origin + '/?url=' + encodeURIComponent(target);
+}
+
+/** caches.default where the runtime has it (Cloudflare), otherwise null (node tests, previews). */
+function edgeCache() {
+  try {
+    const c = globalThis.caches;
+    return (c && c.default && typeof c.default.match === 'function' && typeof c.default.put === 'function') ? c.default : null;
+  } catch {
+    return null;
+  }
+}
 
 /** Pages allowed to read relay responses in a browser. */
 /** Sent on every upstream request. Identifies the relay, never the visitor. */
@@ -119,7 +162,7 @@ function plain(status, message, origin) {
 }
 
 /** Fetch upstream, following redirects only to allowed hosts. */
-async function fetchUpstream(target, signal) {
+async function fetchUpstream(target, signal, ttl) {
   let url = target;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     // Fresh headers: nothing from the browser (Referer, cookies, IP) is passed on.
@@ -134,8 +177,8 @@ async function fetchUpstream(target, signal) {
       },
       redirect: 'manual',
       signal,
-      // Let Cloudflare's edge cache successful answers for an hour.
-      cf: { cacheTtlByStatus: { '200-299': 3600, '300-599': 0 }, cacheEverything: true },
+      // Let Cloudflare's edge cache successful answers for an hour (longer for cached hosts).
+      cf: { cacheTtlByStatus: { '200-299': ttl || 3600, '300-599': 0 }, cacheEverything: true },
     });
     if (resp.status >= 300 && resp.status < 400 && resp.headers.get('Location')) {
       const nextUrl = new URL(resp.headers.get('Location'), url);
@@ -155,7 +198,7 @@ async function fetchUpstream(target, signal) {
   return { tooMany: true };
 }
 
-export async function handleRequest(request) {
+export async function handleRequest(request, env, ctx) {
   const origin = request.headers.get('Origin');
 
   // A browser on some other site gets nothing.
@@ -174,11 +217,29 @@ export async function handleRequest(request) {
   if (!target) return plain(400, 'Missing ?url=', origin);
   if (!isAllowedTarget(target)) return plain(403, 'Target host not allowed', origin);
 
+  // Cached hosts: answer from Cloudflare's cache when it holds this URL.
+  // Any cache error falls through to a normal upstream call.
+  const ttl   = cacheTtlFor(target);
+  const cache = ttl ? edgeCache() : null;
+  const key   = cache ? new Request(cacheKeyFor(request.url, target), { method: 'GET' }) : null;
+  if (cache) {
+    let hit = null;
+    try { hit = await cache.match(key); } catch { hit = null; }
+    if (hit) {
+      const h = corsHeaders(origin);
+      h.set('Content-Type', hit.headers.get('Content-Type') || 'application/octet-stream');
+      h.set('Cache-Control', 'public, max-age=' + ttl);
+      h.set('X-Content-Type-Options', 'nosniff');
+      h.set('X-Relay-Cache', 'HIT');
+      return new Response(hit.body, { status: hit.status, headers: h });
+    }
+  }
+
   const ctrl  = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), UPSTREAM_TIMEOUT_MS);
   let result;
   try {
-    result = await fetchUpstream(target, ctrl.signal);
+    result = await fetchUpstream(target, ctrl.signal, ttl);
   } catch (err) {
     const timedOut = err && err.name === 'AbortError';
     return plain(timedOut ? 504 : 502, timedOut ? 'Upstream timed out' : 'Upstream unreachable', origin);
@@ -189,10 +250,30 @@ export async function handleRequest(request) {
   if (result.tooMany) return plain(502, 'Too many upstream redirects', origin);
 
   const up = result.resp;
+  const contentType = up.headers.get('Content-Type') || 'application/octet-stream';
   const h  = corsHeaders(origin);
-  h.set('Content-Type', up.headers.get('Content-Type') || 'application/octet-stream');
-  h.set('Cache-Control', up.ok ? 'public, max-age=3600' : 'no-store');
+  h.set('Content-Type', contentType);
+  h.set('Cache-Control', up.ok ? 'public, max-age=' + (ttl || 3600) : 'no-store');
   h.set('X-Content-Type-Options', 'nosniff');
+
+  if (cache && up.status === 200) {
+    // Store a clean copy (no CORS or cookie headers) and answer with the same bytes.
+    let body;
+    try {
+      body = await up.arrayBuffer();
+    } catch {
+      return plain(502, 'Upstream body could not be read', origin);
+    }
+    const stored = new Response(body, {
+      status: 200,
+      headers: { 'Content-Type': contentType, 'Cache-Control': 'public, max-age=' + ttl },
+    });
+    const put = Promise.resolve().then(() => cache.put(key, stored)).catch(() => {});
+    if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(put);
+    else await put;
+    h.set('X-Relay-Cache', 'MISS');
+    return new Response(body, { status: 200, headers: h });
+  }
   return new Response(up.body, { status: up.status, headers: h });
 }
 

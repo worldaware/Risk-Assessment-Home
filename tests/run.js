@@ -1106,7 +1106,9 @@ async function v31Checks() {
     by(withNri, 5).confidence === 'High' && by(withNri, 8).confidence === 'High' && by(withNri, 63).confidence === 'Medium');
   check('NRI: tornado uses the county label and names Boulder County', by(withNri, 6).source === 'FEMA National Risk Index (county), December 2025 release' &&
     by(withNri, 6).finding.includes('Boulder County'));
-  check('NRI: extreme heat stays on the state rule of thumb', by(withNri, 9).status === 'estimated' && /rule of thumb/.test(by(withNri, 9).source));
+  // v3.2.0 Stage B: without normals, heat falls back to NRI HWAV (was the rule of thumb in v3.1)
+  check('NRI, no normals: extreme heat falls back to NRI HWAV (downtown 0.79 = 1, Low, data)', by(withNri, 9).status === 'success' &&
+    by(withNri, 9).scoreAssigned === 1 && by(withNri, 9).confidence === 'Low' && by(withNri, 9).finding.includes('based on recorded heat events (FEMA NRI)'));
   check('NRI: landslide falls back to tract LNDS when the tile fails (downtown = 1, Low)', by(withNri, 11).scoreAssigned === 1 && by(withNri, 11).confidence === 'Low' &&
     by(withNri, 11).status === 'success');
   const foot = ctx._compileFindings(Object.assign({}, base, { landslide: null, nri: { tract: NRI_FX.foothills, county: NRI_FX.county } }), geo);
@@ -1153,7 +1155,8 @@ async function v31Checks() {
   check('summary: real placeholders still say a source did not respond',
     ctx._researchSummarySub(est(2, 'World Aware placeholder (x did not respond)').concat(est(1, RULE)), 1, 4) ===
     '2 are rough placeholders because a source did not respond. No address-level source exists yet for 1 item; it uses a state rule of thumb. 1 could not be scored. 4 need your judgment.');
-  check('research with NRI in Colorado: only extreme heat is on the rule of thumb', withNri.filter(f => ctx._isRuleOfThumb(f)).map(f => f.hazardId).join() === '9');
+  check('research with NRI in Colorado: nothing is on the rule of thumb (heat now has NRI HWAV, hurricane ruled out)', withNri.filter(f => ctx._isRuleOfThumb(f)).length === 0,
+    withNri.filter(f => ctx._isRuleOfThumb(f)).map(f => f.hazardId).join());
   check('report sentence splits rule of thumb from placeholders',
     ctx._sourcesSentence({ findingCount: 12, estimatedCount: 2, ruleOfThumbCount: 1 }) ===
     'Public data supplied the likelihood for 10 hazards; 1 is a rough placeholder because a source did not respond; no address-level source exists yet for 1 item; it uses a state rule of thumb.',
@@ -1225,7 +1228,7 @@ async function v31Checks() {
   const src = fs.readFileSync(path.join(ROOT, 'js/research.js'), 'utf8');
   check('runner: one NRI promise shared with flood', /const nriP = _tracked\('nri', _callNRIAPI\(lat, lng, fips5\)\)/.test(src) && src.includes('_callFloodAPI(lat, lng, fips5, nriP)'));
   check('landslide tile image uses crossOrigin anonymous', /img\.crossOrigin = 'anonymous'/.test(src));
-  check('extreme heat comment explains why NRI HWAV is not used', /HWAV_AFREQ\s*\/\/\s*rates Boulder "Very Low"/.test(src));
+  check('extreme heat comment explains why NRI HWAV is only the fallback', /NRI HWAV_AFREQ is only the fallback/.test(src) && /0\.79 heat wave days a year/.test(src));
 }
 
 console.log('Privacy statement placement (Henry, 2026-10-31)');
@@ -1554,12 +1557,563 @@ async function v32StageAChecks() {
   const src = fs.readFileSync(path.join(ROOT, 'js/research.js'), 'utf8');
   check('runner: water and soil run in the parallel set and reach _compileFindings',
     src.includes("_tracked('water',      _callWaterAPI(lat, lng))") && src.includes("_tracked('soil',       _callSoilAPI(lat, lng))") &&
-    /\['nri'[^\]]*'water','soil'\]/.test(src) && /declarations, water, soil \},\s*\n\s*geocoded/.test(src));
+    /\['nri'[^\]]*'water','soil'[,\]]/.test(src) && /declarations, water, soil,?\s*\n?\s*(warnings, normals, airdays )?\},\s*\n\s*geocoded/.test(src));
   check('soil uses the one POST helper, and no relay (it is GET-only)', src.includes('directPostForm(API_CONFIG.USDA_SDA') && !/proxyFetch\(API_CONFIG\.USDA_SDA|relayFetch\(API_CONFIG\.USDA_SDA/.test(src));
   check('water calls are direct, not through the relay', !/proxyFetch\([^)]*(WATER|SDWIS)|relayFetch\([^)]*(WATER|SDWIS)/.test(src));
   ctx.fetch = () => Promise.reject(new Error('no network in tests'));
 }
 
-asyncChecks().then(v31Checks).then(v32StageAChecks).catch(e => { failed++; console.log('  FAIL async checks threw — ' + e.message + '\n' + e.stack); }).then(() => {  console.log(`\n${passed} passed, ${failed} failed`);
+/* ---------------------------------------------------------------
+   v3.2.0 Stage B: high wind (63), extreme heat (9), winter cold (8),
+   smoke (23) and the relay cache.
+   From fixtures-v32.json (captured 2026-10-31): IEM shape and expected
+   rates (downtown COZ039 24 High Wind Warnings 2015 to 2024 after dedupe =
+   2.4 a year; foothills COZ035 6.3 a year), the NCEI search and data
+   replies for BOULDER, CO US, the geopub URL and the 2023 Boulder monthly
+   percentages. The IEM event lists below are built from those counts (the
+   raw 315-event reply was not captured): each warning appears once for the
+   forecast zone and once for the county, as IEM returns it.
+--------------------------------------------------------------- */
+function iemEvents(perYearCounts, opts) {
+  const o = Object.assign({ wfo: 'BOU', zone: 'COZ039', county: 'COC013', phen: 'HW', sig: 'W' }, opts || {});
+  const out = [];
+  Object.keys(perYearCounts).forEach(y => {
+    for (let i = 1; i <= perYearCounts[y]; i++) {
+      [o.zone, o.county].forEach(ugc => out.push({
+        url: 'x', issue: `${y}-0${1 + (i % 9)}-1${i % 9}T06:00:00Z`, expire: `${y}-01-02T06:00:00Z`, eventid: i, phenomena: o.phen,
+        hvtec_nwsli: '', significance: o.sig, wfo: o.wfo, name: '', ph_name: '', sig_name: '', ugc,
+      }));
+    }
+  });
+  return out;
+}
+const spread = (total, years) => Object.fromEntries(years.map((y, i) => [y, Math.floor(total / years.length) + (i < total % years.length ? 1 : 0)]));
+const Y10 = [2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024];
+const IEM_FX = {
+  downtown: [].concat(
+    iemEvents(spread(24, Y10)),                                  // 24 HW.W
+    iemEvents(spread(42, Y10), { phen: 'WS' }),                  // 42 WS.W
+    iemEvents({ 2016: 1, 2021: 1 }, { phen: 'BZ' }),             // 2 BZ.W
+    iemEvents(spread(30, Y10), { phen: 'WI', sig: 'Y' }),        // wind advisories: not counted
+    iemEvents({ 2019: 2 }, { phen: 'HW', sig: 'A' }),            // high wind watches: not counted
+    iemEvents({ 2022: 1 }, { phen: 'EH' }),
+    iemEvents({ 2021: 1 }, { phen: 'WC' })),
+  foothills: iemEvents(spread(63, Y10), { zone: 'COZ035' }),
+};
+const NCEI_FX = {
+  search: { count: 2, results: [{ id: 'us-climate-normals_1991-2020_v1.0.1_annualseasonal_multivariate_by-station_c20230404.tar.gz:USC00050848.csv', name: 'USC00050848.csv', stations: [{ id: 'USC00050848', name: 'BOULDER, CO US' }] }] },
+  data: [{ 'ANN-TMAX-AVGNDS-GRTH090': '    33.1', 'ANN-TMAX-AVGNDS-GRTH100': '     0.6', 'ANN-TMIN-AVGNDS-LSTH000': '     3.9', STATION: 'USC00050848' }],
+  searchUrl: 'https://www.ncei.noaa.gov/access/services/search/v1/data?dataset=normals-annualseasonal-1991-2020&bbox=40.15,-105.45,39.90,-105.10&dataTypes=ANN-TMAX-AVGNDS-GRTH090&limit=5',
+  dataUrl: 'https://www.ncei.noaa.gov/access/services/data/v1?dataset=normals-annualseasonal-1991-2020&stations=USC00050848&dataTypes=ANN-TMAX-AVGNDS-GRTH090,ANN-TMAX-AVGNDS-GRTH100,ANN-TMIN-AVGNDS-LSTH000&format=json',
+};
+const GEOPUB_URL = 'https://geopub.epa.gov/ArcGIS/rest/services/myenv/aqi/MapServer/0/query?where=CTFIPS%3D%2708013%27&outFields=YEAR,MONTH_NUMBER,Unhealthy_for_Sensitive_Group,Unhealthy,Very_Unhealthy,Hazardous&returnGeometry=false&f=json';
+const BOULDER_2023_PCT = [0, 0, 0, 0, 6.5, 0, 0, 9.7, 3.3, 0, 0, 0];
+/** Monthly rows as geopub returns them: USG carries the percent, the other three are null or string fields. */
+function geopubRows(year, pctByMonth) {
+  return pctByMonth.map((p, i) => ({ attributes: { YEAR: String(year), MONTH_NUMBER: i + 1, Unhealthy_for_Sensitive_Group: p, Unhealthy: null, Very_Unhealthy: null, Hazardous: null } }));
+}
+
+async function v32StageBChecks() {
+  console.log('v3.2.0 Stage B: high wind, heat and cold, smoke, relay');
+  const noop = () => {};
+  const ctx = {
+    console: { log: noop, warn: noop, error: console.error },
+    document: { getElementById: () => null, querySelector: () => null, querySelectorAll: () => [], addEventListener: noop },
+    localStorage: { getItem: () => null, setItem: noop, removeItem: noop },
+    AbortController: class { constructor() { this.signal = {}; } abort() {} },
+    setTimeout, clearTimeout, URL, Number, String, Math, Date, Array, Object, JSON, RegExp, Error, Promise, Set, Map,
+    fetch: () => Promise.reject(new Error('no network in tests')),
+  };
+  ctx.window = ctx; ctx.globalThis = ctx; ctx.addEventListener = noop; ctx.navigator = {};
+  vm.createContext(ctx);
+  ['js/apiConfig.js', 'js/scoreMapper.js', 'js/research.js', 'js/actions.js', 'js/report.js',
+   'js/importValidator.js', 'js/checklist.js', 'app.js']
+    .forEach(f => vm.runInContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), ctx, { filename: f }));
+  const ev = code => vm.runInContext(code, ctx);
+  const cfg = ev('API_CONFIG');
+  const HD = ev('HAZARD_DATA');
+  const names = Object.fromEntries(HD.map(h => [h.id, h.name]));
+  const json = body => Promise.resolve({ ok: true, status: 200, json: async () => body });
+  const seen = [];
+  const route = handler => { seen.length = 0; ctx.fetch = (url, opts) => { seen.push({ url: String(url), opts: opts || {} }); return handler(String(url), opts || {}); }; };
+  const NOW25 = new Date(2025, 5, 1);    // period 2015 to 2024, as in the fixture
+  const NOW26 = new Date(2026, 9, 31);   // period 2015 to 2025
+  const by = (fs, id) => fs.find(f => f.hazardId === id);
+  let e1;
+
+  // ── Config, names, steps ──
+  check('Stage B config: IEM, NCEI search and data, EPA geopub AQI endpoints',
+    cfg.IEM_VTEC_BYPOINT === 'https://mesonet.agron.iastate.edu/json/vtec_events_bypoint.py' &&
+    cfg.NCEI_SEARCH === 'https://www.ncei.noaa.gov/access/services/search/v1/data' &&
+    cfg.NCEI_DATA === 'https://www.ncei.noaa.gov/access/services/data/v1' &&
+    cfg.EPA_AQI_COUNTY === 'https://geopub.epa.gov/ArcGIS/rest/services/myenv/aqi/MapServer/0/query');
+  check('Stage B names match HAZARD_DATA exactly (63, 9, 8, 23)', [63, 9, 8, 23].every(id => ev('H_NAME')[id] === names[id]) &&
+    names[63] === 'High wind' && names[9] === 'Extreme heat' && names[8] === 'Winter storm and extreme cold' && names[23] === 'Smoke and bad air days');
+  const steps = ev('STEPS');
+  const si = id => steps.findIndex(s => s.id === id);
+  check('Stage B steps: warnings, normals, airdays with the spec labels, after soil',
+    si('warnings') === si('soil') + 1 && si('normals') === si('warnings') + 1 && si('airdays') === si('normals') + 1 &&
+    steps[si('warnings')].label === 'Counting NWS warnings over this point (Iowa Environmental Mesonet)' &&
+    steps[si('normals')].label === 'Checking NOAA climate normals for the nearest station' &&
+    steps[si('airdays')].label === 'Counting bad-air days for your county (EPA)');
+
+  // ── IEM: period, URL, rounding ──
+  const p26 = ctx._iemPeriod(NOW26);
+  check('IEM period on 2026-10-31: 2015 to 2025, 11 years, edate 2026-01-01',
+    p26.firstYear === 2015 && p26.lastYear === 2025 && p26.years === 11 && p26.sdate === '2015-01-01' && p26.edate === '2026-01-01');
+  const u1 = ctx._iemUrl(40.0121, -105.2711, NOW26), u2 = ctx._iemUrl(40.0139, -105.2749, NOW26);
+  check('IEM URL: lat/lon rounded to 2 decimals, sdate 2015-01-01, edate 1 January this year',
+    u1 === 'https://mesonet.agron.iastate.edu/json/vtec_events_bypoint.py?lat=40.01&lon=-105.27&sdate=2015-01-01&edate=2026-01-01', u1);
+  check('IEM URL: neighbours a few hundred metres apart share one URL (one cache entry)', u1 === u2, u2);
+
+  // ── IEM: dedupe and counts ──
+  const dt = ctx._countIemEvents(IEM_FX.downtown, NOW25);
+  check('IEM dedupe: 48 zone and county rows are 24 High Wind Warnings = 2.4 a year over 10 years',
+    IEM_FX.downtown.filter(e => e.phenomena === 'HW' && e.significance === 'W').length === 48 &&
+    dt.counts.highWind === 24 && dt.years === 10 && Math.abs(dt.perYear.highWind - 2.4) < 1e-9, JSON.stringify(dt.counts));
+  check('IEM: watches (HW.A) and wind advisories (WI.Y) are not counted', dt.counts.highWind === 24);
+  check('IEM: winter storm plus blizzard warnings counted together (42 + 2)', dt.counts.winter === 44 && Math.abs(dt.perYear.winter - 4.4) < 1e-9);
+  check('IEM: heat and cold warnings counted and stored per year', dt.counts.heat === 1 && dt.counts.cold === 1 &&
+    dt.byYear[2022].heat === 1 && dt.byYear[2021].cold === 1 && dt.byYear[2015].highWind === 3, JSON.stringify(dt.byYear[2015]));
+  const ft = ctx._countIemEvents(IEM_FX.foothills, NOW25);
+  check('IEM foothills fixture: 63 warnings = 6.3 a year', ft.counts.highWind === 63 && Math.abs(ft.perYear.highWind - 6.3) < 1e-9);
+  const ev1 = (wfo, eventid, issue, ugc, phen, sig) => ({ wfo, eventid, issue, ugc, phenomena: phen || 'HW', significance: sig || 'W' });
+  const dd = ctx._countIemEvents([
+    ev1('BOU', 7, '2020-03-01T00:00:00Z', 'COZ039'), ev1('BOU', 7, '2020-03-01T00:00:00Z', 'COC013'), ev1('BOU', 7, '2020-03-01T06:00:00Z', 'COZ040'),
+    ev1('BOU', 7, '2021-03-01T00:00:00Z', 'COZ039'),     // event numbers restart each year
+    ev1('PUB', 7, '2020-03-01T00:00:00Z', 'COZ058'),     // another office
+  ], NOW25);
+  check('IEM dedupe: same office, product and number in one year is one warning across zones and counties; a new year or another office is another',
+    dd.counts.highWind === 3, JSON.stringify(dd.counts));
+  const edge = ctx._countIemEvents([ev1('BOU', 1, '2014-12-31T23:00:00Z', 'COZ039'), ev1('BOU', 2, '2015-01-01T00:00:00Z', 'COZ039'),
+    ev1('BOU', 3, '2024-12-31T23:59:00Z', 'COZ039'), ev1('BOU', 4, '2025-01-01T00:00:00Z', 'COZ039'), ev1('BOU', 5, null, 'COZ039'), null], NOW25);
+  check('IEM: events before 2015, from the current year, or without an issue time are left out', edge.counts.highWind === 2, JSON.stringify(edge.counts));
+  const ren = ctx._countIemEvents([
+    ev1('BOU', 1, '2023-01-10T00:00:00Z', 'COZ039', 'WC'), ev1('BOU', 1, '2025-01-10T00:00:00Z', 'COZ039', 'EC'), ev1('BOU', 1, '2025-01-10T00:00:00Z', 'COC013', 'EC'),
+    ev1('BOU', 2, '2024-07-10T00:00:00Z', 'COZ039', 'EH'), ev1('BOU', 2, '2025-07-10T00:00:00Z', 'COZ039', 'XH'),
+    ev1('BOU', 3, '2025-07-11T00:00:00Z', 'COZ039', 'HT', 'Y'), ev1('BOU', 4, '2025-01-11T00:00:00Z', 'COZ039', 'CW', 'Y'),
+    ev1('bou', 5, '2025-01-12T00:00:00Z', 'COZ039', 'ec', 'w'),
+  ], NOW26);
+  check('IEM product renames: WC.W and EC.W count together, EH.W and XH.W count together; advisories do not',
+    ren.counts.cold === 3 && ren.counts.heat === 2 && ren.counts.highWind === 0, JSON.stringify(ren.counts));
+  check('IEM: no events is a zero count, not missing', ctx._countIemEvents([], NOW26).counts.highWind === 0 && ctx._countIemEvents([], NOW26).perYear.highWind === 0);
+
+  // ── High wind mapping ──
+  const ws = ctx._windWarningScore;
+  check('HW.W a year: 0.24 = 1, 0.25 = 2', ws(0.24) === 1 && ws(0.25) === 2);
+  check('HW.W a year: 0.99 = 2, 1 = 3', ws(0.99) === 2 && ws(1) === 3);
+  check('HW.W a year: 2.99 = 3, 3 = 4', ws(2.99) === 3 && ws(3) === 4);
+  check('HW.W a year: 5.99 = 4, 6 = 5, 0 = 1', ws(5.99) === 4 && ws(6) === 5 && ws(0) === 1);
+  const wd = ctx._mapWindWarnings(dt, NRI_FX.downtown.SWND_AFREQ);
+  check('wind downtown: 2.4 a year = 3, NRI 1.18 = 2, max 3, High', wd.score === 3 && wd.iemScore === 3 && wd.confidence === 'High', JSON.stringify(wd));
+  check('wind downtown finding says both counts',
+    wd.finding === '2.4 High Wind Warnings a year here (NWS, 2015 to 2024) and 1.2 thunderstorm wind events a year (FEMA NRI)', wd.finding);
+  check('wind source names IEM, the years and NRI', wd.source === 'NWS warnings via Iowa Environmental Mesonet, 2015 to 2024, and FEMA NRI', wd.source);
+  check('wind foothills: 6.3 a year = 5 (NRI 0.91 = 1)', ctx._mapWindWarnings(ft, NRI_FX.foothills.SWND_AFREQ).score === 5);
+  const few = ctx._countIemEvents([ev1('MPX', 1, '2020-03-01T00:00:00Z', 'MNZ060')], NOW26);
+  const wMax = ctx._mapWindWarnings(few, NRI_FX.minneapolis.SWND_AFREQ);
+  check('wind max with NRI: 0.09 warnings a year (1) and Minneapolis NRI 4.83 (4) = 4', wMax.score === 4 && wMax.iemScore === 1, JSON.stringify(wMax));
+  const wNoNri = ctx._mapWindWarnings(dt, null);
+  check('wind with IEM only: IEM score, source without NRI, no NRI clause', wNoNri.score === 3 &&
+    wNoNri.source === 'NWS warnings via Iowa Environmental Mesonet, 2015 to 2024' && !/FEMA/.test(wNoNri.finding));
+  const wZero = ctx._mapWindWarnings(ctx._countIemEvents([], NOW26), 0);
+  check('wind with no warnings and NRI 0: 1, says no warnings', wZero.score === 1 && wZero.finding.startsWith('No High Wind Warnings here (NWS, 2015 to 2025) and 0 thunderstorm'), wZero.finding);
+  check('wind: no IEM result maps to null (NRI-only path)', ctx._mapWindWarnings(null, 1.2) === null);
+
+  // ── IEM call: relay first, then direct ──
+  const iemReply = { events: IEM_FX.downtown, generated_at: '2026-10-31T00:00:00Z' };
+  const savedRelay = cfg.RELAY_URL;
+  cfg.RELAY_URL = 'https://relay.test';
+  route(url => url.startsWith('https://relay.test/') ? json(iemReply) : Promise.reject(new Error('direct should not be called')));
+  let wc = await ctx._callWarningsAPI(40.015, -105.2705);
+  const relayed = decodeURIComponent((seen[0].url.split('?url=')[1]) || '');
+  check('IEM call with the relay set: one call through the relay carrying the rounded IEM URL',
+    seen.length === 1 && seen[0].url.startsWith('https://relay.test/?url=') && relayed.startsWith(cfg.IEM_VTEC_BYPOINT + '?lat=40.0') &&
+    /&lon=-105\.27&sdate=2015-01-01&edate=\d{4}-01-01$/.test(relayed) && seen[0].opts.referrerPolicy === 'no-referrer', relayed);
+  check('IEM call result carries counts and per-year rates', wc.counts.highWind === 24 && wc.years === new Date().getFullYear() - 2015 && typeof wc.perYear.winter === 'number');
+  route(url => url.startsWith('https://relay.test/') ? Promise.resolve({ ok: false, status: 403, json: async () => ({}) }) : json(iemReply));
+  wc = await ctx._callWarningsAPI(40.015, -105.2705);
+  check('IEM call: relay refuses (403, Worker not redeployed yet), then a direct call answers',
+    seen.length === 2 && seen[1].url.startsWith(cfg.IEM_VTEC_BYPOINT + '?lat=') && wc.counts.highWind === 24);
+  route(url => url.startsWith('https://relay.test/') ? Promise.reject(new Error('relay down')) : json(iemReply));
+  check('IEM call: relay network failure falls back to direct', (await ctx._callWarningsAPI(40.015, -105.2705)).counts.highWind === 24 && seen.length === 2);
+  cfg.RELAY_URL = '';
+  route(url => json(iemReply));
+  await ctx._callWarningsAPI(40.015, -105.2705);
+  check('IEM call with no relay configured: direct only', seen.length === 1 && seen[0].url.startsWith(cfg.IEM_VTEC_BYPOINT));
+  cfg.RELAY_URL = 'https://relay.test';
+  route(() => Promise.reject(new Error('down')));
+  e1 = null; try { await ctx._callWarningsAPI(40, -105); } catch (e) { e1 = e; }
+  check('IEM call: relay and direct both fail throws (NRI-only finding)', !!e1 && seen.length === 2);
+  route(() => json({ nope: 1 }));
+  e1 = null; try { await ctx._callWarningsAPI(40, -105); } catch (e) { e1 = e; }
+  check('IEM call: a reply without an events list throws', !!e1);
+  cfg.RELAY_URL = savedRelay;
+
+  // ── NCEI normals: URLs and station choice ──
+  check('normals search URL: bbox north,west,south,east at 0.25 degrees, 90 F type, limit 5',
+    ctx._normalsSearchUrl(40.015, -105.2705) === 'https://www.ncei.noaa.gov/access/services/search/v1/data?dataset=normals-annualseasonal-1991-2020&bbox=40.265,-105.5205,39.765,-105.0205&dataTypes=ANN-TMAX-AVGNDS-GRTH090&limit=5',
+    ctx._normalsSearchUrl(40.015, -105.2705));
+  check('normals data URL matches the captured request', ctx._normalsDataUrl('USC00050848') === NCEI_FX.dataUrl, ctx._normalsDataUrl('USC00050848'));
+  const st = ctx._pickNormalsStation(NCEI_FX.search, 40.015, -105.2705);
+  check('station pick without coordinates: the first listed, BOULDER, CO US', st.id === 'USC00050848' && st.name === 'BOULDER, CO US' && st.km === null, JSON.stringify(st));
+  const twoSt = (a, b) => ({ results: [{ stations: [a] }, { stations: [b] }] });
+  const far = { id: 'USC00051234', name: 'FAR AWAY', latitude: 40.2, longitude: -105.0 };
+  const near = { id: 'USC00050848', name: 'BOULDER, CO US', latitude: 39.9919, longitude: -105.2667 };
+  check('station pick with lat/lon fields: the nearest, whatever the order',
+    ctx._pickNormalsStation(twoSt(far, near), 40.015, -105.2705).id === 'USC00050848' && ctx._pickNormalsStation(twoSt(near, far), 40.015, -105.2705).id === 'USC00050848' &&
+    Math.abs(ctx._pickNormalsStation(twoSt(far, near), 40.015, -105.2705).km - 2.6) < 0.2);
+  check('station pick reads a GeoJSON location (lon, lat) and a {lat, lon} location',
+    ctx._pickNormalsStation(twoSt({ id: 'USC00051234', name: 'FAR', location: { type: 'Point', coordinates: [-105.0, 40.2] } },
+      { id: 'USC00050848', name: 'B', location: { coordinates: [[-105.2667, 39.9919]] } }), 40.015, -105.2705).id === 'USC00050848' &&
+    ctx._pickNormalsStation(twoSt({ id: 'USC00051234', name: 'FAR', location: { lat: 40.2, lon: -105.0 } },
+      { id: 'USC00050848', name: 'B', location: '39.9919,-105.2667' }), 40.015, -105.2705).id === 'USC00050848');
+  check('station pick: when only some stations carry coordinates, the nearest located one',
+    ctx._pickNormalsStation(twoSt({ id: 'USC00099999', name: 'NO COORDS' }, far), 40.015, -105.2705).id === 'USC00051234');
+  check('station pick: no stations or unusable ids is no station', ctx._pickNormalsStation({ count: 0, results: [] }, 40, -105) === null &&
+    ctx._pickNormalsStation(null, 40, -105) === null && ctx._pickNormalsStation({ results: [{ stations: [{ id: 'bad id!', name: 'X' }] }] }, 40, -105) === null);
+
+  // ── NCEI normals: values ──
+  const nv = ctx._parseNormals(NCEI_FX.data, 'USC00050848');
+  check('normals fixture: 33.1, 0.6 and 3.9 parsed from padded strings', nv.d90 === 33.1 && nv.d100 === 0.6 && nv.d0 === 3.9, JSON.stringify(nv));
+  check('normals: a -9999 sentinel, a blank or a missing value is missing',
+    (() => { const r = ctx._parseNormals([{ STATION: 'X', 'ANN-TMAX-AVGNDS-GRTH090': '  12.0', 'ANN-TMAX-AVGNDS-GRTH100': ' -9999', 'ANN-TMIN-AVGNDS-LSTH000': '   ' }], 'X');
+      return r.d90 === 12 && r.d100 === null && r.d0 === null; })());
+  check('normals: a reply with none of the values is no data', ctx._parseNormals([{ STATION: 'X', 'ANN-TMAX-AVGNDS-GRTH090': '-9999' }], 'X') === null &&
+    ctx._parseNormals([], 'X') === null && ctx._parseNormals(null, 'X') === null);
+  check('normals: the row for the asked station is used when several come back',
+    ctx._parseNormals([{ STATION: 'OTHER', 'ANN-TMAX-AVGNDS-GRTH090': '99' }, NCEI_FX.data[0]], 'USC00050848').d90 === 33.1);
+
+  // ── Heat mapping ──
+  const hs = (d90, d100) => ctx._heatDaysScore(d90, d100 === undefined ? 0 : d100);
+  check('heat: 4.9 = 1, 5 = 2, 14.9 = 2, 15 = 3', hs(4.9) === 1 && hs(5) === 2 && hs(14.9) === 2 && hs(15) === 3);
+  check('heat: 44.9 = 3, 45 = 4, 89.9 = 4, 90 = 5', hs(44.9) === 3 && hs(45) === 4 && hs(89.9) === 4 && hs(90) === 5);
+  check('heat: Boulder 33.1 = 3; Phoenix-style 150 days = 5', hs(33.1, 0.6) === 3 && hs(150, 60) === 5);
+  check('heat 100 F rule: 9.9 days adds nothing, 10 adds one, capped at 5', hs(50, 9.9) === 4 && hs(50, 10) === 5 && hs(33.1, 10) === 4 && hs(95, 40) === 5 && hs(33.1, null) === 3);
+  const normalsBoulder = Object.assign({ station: st }, nv);
+  const hb = ctx._mapNormalsHeat(normalsBoulder);
+  check('heat Boulder finding, source and confidence',
+    hb.score === 3 && hb.confidence === 'High' && hb.source === 'NOAA 1991 to 2020 climate normals, BOULDER, CO US' &&
+    hb.finding === '33 days a year at or above 90 F and 0.6 at or above 100 F at BOULDER, CO US (NOAA normals 1991 to 2020)', JSON.stringify(hb));
+  check('heat finding says when the 100 F rule adds a level', /Ten or more days at or above 100 F add one level$/.test(ctx._mapNormalsHeat({ station: st, d90: 107.4, d100: 15.2, d0: 0 }).finding));
+  check('heat: a station without a 90 F count gives no heat result', ctx._mapNormalsHeat({ station: st, d90: null, d100: null, d0: 4 }) === null);
+  const nh = v => ctx._mapNRIHeat(v).score;
+  check('heat fallback NRI HWAV: 1.99 = 1, 2 = 2, 4 = 3, 8 = 4, 15 = 5', nh(1.99) === 1 && nh(2) === 2 && nh(3.99) === 2 && nh(4) === 3 && nh(8) === 4 && nh(14.9) === 4 && nh(15) === 5);
+  check('heat fallback NRI HWAV: Phoenix 23.4 = 5, Houston 14.6 = 4, Boulder 0.79 = 1, Low, labelled',
+    nh(NRI_FX.phoenix.HWAV_AFREQ) === 5 && nh(NRI_FX.houston.HWAV_AFREQ) === 4 && nh(NRI_FX.downtown.HWAV_AFREQ) === 1 &&
+    ctx._mapNRIHeat(0.79).confidence === 'Low' && ctx._mapNRIHeat(0.79).finding.includes('based on recorded heat events (FEMA NRI)'));
+
+  // ── Normals call ──
+  route(url => url.startsWith(cfg.NCEI_SEARCH) ? json(NCEI_FX.search) : url.startsWith(cfg.NCEI_DATA) ? json(NCEI_FX.data) : Promise.reject(new Error(url)));
+  const nc = await ctx._callNormalsAPI(40.015, -105.2705);
+  check('normals call: search then data, both direct GETs, Boulder values',
+    seen.length === 2 && seen[0].url === ctx._normalsSearchUrl(40.015, -105.2705) && seen[1].url === NCEI_FX.dataUrl && !seen[0].opts.method &&
+    nc.station.id === 'USC00050848' && nc.d90 === 33.1 && nc.d0 === 3.9);
+  route(url => url.startsWith(cfg.NCEI_SEARCH) ? json({ count: 0, results: [] }) : json(NCEI_FX.data));
+  e1 = null; try { await ctx._callNormalsAPI(40, -105); } catch (e) { e1 = e; }
+  check('normals call: no station in the box throws (NRI fallback)', !!e1 && seen.length === 1);
+  route(url => url.startsWith(cfg.NCEI_SEARCH) ? json(NCEI_FX.search) : json([{ STATION: 'USC00050848', 'ANN-TMAX-AVGNDS-GRTH090': '-9999' }]));
+  e1 = null; try { await ctx._callNormalsAPI(40, -105); } catch (e) { e1 = e; }
+  check('normals call: a station with no values throws', !!e1);
+  route(() => Promise.resolve({ ok: false, status: 503, json: async () => ({}) }));
+  e1 = null; try { await ctx._callNormalsAPI(40, -105); } catch (e) { e1 = e; }
+  check('normals call: service failure throws', !!e1 && /HTTP 503/.test(e1.message));
+
+  // ── Cold: winter + 1 at 5 nights ──
+  const wn = (d0, cwav) => ctx._mapNRIWinter(14.526, cwav === undefined ? 1.1 : cwav, d0 === undefined ? null : { station: st, d90: 33.1, d100: 0.6, d0 });
+  check('cold: Boulder 3.9 nights at or below 0 F does not add (winter stays 4)', wn(3.9).score === 4 && !/nights/.test(wn(3.9).finding));
+  check('cold: 5 nights adds one (4 to 5) and the finding says so', wn(5).score === 5 &&
+    wn(5).finding === 'About 15 winter weather days a year recorded for this tract (FEMA NRI); 5 nights a year at or below 0 F at BOULDER, CO US (NOAA normals 1991 to 2020) add one level', wn(5).finding);
+  check('cold: 4.99 does not add; the level is capped at 5', wn(4.99).score === 4 && ctx._mapNRIWinter(16.5, 0, { station: st, d0: 30 }).score === 5);
+  check('cold: with normals, the NRI cold wave rule is replaced (CWAV 2.5 and 3.9 nights = 4)', wn(3.9, 2.5).score === 4);
+  check('cold: without normals, the NRI cold wave rule still applies (CWAV 2.5 = 5)', wn(undefined, 2.5).score === 5 && /cold wave days/.test(wn(undefined, 2.5).finding));
+  check('cold: normals without a 0 F value fall back to the cold wave rule', ctx._mapNRIWinter(14.5, 2.5, { station: st, d90: 33, d100: 0, d0: null }).score === 5);
+
+  // ── EPA AQI days (geopub) ──
+  check('geopub URL matches the captured request exactly', ctx._airDaysUrl('08013') === GEOPUB_URL, ctx._airDaysUrl('08013'));
+  check('days in month: February 2020 is 29, February 2023 is 28, August 31',
+    ctx._daysInMonth(2020, 2) === 29 && ctx._daysInMonth(2023, 2) === 28 && ctx._daysInMonth(2023, 8) === 31 && ctx._daysInMonth(2023, 9) === 30);
+  const b23 = ctx._airDaysFromRows(geopubRows(2023, BOULDER_2023_PCT));
+  check('Boulder 2023 months: about 6 bad-air days (31 x 6.5% + 31 x 9.7% + 30 x 3.3%)',
+    Math.abs(b23.days - 6.012) < 1e-9 && b23.firstYear === 2023 && b23.lastYear === 2023 && b23.yearCount === 1, JSON.stringify(b23));
+  const mixed = geopubRows(2022, [0, 0, 0, 0, 0, 0, 10, 0, 0, 0, 0, 0]).concat([
+    { attributes: { YEAR: 2021, MONTH_NUMBER: '2', Unhealthy_for_Sensitive_Group: null, Unhealthy: '50', Very_Unhealthy: '25', Hazardous: null } },
+    { attributes: { YEAR: '2021', MONTH_NUMBER: 3, Unhealthy_for_Sensitive_Group: null, Unhealthy: null, Very_Unhealthy: null, Hazardous: null } }]);
+  const mx = ctx._airDaysFromRows(mixed);
+  check('geopub averaging: categories add, nulls are 0, string values parse, average over the years returned',
+    Math.abs(mx.byYear[2022] - 3.1) < 1e-9 && Math.abs(mx.byYear[2021] - 21) < 1e-9 && Math.abs(mx.days - 12.05) < 1e-9 && mx.firstYear === 2021 && mx.lastYear === 2022, JSON.stringify(mx));
+  check('geopub: rows without a usable year or month are skipped; none usable is no data',
+    ctx._airDaysFromRows([{ attributes: { YEAR: null, MONTH_NUMBER: 1, Unhealthy: 5 } }, { attributes: { YEAR: 2020, MONTH_NUMBER: 13, Unhealthy: 5 } }]) === null &&
+    ctx._airDaysFromRows([]) === null && ctx._airDaysFromRows(null) === null);
+  const fiveYr = [].concat(geopubRows(2019, [0, 0, 0, 0, 0, 0, 3.2, 3.2, 0, 0, 0, 0]), geopubRows(2020, [0, 0, 0, 0, 0, 6.7, 19.4, 22.6, 30, 35.5, 0, 0]),
+    geopubRows(2021, [0, 0, 0, 0, 0, 10, 32.3, 25.8, 3.3, 0, 0, 0]), geopubRows(2022, [0, 0, 0, 0, 3.2, 6.7, 9.7, 3.2, 0, 0, 0, 0]), geopubRows(2023, BOULDER_2023_PCT));
+  const b5 = ctx._airDaysFromRows(fiveYr);
+  check('five Boulder-like years (2020 and 2021 smoke summers) average about 15 days', b5.yearCount === 5 && b5.days > 13 && b5.days < 17 && b5.firstYear === 2019 && b5.lastYear === 2023, String(b5.days));
+  const as = ctx._airDaysScore;
+  check('bad-air days: 0.99 = 1, 1 = 2, 3.99 = 2, 4 = 3', as(0.99) === 1 && as(1) === 2 && as(3.99) === 2 && as(4) === 3);
+  check('bad-air days: 9.99 = 3, 10 = 4, 24.99 = 4, 25 = 5', as(9.99) === 3 && as(10) === 4 && as(24.99) === 4 && as(25) === 5);
+  const sm23 = ctx._mapAirDays(b23, 'Boulder County'), sm5 = ctx._mapAirDays(b5, 'Boulder County');
+  check('smoke mapping: Boulder 2023 alone about 6 days = 3; the five-year average = 4', sm23.score === 3 && sm5.score === 4);
+  check('smoke finding: days, county, years, and the ozone note',
+    sm5.finding.startsWith(`About ${Math.round(b5.days)} days a year with air quality worse than moderate in Boulder County (EPA, 2019 to 2023). `) &&
+    /includes ozone days, since this source does not separate smoke/.test(sm5.finding) && sm23.finding.startsWith('About 6 days a year') && /\(EPA, 2023\)/.test(sm23.finding), sm5.finding);
+  check('smoke source and confidence', sm5.source === 'EPA Air Quality Index days by county, 2019 to 2023' && sm5.confidence === 'Medium');
+  check('smoke: one day reads singular; less than a tenth reads plainly',
+    ctx._mapAirDays({ days: 1, firstYear: 2020, lastYear: 2021, yearCount: 2 }, 'X County').finding.startsWith('About 1 day a year') &&
+    ctx._mapAirDays({ days: 0.02, firstYear: 2020, lastYear: 2021, yearCount: 2 }, 'X County').finding.startsWith('About less than 0.1 days a year'));
+  route(() => json({ features: fiveYr }));
+  const ac = await ctx._callAirDaysAPI('08013');
+  check('airdays call: one direct GET of the captured URL', seen.length === 1 && seen[0].url === GEOPUB_URL && !seen[0].opts.method && ac.yearCount === 5);
+  route(() => json({ features: [] }));
+  e1 = null; try { await ctx._callAirDaysAPI('08013'); } catch (e) { e1 = e; }
+  check('airdays call: a county with no monitor (no rows) throws (derived fallback)', !!e1);
+  route(() => json({ error: { code: 400, message: 'Invalid query' } }));
+  e1 = null; try { await ctx._callAirDaysAPI('08013'); } catch (e) { e1 = e; }
+  check('airdays call: an ArcGIS error inside HTTP 200 throws', !!e1);
+  e1 = null; try { await ctx._callAirDaysAPI(''); } catch (e) { e1 = e; }
+  check('airdays call: no county FIPS throws before any request', !!e1 && seen.length === 1);
+
+  // ── _compileFindings: each source and each fallback ──
+  ev('state = freshState();');
+  const geo = { lat: 40.015, lng: -105.2705, zip: '80302', stateAbbr: 'CO', county: 'Boulder County', fips5: '08013' };
+  const ok = (score) => ({ score, finding: 'x', confidence: 'High' });
+  const nriD = { tract: NRI_FX.downtown, county: NRI_FX.county }, nriF = { tract: NRI_FX.foothills, county: NRI_FX.county };
+  const base = { flood: ok(2), earthquake: ok(3), wildfire: ok(3), weather: { stateAbbr: 'CO' }, drought: ok(2),
+    epa: { chemScore: 2, finding: '2 facilities', confidence: 'Medium', highHazardCount: 1, potwCount: 1 }, landslide: null };
+  const nB = normalsBoulder;
+  const full = ctx._compileFindings(Object.assign({}, base, { nri: nriD, warnings: dt, normals: nB, airdays: b5 }), geo);
+  check('compile downtown: wind 3 from IEM and NRI, High', by(full, 63).scoreAssigned === 3 && by(full, 63).confidence === 'High' &&
+    by(full, 63).source === 'NWS warnings via Iowa Environmental Mesonet, 2015 to 2024, and FEMA NRI' && by(full, 63).status === 'success');
+  check('compile foothills: wind 5', by(ctx._compileFindings(Object.assign({}, base, { nri: nriF, warnings: ft }), geo), 63).scoreAssigned === 5);
+  check('compile downtown: heat 3 from normals, High, success', by(full, 9).scoreAssigned === 3 && by(full, 9).status === 'success' &&
+    by(full, 9).confidence === 'High' && by(full, 9).source === 'NOAA 1991 to 2020 climate normals, BOULDER, CO US');
+  check('compile downtown: winter 4 (3.9 nights does not add), source NRI only', by(full, 8).scoreAssigned === 4 &&
+    by(full, 8).source === 'FEMA National Risk Index (census tract), December 2025 release');
+  const cold5 = ctx._compileFindings(Object.assign({}, base, { nri: nriD, normals: Object.assign({}, nB, { d0: 5 }) }), geo);
+  check('compile: 5 nights at or below 0 F raises winter 4 to 5 and the source names both datasets', by(cold5, 8).scoreAssigned === 5 &&
+    by(cold5, 8).source === 'FEMA National Risk Index (census tract), December 2025 release; NOAA 1991 to 2020 climate normals, BOULDER, CO US' &&
+    /5 nights a year at or below 0 F at BOULDER, CO US/.test(by(cold5, 8).finding));
+  check('compile downtown: smoke 4 from the EPA county record, Medium, success', by(full, 23).scoreAssigned === 4 && by(full, 23).status === 'success' &&
+    by(full, 23).source === 'EPA Air Quality Index days by county, 2019 to 2023' && by(full, 23).finding.includes('in Boulder County'));
+  check('compile: exactly one smoke finding when the EPA record answers', full.filter(f => f.hazardId === 23).length === 1);
+  // fallbacks
+  const noIem = ctx._compileFindings(Object.assign({}, base, { nri: nriD, warnings: null }), geo);
+  check('fallback wind: IEM failed keeps the v3.1 NRI-only finding (2, Medium, thunderstorm wind only)', by(noIem, 63).scoreAssigned === 2 &&
+    by(noIem, 63).confidence === 'Medium' && by(noIem, 63).source === 'FEMA National Risk Index (census tract), December 2025 release' &&
+    by(noIem, 63).finding.includes('Thunderstorm wind only'));
+  const iemOnly = ctx._compileFindings(Object.assign({}, base, { nri: null, warnings: dt }), geo);
+  check('fallback wind: NRI failed, IEM answered: IEM score alone, High', by(iemOnly, 63).scoreAssigned === 3 && by(iemOnly, 63).confidence === 'High');
+  check('fallback wind: both failed: no finding (Needs your judgment, which names both sources)',
+    !by(ctx._compileFindings(Object.assign({}, base, { nri: null, warnings: null }), geo), 63) && /NWS warning records and FEMA wind records/.test(ev('MANUAL_REASONS')[63]));
+  const heatNri = ctx._compileFindings(Object.assign({}, base, { nri: { tract: NRI_FX.phoenix, county: null }, normals: null }), { stateAbbr: 'AZ' });
+  check('fallback heat: normals failed uses NRI HWAV (Phoenix 23.4 = 5), Low, success, NRI tract source', by(heatNri, 9).scoreAssigned === 5 &&
+    by(heatNri, 9).confidence === 'Low' && by(heatNri, 9).status === 'success' && by(heatNri, 9).source === 'FEMA National Risk Index (census tract), December 2025 release');
+  const heatCounty = ctx._compileFindings(Object.assign({}, base, { nri: { tract: null, county: NRI_FX.county }, normals: null }), geo);
+  check('fallback heat: no tract row uses the county HWAV with the county source', by(heatCounty, 9).status === 'success' &&
+    by(heatCounty, 9).source === 'FEMA National Risk Index (county), December 2025 release');
+  const heatNoD90 = ctx._compileFindings(Object.assign({}, base, { nri: nriD, normals: Object.assign({}, nB, { d90: null }) }), geo);
+  check('fallback heat: a station with no 90 F count falls to NRI HWAV', by(heatNoD90, 9).confidence === 'Low' && /FEMA NRI/.test(by(heatNoD90, 9).finding));
+  const heatRule = ctx._compileFindings(Object.assign({}, base, { nri: null, normals: null }), geo);
+  check('fallback heat: normals and NRI both failed: the state rule of thumb', ctx._isRuleOfThumb(by(heatRule, 9)));
+  const ruleCold = ctx._compileFindings(Object.assign({}, base, { nri: null, normals: Object.assign({}, nB, { d0: 12 }) }), geo);
+  const ruleNoCold = ctx._compileFindings(Object.assign({}, base, { nri: null, normals: null }), geo);
+  check('fallback winter: rule of thumb still takes the cold-night level from normals, and stays a rule of thumb',
+    by(ruleCold, 8).scoreAssigned === Math.min(5, by(ruleNoCold, 8).scoreAssigned + 1) && ctx._isRuleOfThumb(by(ruleCold, 8)) &&
+    /12 nights a year at or below 0 F/.test(by(ruleCold, 8).finding));
+  check('fallback heat with normals: the rule of thumb is not used for heat', !ctx._isRuleOfThumb(by(ruleCold, 9)));
+  const smokeDerived = ctx._compileFindings(Object.assign({}, base, { nri: nriD, airdays: null }), geo);
+  check('fallback smoke: no EPA AQI record keeps the derived score with its existing label',
+    by(smokeDerived, 23).source === 'Derived from USFS wildfire hazard and EPA TRI industrial proximity' && by(smokeDerived, 23).status === 'success');
+  const smokeHolder = ctx._compileFindings(Object.assign({}, base, { wildfire: null, nri: nriD, airdays: null }), geo);
+  check('fallback smoke: derived placeholder when wildfire failed too', by(smokeHolder, 23).status === 'estimated');
+  const smokeEpaNoFire = ctx._compileFindings(Object.assign({}, base, { wildfire: null, nri: nriD, airdays: b23 }), geo);
+  check('smoke from EPA does not depend on the wildfire lookup', by(smokeEpaNoFire, 23).status === 'success' && by(smokeEpaNoFire, 23).scoreAssigned === 3);
+  ev('state.scores[63] = { na: true };');
+  check('high wind marked Does not apply here: no finding', !by(ctx._compileFindings(Object.assign({}, base, { nri: nriD, warnings: dt }), geo), 63));
+  ev('state = freshState();');
+
+  const allB = [full, cold5, noIem, iemOnly, heatNri, heatCounty, heatNoD90, heatRule, ruleCold, smokeDerived, smokeHolder, smokeEpaNoFire].reduce((a, b) => a.concat(b), []);
+  check('Stage B findings keep the shape and HAZARD_DATA names', allB.every(f => ['hazardId', 'hazardName', 'category', 'scoreAssigned', 'source', 'finding', 'confidence', 'status', 'isOverridden'].every(k => k in f)) &&
+    allB.every(f => f.hazardName === names[f.hazardId]));
+
+  // ── Summary line: 0 rule-of-thumb items for a Colorado point when all sources answer ──
+  ev('state = freshState();');
+  const water = ctx._mapWaterSystem(ctx._pickWaterSystem([{ attributes: WATER_FX.downtown }]), WATER_FX.violations, new Date(2026, 9, 31));
+  const all = ctx._compileFindings(Object.assign({}, base, {
+    landslide: Object.assign(ctx._landslideResult(1, 0, 0), { source: ev('LS_SRC') }), nri: nriD,
+    declarations: { Fire: 9, Flood: 5, Snowstorm: 2 }, water, soil: ctx._mapSoilTable(SDA_FX.downtown), warnings: dt, normals: nB, airdays: b5,
+  }), geo);
+  check('all sources answering in Colorado: no finding on the state rule of thumb (hurricane ruled out)', all.filter(f => ctx._isRuleOfThumb(f)).length === 0 &&
+    !by(all, 7), all.filter(f => ctx._isRuleOfThumb(f)).map(f => f.hazardId).join());
+  ev(`state = freshState(); _research.geocoded = ${JSON.stringify(geo)}; _research.findings = ${JSON.stringify(all)}; _research.hasResults = true; _research.failCodes = {};`);
+  const html = [];
+  ctx.document.getElementById = id => id === 'research-report-content' ? { set innerHTML(v) { html.push(v); } } : null;
+  ctx._renderReport();
+  const page = html.join('');
+  const sub = (page.match(/<span class="report-summary-sub">([^<]*)<\/span>/) || [])[1] || '';
+  check('summary line: no rule-of-thumb clause and no placeholder clause when every source answers', sub.length > 0 && !/rule of thumb|placeholder/.test(sub) && /need your judgment\.$/.test(sub), sub);
+  check('report: every finding in the Colorado run is "From public data"', !page.includes('Rough estimate'));
+  ev(`state = freshState(); state.researchReport = { geocoded: ${JSON.stringify(geo)}, findings: ${JSON.stringify(all)}, timestamp: 't' }; state.researchAddress = 'x';`);
+  const rd = ev('buildReportData()').research;
+  check('saved report data: 0 rule-of-thumb items and 0 estimates', rd.ruleOfThumbCount === 0 && rd.estimatedCount === 0, JSON.stringify([rd.ruleOfThumbCount, rd.estimatedCount]));
+  const est = ctx._compileFindings(Object.assign({}, base, { nri: null, normals: null }), geo).filter(f => f.status === 'estimated');
+  check('summary wording stays generic: with NRI and normals down, the rule-of-thumb count reflects what fell back',
+    ctx._researchSummarySub(est, 0, 2).includes(`No address-level source exists yet for ${est.filter(f => ctx._isRuleOfThumb(f)).length} items; they use a state rule of thumb.`), ctx._researchSummarySub(est, 0, 2));
+  ctx.document.getElementById = () => null;
+  ev('state = freshState();');
+
+  // ── Copy rules ──
+  const newCopy = [wd.finding, wd.source, wNoNri.finding, wZero.finding, wMax.finding, hb.finding, hb.source, ctx._mapNRIHeat(0.79).finding,
+    ctx._mapNormalsHeat({ station: st, d90: 107.4, d100: 15.2, d0: 0 }).finding, wn(5).finding, by(cold5, 8).source, by(ruleCold, 8).finding,
+    sm5.finding, sm5.source, sm23.finding, ev('MANUAL_REASONS')[63],
+    'Counting NWS warnings over this point (Iowa Environmental Mesonet)', 'Checking NOAA climate normals for the nearest station', 'Counting bad-air days for your county (EPA)'];
+  check('Stage B copy: no em dash, no exclamation point', !newCopy.some(t => /[—!]/.test(t)), newCopy.filter(t => /[—!]/.test(t)).join(' | '));
+  check('Stage B copy: no "not X but Y" and no AI-style transitions', !newCopy.some(t => /\bnot (just )?[^.;]{1,40}\bbut\b|moreover|furthermore/i.test(t)));
+  check('Stage B copy: no placeholder syntax or bad numbers', !newCopy.some(t => /\[[A-Z ]+\]|\{\w+\}|undefined|NaN|null|Infinity/.test(t)), newCopy.filter(t => /undefined|NaN|null/.test(t)).join(' | '));
+
+  // ── Wiring ──
+  const src = fs.readFileSync(path.join(ROOT, 'js/research.js'), 'utf8');
+  check('runner: warnings, normals and airdays run in the parallel set and reach _compileFindings',
+    src.includes("_tracked('warnings',   _callWarningsAPI(lat, lng))") && src.includes("_tracked('normals',    _callNormalsAPI(lat, lng))") &&
+    src.includes("_tracked('airdays',    _callAirDaysAPI(fips5))") && /'warnings','normals','airdays'\]/.test(src) &&
+    /warnings, normals, airdays \},\s*\n\s*geocoded/.test(src));
+  check('IEM goes relay-first; normals and AQI days are direct', /relayThenDirect\(_iemUrl\(/.test(src) && /directFetch\(_normalsSearchUrl\(/.test(src) &&
+    /directFetch\(_normalsDataUrl\(/.test(src) && /directFetch\(_airDaysUrl\(/.test(src));
+  check('relay budget plus a direct retry fits inside the _tracked cap', ev('RELAY_FIRST_BUDGET_MS') + cfg.TIMEOUT_MS < cfg.TIMEOUT_MS + cfg.PROXY_EXTRA_MS + 3000);
+  const html2 = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  check('privacy statement names the new recipients (NOAA climate data, USDA, Iowa State)', /NOAA's climate data center/.test(html2) && /the USDA and Iowa State University's weather archive/.test(html2));
+  // ── End to end: startResearch with every host mocked (downtown Boulder) ──
+  console.log('v3.2.0 Stage B: full research run with mocked hosts');
+  {
+    const RELAY = 'https://relay.test';
+    cfg.RELAY_URL = RELAY;
+    const target = url => url.startsWith(RELAY + '/?url=') ? decodeURIComponent(url.slice((RELAY + '/?url=').length)) : null;
+    const hosts = [];
+    ctx.fetch = (url, opts) => {
+      url = String(url);
+      const t = target(url);
+      const u = t || url;
+      hosts.push((t ? 'relay:' : '') + new URL(u).hostname);
+      if (u.startsWith('https://nominatim.openstreetmap.org/')) return json([{ lat: '40.015', lon: '-105.2705', display_name: 'Pearl Street, Boulder, Colorado',
+        address: { postcode: '80302', 'ISO3166-2-lvl4': 'US-CO', county: 'Boulder County', city: 'Boulder' } }]);
+      if (u.startsWith('https://geo.fcc.gov/')) return json({ County: { FIPS: '08013', name: 'Boulder' }, State: { code: 'CO' } });
+      if (u.startsWith(cfg.NRI_TRACT)) return json({ features: [{ attributes: NRI_FX.downtown }] });
+      if (u.startsWith(cfg.NRI_COUNTY)) return json({ features: [{ attributes: NRI_FX.county }] });
+      if (u.startsWith(cfg.ESRI_FLOOD_HAZARD)) return json({ features: [] });
+      if (u.startsWith(cfg.USGS_SEISMIC)) return json({ response: { data: { pgam: 0.14 } } });
+      if (u.startsWith(cfg.USFS_WILDFIRE)) return json({ value: '2' });
+      if (u.startsWith(cfg.NWS_POINTS)) return json({ properties: { relativeLocation: { properties: { state: 'CO' } }, county: 'https://api.weather.gov/zones/county/COC013' } });
+      if (u.startsWith(cfg.DROUGHT_MONITOR)) return json([{ MapDate: '20261027', D0: 40, D1: 0, D2: 0, D3: 0, D4: 0 }]);
+      if (u.startsWith(cfg.EPA_TRI_ZIP)) return json([]);
+      if (u.startsWith(cfg.OPENFEMA_DECLARATIONS)) return json({ DisasterDeclarationsSummaries: [] });
+      if (u.startsWith(cfg.EPA_WATER_BOUNDARIES)) return json({ features: [{ attributes: WATER_FX.downtown }] });
+      if (u.startsWith(cfg.EPA_SDWIS_VIOLATIONS)) return json(WATER_FX.violations);
+      if (u.startsWith(cfg.USDA_SDA)) return json(SDA_FX.downtown);
+      if (u.startsWith(cfg.IEM_VTEC_BYPOINT)) return t ? json({ events: IEM_FX.downtown }) : Promise.reject(new Error('IEM should go through the relay'));
+      if (u.startsWith(cfg.NCEI_SEARCH)) return json(NCEI_FX.search);
+      if (u.startsWith(cfg.NCEI_DATA)) return json(NCEI_FX.data);
+      if (u.startsWith(cfg.EPA_AQI_COUNTY)) return json({ features: fiveYr });
+      return Promise.reject(new Error('unrouted ' + u));   // landslide tiles and inventory: the tile cannot load here, NRI fallback
+    };
+    const page2 = [];
+    ctx.document.getElementById = id => id === 'research-address-input' ? { value: '1234 Pearl St, Boulder, CO 80302' }
+      : id === 'research-report-content' ? { set innerHTML(v) { page2.push(v); } } : null;
+    ev('state = freshState(); _research.isRunning = false; _research.hasResults = false;');
+    await ctx.startResearch();
+    const fsE = ev('_research.findings');
+    const stE = ev('_research.stepStatuses');
+    check('full run: the three new steps succeed and the smoke step reads as data', ['warnings', 'normals', 'airdays', 'airquality'].every(s => stE[s] === 'success'), JSON.stringify(stE));
+    check('full run: wind 3 (IEM), heat 3 (normals), winter 4, smoke 4 (EPA), water 1, soil 2',
+      [63, 9, 8, 23, 27, 66].map(id => by(fsE, id) && by(fsE, id).scoreAssigned).join() === '3,3,4,4,1,2', [63, 9, 8, 23, 27, 66].map(id => by(fsE, id) && by(fsE, id).scoreAssigned).join());
+    check('full run: IEM went through the relay; NCEI and geopub went direct', hosts.includes('relay:mesonet.agron.iastate.edu') && !hosts.includes('mesonet.agron.iastate.edu') &&
+      hosts.includes('www.ncei.noaa.gov') && hosts.includes('geopub.epa.gov'));
+    const subE = ((page2.join('').match(/<span class="report-summary-sub">([^<]*)<\/span>/) || [])[1]) || '';
+    check('full run, Colorado: 0 items on the state rule of thumb in the summary line', fsE.filter(f => ctx._isRuleOfThumb(f)).length === 0 && subE && !/rule of thumb/.test(subE), subE);
+    cfg.RELAY_URL = savedRelay;
+    ctx.document.getElementById = () => null;
+    ctx.fetch = () => Promise.reject(new Error('no network in tests'));
+    ev('state = freshState();');
+  }
+  ctx.fetch = () => Promise.reject(new Error('no network in tests'));
+
+  // ── Relay: allow-list and the IEM cache ──
+  console.log('relay/worker.js: IEM and cache');
+  const w = await import(require('url').pathToFileURL(path.join(ROOT, 'relay/worker.js')).href);
+  const IEM = 'https://mesonet.agron.iastate.edu/json/vtec_events_bypoint.py?lat=40.01&lon=-105.27&sdate=2015-01-01&edate=2026-01-01';
+  const IEM2 = 'https://mesonet.agron.iastate.edu/json/vtec_events_bypoint.py?lat=40.04&lon=-105.33&sdate=2015-01-01&edate=2026-01-01';
+  const USGS = 'https://earthquake.usgs.gov/ws/designmaps/nehrp-2020.json?latitude=40';
+  check('relay allows mesonet.agron.iastate.edu', w.isAllowedTarget(IEM) && w.ALLOWED_HOSTS.has('mesonet.agron.iastate.edu'));
+  check('relay still rejects hosts the spec did not add (NCEI, geopub) and IEM look-alikes',
+    !w.isAllowedTarget('https://www.ncei.noaa.gov/access/services/data/v1') && !w.isAllowedTarget('https://geopub.epa.gov/ArcGIS/rest/services') &&
+    !w.isAllowedTarget('https://mesonet.agron.iastate.edu.evil.example/') && !w.isAllowedTarget('http://mesonet.agron.iastate.edu/json/'));
+  check('cache lifetime: IEM 30 days, everything else none', w.cacheTtlFor(IEM) === 2592000 && w.cacheTtlFor(USGS) === 0 && w.cacheTtlFor('nope') === 0);
+  check('cache key is the relay origin plus the full target URL', w.cacheKeyFor('https://relay.test/?url=x&junk=1', IEM) === 'https://relay.test/?url=' + encodeURIComponent(IEM));
+
+  const realFetch = globalThis.fetch, realCaches = globalThis.caches;
+  const store = new Map();
+  let puts = 0, upstream = [];
+  const fakeCache = {
+    match: async req => { const r = store.get(req.url); return r ? r.clone() : undefined; },
+    put: async (req, resp) => { puts++; if (req.method && req.method !== 'GET') throw new Error('GET only'); store.set(req.url, resp.clone()); },
+  };
+  const ORIGIN = 'https://worldaware.github.io';
+  const req = u => new Request('https://relay.test/?url=' + encodeURIComponent(u), { headers: { Origin: ORIGIN } });
+  const upOk = body => async (url, init) => { upstream.push({ url, init }); return new Response(body, { status: 200, headers: { 'Content-Type': 'application/json', 'Set-Cookie': 'a=b' } }); };
+  try {
+    globalThis.caches = { default: fakeCache };
+    globalThis.fetch = upOk('{"events":[1]}');
+    let r = await w.handleRequest(req(IEM));
+    check('IEM first request: MISS, upstream called once, 200 with ACAO and the body', r.status === 200 && r.headers.get('X-Relay-Cache') === 'MISS' &&
+      upstream.length === 1 && r.headers.get('Access-Control-Allow-Origin') === ORIGIN && (await r.text()) === '{"events":[1]}');
+    const stored = store.get('https://relay.test/?url=' + encodeURIComponent(IEM));
+    check('IEM answer stored under the full target URL with a 30-day lifetime and no CORS or cookie headers',
+      puts === 1 && !!stored && stored.headers.get('Cache-Control') === 'public, max-age=2592000' && !stored.headers.get('Access-Control-Allow-Origin') &&
+      !stored.headers.get('Set-Cookie') && stored.headers.get('Content-Type') === 'application/json');
+    check('IEM upstream fetch asks Cloudflare for a 30-day edge lifetime too', upstream[0].init.cf.cacheTtlByStatus['200-299'] === 2592000);
+    r = await w.handleRequest(req(IEM));
+    check('IEM second request: HIT, no upstream call, same body, ACAO for the caller', r.status === 200 && r.headers.get('X-Relay-Cache') === 'HIT' &&
+      upstream.length === 1 && (await r.text()) === '{"events":[1]}' && r.headers.get('Access-Control-Allow-Origin') === ORIGIN &&
+      r.headers.get('Cache-Control') === 'public, max-age=2592000');
+    r = await w.handleRequest(req(IEM2));
+    check('a different IEM URL is its own entry (upstream called again)', r.headers.get('X-Relay-Cache') === 'MISS' && upstream.length === 2 && store.size === 2);
+    r = await w.handleRequest(req(USGS));
+    check('non-IEM hosts are never cached', r.status === 200 && !r.headers.get('X-Relay-Cache') && puts === 2 && r.headers.get('Cache-Control') === 'public, max-age=3600' &&
+      upstream[2].init.cf.cacheTtlByStatus['200-299'] === 3600);
+    store.clear(); puts = 0;
+    globalThis.fetch = async () => new Response('busy', { status: 503, headers: { 'Content-Type': 'text/plain' } });
+    r = await w.handleRequest(req(IEM));
+    check('an IEM error answer passes through and is not cached', r.status === 503 && puts === 0 && store.size === 0 && r.headers.get('Cache-Control') === 'no-store');
+    let waited = null;
+    globalThis.fetch = upOk('{"events":[]}');
+    r = await w.handleRequest(req(IEM), {}, { waitUntil: p => { waited = p; } });
+    check('with an execution context, the cache write goes to waitUntil', r.status === 200 && waited && typeof waited.then === 'function');
+    await waited;
+    check('waitUntil write lands in the cache', store.size === 1);
+    globalThis.caches = { default: { match: async () => { throw new Error('cache down'); }, put: async () => { throw new Error('cache down'); } } };
+    upstream = []; globalThis.fetch = upOk('{"events":[2]}');
+    r = await w.handleRequest(req(IEM));
+    check('cache errors fall through: upstream answers and the response still arrives', r.status === 200 && upstream.length === 1 && (await r.text()) === '{"events":[2]}');
+    delete globalThis.caches;
+    upstream = [];
+    r = await w.handleRequest(req(IEM));
+    check('no Cache API (node, previews): IEM still relays normally', r.status === 200 && upstream.length === 1 && !r.headers.get('X-Relay-Cache') && (await r.text()) === '{"events":[2]}');
+    globalThis.caches = { default: {} };
+    r = await w.handleRequest(req(IEM));
+    check('a caches.default without match and put is treated as no cache', r.status === 200 && !r.headers.get('X-Relay-Cache'));
+    globalThis.caches = { default: fakeCache };
+    r = await w.handleRequest(new Request('https://relay.test/?url=' + encodeURIComponent(IEM), { headers: { Origin: 'https://evil.example' } }));
+    check('a cached host still refuses other origins', r.status === 403);
+    const ws = fs.readFileSync(path.join(ROOT, 'relay/worker.js'), 'utf8');
+    check('worker still has no console logging', !/console\.(log|info|warn|error|debug)/.test(ws));
+    const readme = fs.readFileSync(path.join(ROOT, 'relay/README.md'), 'utf8');
+    check('README lists IEM and explains the cache and the custom-domain requirement', readme.includes('mesonet.agron.iastate.edu') &&
+      /30 days/.test(readme) && /custom domain/.test(readme) && /workers\.dev/.test(readme));
+  } finally {
+    globalThis.fetch = realFetch;
+    if (realCaches === undefined) delete globalThis.caches; else globalThis.caches = realCaches;
+  }
+}
+
+asyncChecks().then(v31Checks).then(v32StageAChecks).then(v32StageBChecks).catch(e => { failed++; console.log('  FAIL async checks threw — ' + e.message + '\n' + e.stack); }).then(() => {  console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 });

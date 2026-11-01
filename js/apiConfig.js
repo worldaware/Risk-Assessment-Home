@@ -129,4 +129,30 @@ const API_CONFIG = {
      cannot help with this one. */
   USDA_SDA:
     'https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest',
+
+  /* ── Iowa Environmental Mesonet: NWS warnings by point — no key required ─
+     Every NWS watch and warning (VTEC) whose zone or county covers the
+     point. Answers direct with CORS (checked 2026-10-31), but IEM asks not
+     to be called from busy sites, so the app goes through the relay first
+     (the Worker caches IEM answers for 30 days) and calls direct only when
+     the relay is not set up or fails. Coordinates are rounded to 2 decimals
+     so neighbours share one cached answer. */
+  IEM_VTEC_BYPOINT:
+    'https://mesonet.agron.iastate.edu/json/vtec_events_bypoint.py',
+
+  /* ── NOAA NCEI 1991-2020 climate normals — no key required ─
+     Search finds normals stations in a box (bbox order north,west,south,east);
+     the data service returns the annual values for one station as strings
+     with leading spaces. Both direct with CORS (checked 2026-10-31). */
+  NCEI_SEARCH:
+    'https://www.ncei.noaa.gov/access/services/search/v1/data',
+  NCEI_DATA:
+    'https://www.ncei.noaa.gov/access/services/data/v1',
+
+  /* ── EPA AQI days by county (geopub map service) — no key required ─
+     Monthly percent of days in each AQI category per county with a monitor.
+     The capitalised /ArcGIS/ path answers; the lower-case one does not.
+     Direct with CORS, about 600 ms (checked 2026-10-31). */
+  EPA_AQI_COUNTY:
+    'https://geopub.epa.gov/ArcGIS/rest/services/myenv/aqi/MapServer/0/query',
 };
