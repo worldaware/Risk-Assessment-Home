@@ -1244,6 +1244,322 @@ console.log('Privacy statement placement (Henry, 2026-10-31)');
   check('About statement sits at the bottom, below the version line', aboutNote > about.indexOf('class="about-version"'));
 }
 
-asyncChecks().then(v31Checks).catch(e => { failed++; console.log('  FAIL async checks threw — ' + e.message + '\n' + e.stack); }).then(() => {  console.log(`\n${passed} passed, ${failed} failed`);
+/* ---------------------------------------------------------------
+   v3.2.0 Stage A: water (27) and soil (66)
+   Fixture values are the live answers captured from Henry's browser on
+   2026-10-31 (fixtures-v32.json). The Boulder violation rows are rebuilt
+   from the capture note (7 rows, 2 health-based beginning 2017-04-01 and
+   2017-07-01, no Tier 1); their rtc_date values were not captured, so the
+   dates below are test values.
+--------------------------------------------------------------- */
+const WATER_FX = {
+  downtown: { PWSID: 'CO0107152', PWS_Name: 'BOULDER CITY OF', Population_Served_Count: 166080, Service_Area_Type: 'Residential Area' },
+  violations: [
+    { violation_code: '01', violation_category_code: 'MCL', is_health_based_ind: 'Y', compl_per_begin_date: '2017-04-01 00:00:00', public_notification_tier: 2, rtc_date: '2017-09-30 00:00:00' },
+    { violation_code: '01', violation_category_code: 'MCL', is_health_based_ind: 'Y', compl_per_begin_date: '2017-07-01 00:00:00', public_notification_tier: 2, rtc_date: '2017-12-31 00:00:00' },
+    { violation_code: '75', violation_category_code: 'RPT', is_health_based_ind: 'N', compl_per_begin_date: '2019-01-01 00:00:00', public_notification_tier: 3, rtc_date: '2019-03-01 00:00:00' },
+    { violation_code: '36', violation_category_code: 'MR',  is_health_based_ind: 'N', compl_per_begin_date: '2020-04-01 00:00:00', public_notification_tier: 3, rtc_date: '2020-06-01 00:00:00' },
+    { violation_code: '36', violation_category_code: 'MR',  is_health_based_ind: 'N', compl_per_begin_date: '2021-10-01 00:00:00', public_notification_tier: 3, rtc_date: '2021-12-01 00:00:00' },
+    { violation_code: '75', violation_category_code: 'RPT', is_health_based_ind: 'N', compl_per_begin_date: '2023-01-01 00:00:00', public_notification_tier: 3, rtc_date: '2023-02-01 00:00:00' },
+    { violation_code: '36', violation_category_code: 'MR',  is_health_based_ind: 'N', compl_per_begin_date: '2024-07-01 00:00:00', public_notification_tier: 3, rtc_date: null },
+  ],
+};
+const SDA_FX = {
+  downtown:  { Table: [['compname', 'comppct_r', 'hzdept_r', 'hzdepb_r', 'lep_r'], ['Niwot', '85', '0', '36', '2.4'], ['Niwot', '85', '36', '48', '4.1'], ['Niwot', '85', '48', '152', '0.3']] },
+  foothills: { Table: [['compname', 'comppct_r', 'hzdept_r', 'hzdepb_r', 'lep_r'], ['Lefthand', '60', '0', '6', '0.6'], ['Lefthand', '60', '6', '27', '0.6'], ['Lefthand', '60', '27', '51', '0.4'], ['Lefthand', '60', '51', '81', '0.2'], ['Lefthand', '60', '81', '150', null]] },
+};
+const SDA_SQL_DOWNTOWN = "SELECT c.compname, c.comppct_r, ch.hzdept_r, ch.hzdepb_r, ch.lep_r FROM SDA_Get_Mukey_from_intersection_with_WktWgs84('point(-105.2705 40.015)') AS k JOIN component c ON c.mukey = k.mukey JOIN chorizon ch ON ch.cokey = c.cokey WHERE c.majcompflag = 'Yes' AND ch.hzdept_r < 150 ORDER BY c.comppct_r DESC, ch.hzdept_r";
+
+async function v32StageAChecks() {
+  console.log('v3.2.0 Stage A: water and soil');
+  const noop = () => {};
+  const ctx = {
+    console: { log: noop, warn: noop, error: console.error },
+    document: { getElementById: () => null, querySelector: () => null, querySelectorAll: () => [], addEventListener: noop },
+    localStorage: { getItem: () => null, setItem: noop, removeItem: noop },
+    AbortController: class { constructor() { this.signal = {}; } abort() {} },
+    setTimeout, clearTimeout, URL, Number, String, Math, Date, Array, Object, JSON, RegExp, Error, Promise, Set, Map,
+    fetch: () => Promise.reject(new Error('no network in tests')),
+  };
+  ctx.window = ctx; ctx.globalThis = ctx; ctx.addEventListener = noop; ctx.navigator = {};
+  vm.createContext(ctx);
+  ['js/apiConfig.js', 'js/scoreMapper.js', 'js/research.js', 'js/actions.js', 'js/report.js',
+   'js/importValidator.js', 'js/checklist.js', 'app.js']
+    .forEach(f => vm.runInContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), ctx, { filename: f }));
+  const ev = code => vm.runInContext(code, ctx);
+  const cfg = ev('API_CONFIG');
+  const HD = ev('HAZARD_DATA');
+  const names = Object.fromEntries(HD.map(h => [h.id, h.name]));
+  const cats = Object.fromEntries(HD.map(h => [h.id, h.category]));
+  const json = body => Promise.resolve({ ok: true, status: 200, json: async () => body });
+  const seen = [];
+  const route = handler => { seen.length = 0; ctx.fetch = (url, opts) => { seen.push({ url: String(url), opts: opts || {} }); return handler(String(url), opts || {}); }; };
+  const NOW = new Date(2026, 9, 31);   // 2026-10-31
+
+  // Config and ids
+  check('Stage A config: water boundaries, SDWIS violations and SDA endpoints',
+    cfg.EPA_WATER_BOUNDARIES === 'https://services.arcgis.com/cJ9YHowT8TU7DUyn/arcgis/rest/services/Water_System_Boundaries/FeatureServer/0/query' &&
+    cfg.EPA_SDWIS_VIOLATIONS === 'https://data.epa.gov/efservice/VIOLATION/PWSID' &&
+    cfg.USDA_SDA === 'https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest');
+  check('Stage A names match HAZARD_DATA exactly (27 and 66)', ev('H_NAME')[27] === names[27] && ev('H_NAME')[66] === names[66] &&
+    names[27] === 'Water outage or unsafe tap water' && names[66] === 'Shifting or swelling soil under the house');
+  check('Stage A categories: 27 Outages & Service Interruptions, 66 Natural Hazards', ev('_hCat')(27) === cats[27] && ev('_hCat')(66) === cats[66]);
+  const steps = ev('STEPS');
+  check('Stage A steps: water and soil with the spec labels, after declarations',
+    steps.findIndex(s => s.id === 'water' && s.label === 'Checking your drinking-water system (EPA)') === steps.findIndex(s => s.id === 'declarations') + 1 &&
+    steps.some(s => s.id === 'soil' && s.label === 'Checking soil shrink-swell (USDA)'));
+
+  // ── Soil mapping at the boundaries ──
+  const sc = v => ctx._soilScore(v);
+  check('soil score: 2.99 = 1, 3 = 2', sc(2.99) === 1 && sc(3) === 2);
+  check('soil score: 4.49 = 2, 4.5 = 3', sc(4.49) === 2 && sc(4.5) === 3);
+  check('soil score: 5.99 = 3, 6 = 4', sc(5.99) === 3 && sc(6) === 4);
+  check('soil score: 8.99 = 4, 9 = 5, 25 = 5', sc(8.99) === 4 && sc(9) === 5 && sc(25) === 5);
+  check('soil score: 0 = 1', sc(0) === 1);
+  check('soil class words: low under 3, moderate 3 to 6, high 6 to 9, very high 9 and up',
+    [2.9, 3, 5.9, 6, 8.9, 9].map(ctx._soilClass).join() === 'low,moderate,moderate,high,high,very high');
+
+  // ── Soil fixtures ──
+  const sd = ctx._mapSoilTable(SDA_FX.downtown), sf = ctx._mapSoilTable(SDA_FX.foothills);
+  check('soil fixture: downtown max 4.1 = 2, Medium, SSURGO source', sd.score === 2 && sd.confidence === 'Medium' &&
+    sd.source === 'USDA NRCS Soil Data Access (SSURGO), linear extensibility', JSON.stringify(sd));
+  check('soil fixture: downtown names the component, value, layer and class',
+    sd.finding.startsWith('Niwot: shrink-swell (LEP) up to 4.1 percent in a layer at 36 to 48 cm; moderate.'), sd.finding);
+  check('soil fixture: foothills max 0.6 = 1 (null horizon counts as 0), low',
+    sf.score === 1 && sf.finding.startsWith('Lefthand: shrink-swell (LEP) up to 0.6 percent in a layer at 0 to 6 cm; low.'), sf.finding);
+  check('soil: a horizon starting at 150 cm or deeper is ignored',
+    ctx._mapSoilTable({ Table: [['compname', 'hzdept_r', 'hzdepb_r', 'lep_r'], ['A', '0', '50', '2'], ['A', '150', '200', '12']] }).score === 1);
+  check('soil: the largest value across components wins and names its component',
+    (() => { const r = ctx._mapSoilTable({ Table: [['compname', 'comppct_r', 'hzdept_r', 'hzdepb_r', 'lep_r'], ['A', '60', '0', '30', '3.2'], ['B', '30', '10', '40', '9.4']] });
+      return r.score === 5 && r.finding.startsWith('B: shrink-swell (LEP) up to 9.4 percent in a layer at 10 to 40 cm; very high.'); })());
+  check('soil: column order is read from the header, not assumed',
+    ctx._mapSoilTable({ Table: [['lep_r', 'hzdepb_r', 'hzdept_r', 'compname'], ['6.0', '20', '0', 'Reorder']] }).score === 4);
+  check('soil: every lep_r null is no data, not a low score',
+    ctx._mapSoilTable({ Table: [['compname', 'hzdept_r', 'hzdepb_r', 'lep_r'], ['Rock outcrop', '0', '20', null]] }) === null);
+  check('soil: header only, no table, or no lep column is no data',
+    ctx._mapSoilTable({ Table: [['compname', 'lep_r']] }) === null && ctx._mapSoilTable({}) === null && ctx._mapSoilTable(null) === null &&
+    ctx._mapSoilTable({ Table: [['compname'], ['A']] }) === null);
+
+  // ── Soil call: SQL and the POST ──
+  check('soil SQL for downtown matches the captured query exactly', ctx._soilSql(40.015, -105.2705) === SDA_SQL_DOWNTOWN, ctx._soilSql(40.015, -105.2705));
+  check('soil SQL rounds to 4 decimals and writes longitude first', ctx._soilSql(40.039412, -105.33201).includes("point(-105.332 40.0394)"));
+  route(() => json(SDA_FX.downtown));
+  const soilCall = await ctx._callSoilAPI(40.015, -105.2705);
+  const post = seen[0];
+  const bodyFields = Object.fromEntries(String(post.opts.body).split('&').map(kv => kv.split('=').map(decodeURIComponent)));
+  check('soil call: one POST to the SDA endpoint, form-encoded, no preflight header',
+    seen.length === 1 && post.url === cfg.USDA_SDA && post.opts.method === 'POST' &&
+    post.opts.headers['Content-Type'] === 'application/x-www-form-urlencoded' && Object.keys(post.opts.headers).length === 1, JSON.stringify(post.opts));
+  check('soil call: body carries the SQL and JSON+COLUMNNAME (the plus is encoded)',
+    bodyFields.query === SDA_SQL_DOWNTOWN && bodyFields.format === 'JSON+COLUMNNAME' && String(post.opts.body).includes('format=JSON%2BCOLUMNNAME'), post.opts.body);
+  check('soil call: downtown result is 2', soilCall.score === 2);
+  route(() => json(SDA_FX.foothills));
+  check('soil call: foothills result is 1', (await ctx._callSoilAPI(40.0394, -105.332)).score === 1);
+  route(() => json({ Table: [['compname', 'lep_r']] }));
+  let e1 = null; try { await ctx._callSoilAPI(40, -105); } catch (e) { e1 = e; }
+  check('soil call: no rows throws (Needs your judgment)', !!e1);
+  route(() => Promise.resolve({ ok: true, status: 200, json: async () => { throw new SyntaxError('Unexpected end of JSON input'); } }));
+  e1 = null; try { await ctx._callSoilAPI(40, -105); } catch (e) { e1 = e; }
+  check('soil call: an empty body (water or unmapped point) throws', !!e1);
+  route(() => Promise.resolve({ ok: false, status: 500, json: async () => ({}) }));
+  e1 = null; try { await ctx._callSoilAPI(40, -105); } catch (e) { e1 = e; }
+  check('soil call: HTTP 500 throws', !!e1 && /HTTP 500/.test(e1.message));
+  route(() => Promise.reject(new Error('down')));
+  e1 = null; try { await ctx._callSoilAPI(40, -105); } catch (e) { e1 = e; }
+  check('soil call: network failure throws', !!e1);
+
+  // ── Water: system choice ──
+  const pick = ctx._pickWaterSystem;
+  const feat = (id, name, pop, type) => ({ attributes: { PWSID: id, PWS_Name: name, Population_Served_Count: pop, Service_Area_Type: type } });
+  check('water pick: the fixture polygon', (() => { const r = pick([{ attributes: WATER_FX.downtown }]); return r.pwsid === 'CO0107152' && r.name === 'BOULDER CITY OF' && r.population === 166080; })());
+  check('water pick: no features or an unusable PWSID is no system', pick([]) === null && pick(null) === null && pick([feat('bad id', 'X', 5, 'Residential Area')]) === null);
+  check('water pick: overlapping polygons prefer residential, then the smaller system',
+    pick([feat('CO0000001', 'BIG', 500000, 'Residential Area'), feat('CO0000002', 'DISTRICT', 8000, 'Residential Area'), feat('CO0000003', 'PARK', 50, 'Mobile Home Park')]).pwsid === 'CO0000002');
+  check('water pick: markup characters are stripped from the name', pick([feat('CO0000001', 'A<b>&"B', 10, 'Residential Area')]).name === 'AbB');
+
+  // ── Water: score rules at their boundaries (now = 2026-10-31) ──
+  const sys = pop => ({ pwsid: 'CO0107152', name: 'TEST WATER', population: pop });
+  const hb = (begin, extra) => Object.assign({ is_health_based_ind: 'Y', compl_per_begin_date: begin, public_notification_tier: 2, rtc_date: '2030-01-01 00:00:00' }, extra || {});
+  const nh = (begin, extra) => Object.assign({ is_health_based_ind: 'N', compl_per_begin_date: begin, public_notification_tier: 3, rtc_date: '2030-01-01 00:00:00' }, extra || {});
+  const ws = (pop, rows) => ctx._mapWaterSystem(sys(pop), rows, NOW).score;
+  check('water: no violations, large system = 1', ws(166080, []) === 1);
+  check('water: population 3,300 adds nothing, 3,299 adds one', ws(3300, []) === 1 && ws(3299, []) === 2 && ws(0, []) === 2);
+  check('water: unknown population adds nothing', ctx._mapWaterSystem({ pwsid: 'CO0107152', name: 'X', population: null }, [], NOW).score === 1);
+  check('water: health-based violation that began exactly 5 years ago counts, a day earlier does not',
+    ws(50000, [hb('2021-10-31 00:00:00')]) === 2 && ws(50000, [hb('2021-10-30 00:00:00')]) === 1);
+  check('water: a recent violation that is not health-based adds nothing', ws(50000, [nh('2026-01-01 00:00:00')]) === 1);
+  check('water: Tier 1 began exactly 10 years ago counts, a day earlier does not',
+    ws(50000, [nh('2016-10-31 00:00:00', { public_notification_tier: 1 })]) === 2 && ws(50000, [nh('2016-10-30 00:00:00', { public_notification_tier: 1 })]) === 1);
+  check('water: Tier 1 given as the string "1" counts', ws(50000, [nh('2020-01-01 00:00:00', { public_notification_tier: '1' })]) === 2);
+  check('water: a health-based violation with no rtc_date adds one (null, missing and empty)',
+    ws(50000, [hb('2010-01-01 00:00:00', { rtc_date: null })]) === 2 && ws(50000, [hb('2010-01-01 00:00:00', { rtc_date: undefined })]) === 2 &&
+    ws(50000, [hb('2010-01-01 00:00:00', { rtc_date: '' })]) === 2);
+  check('water: a non-health-based violation with no rtc_date adds nothing', ws(50000, [nh('2010-01-01 00:00:00', { rtc_date: null })]) === 1);
+  check('water: all four rules together reach the cap of 5',
+    ws(900, [hb('2025-06-01 00:00:00', { public_notification_tier: 1, rtc_date: null })]) === 5);
+  check('water: upper-case field names from another envelope also read',
+    ws(50000, [{ IS_HEALTH_BASED_IND: 'Y', COMPL_PER_BEGIN_DATE: '2025-06-01T00:00:00', PUBLIC_NOTIFICATION_TIER: 2, RTC_DATE: '2025-08-01' }]) === 2);
+
+  // ── Water: Boulder fixture ──
+  const wd = ctx._mapWaterSystem(pick([{ attributes: WATER_FX.downtown }]), WATER_FX.violations, NOW);
+  check('water fixture: downtown = 1, High, source names the dataset and year',
+    wd.score === 1 && wd.confidence === 'High' && wd.source === 'EPA drinking-water system boundaries v3 and SDWIS violations, 2026', JSON.stringify(wd));
+  check('water fixture: finding names system, id, population, counts and years',
+    wd.finding.startsWith('On BOULDER CITY OF (CO0107152, 166,080 people). 2 health-based violations, last in 2017; none in the last 5 years; no acute (Tier 1) violations in the last 10 years.'), wd.finding);
+  const rows2 = WATER_FX.violations.map(r => Object.assign({}, r));
+  rows2[1].rtc_date = null;
+  const wd2 = ctx._mapWaterSystem(pick([{ attributes: WATER_FX.downtown }]), rows2, NOW);
+  check('water fixture: if one 2017 violation had no rtc_date the score would be 2 and the finding says so',
+    wd2.score === 2 && /1 health-based violation has no recorded return to compliance/.test(wd2.finding), wd2.finding);
+  const wRecent = ctx._mapWaterSystem(sys(2000), [hb('2025-01-01 00:00:00', { public_notification_tier: 1 }), hb('2024-01-01 00:00:00')], NOW);
+  check('water finding: recent and acute counts and the small-system note',
+    wRecent.finding.includes('2 health-based violations, last in 2025; 2 began in the last 5 years; 1 acute (Tier 1) violation in the last 10 years') &&
+    /fewer than 3,300 people score one level higher/.test(wRecent.finding), wRecent.finding);
+  check('water finding: no health-based violations on record reads plainly', ctx._mapWaterSystem(sys(5000), [nh('2020-01-01 00:00:00')], NOW).finding.includes('No health-based violations on record; no acute (Tier 1) violations in the last 10 years.'));
+  // violations unreadable
+  const wLow = ctx._mapWaterSystem(sys(166080), null, NOW), wLowSmall = ctx._mapWaterSystem(sys(2000), null, NOW);
+  check('water: violations unreadable scores from population only (1 or 2), Low, and says so',
+    wLow.score === 1 && wLowSmall.score === 2 && wLow.confidence === 'Low' && /violation history could not be read/.test(wLow.finding) &&
+    wLow.source === 'EPA drinking-water system boundaries v3, 2026');
+
+  // ── Water call, mocked fetch ──
+  const waterRoute = (violations) => route(url => {
+    if (url.startsWith(cfg.EPA_WATER_BOUNDARIES)) return json({ features: [{ attributes: WATER_FX.downtown }] });
+    if (url.startsWith(cfg.EPA_SDWIS_VIOLATIONS)) return violations();
+    return Promise.reject(new Error('unexpected ' + url));
+  });
+  waterRoute(() => json(WATER_FX.violations));
+  const wc = await ctx._callWaterAPI(40.015, -105.2705);
+  const bu = decodeURIComponent(seen[0].url);
+  check('water call: boundaries point query, then violations for the PWSID, both direct GETs',
+    wc.kind === 'system' && seen.length === 2 && bu.includes('geometry={"x":-105.2705,"y":40.015,"spatialReference":{"wkid":4326}}') &&
+    bu.includes('outFields=PWSID,PWS_Name,Population_Served_Count,Service_Area_Type') && bu.includes('returnGeometry=false') &&
+    seen[1].url === 'https://data.epa.gov/efservice/VIOLATION/PWSID/CO0107152/JSON' && !seen[0].opts.method && !seen[1].opts.method, seen.map(x => x.url).join(' | '));
+  check('water call: downtown scores 1 (with today\'s date: 2017 violations are older than 5 years)', wc.score === 1);
+  waterRoute(() => Promise.reject(new Error('timeout')));
+  const wcLow = await ctx._callWaterAPI(40.015, -105.2705);
+  check('water call: violations call fails with a polygon: population-only score, Low', wcLow.kind === 'system' && wcLow.confidence === 'Low' && wcLow.score === 1);
+  waterRoute(() => json({ nope: true }));
+  check('water call: violations reply that is not a list is treated as unreadable', (await ctx._callWaterAPI(40.015, -105.2705)).confidence === 'Low');
+  waterRoute(() => json([]));
+  check('water call: an empty violation list is a valid clean record (High)', (await ctx._callWaterAPI(40.015, -105.2705)).confidence === 'High');
+  route(() => json({ features: [] }));
+  const well = await ctx._callWaterAPI(40.0394, -105.332);
+  check('water call: foothills (no polygon) is the private-well path with one request', well.kind === 'well' && seen.length === 1);
+  route(() => Promise.reject(new Error('down')));
+  e1 = null; try { await ctx._callWaterAPI(40, -105); } catch (e) { e1 = e; }
+  check('water call: boundaries failure throws (Needs your judgment)', !!e1);
+  route(() => json({ error: { code: 400, message: 'bad geometry' } }));
+  e1 = null; try { await ctx._callWaterAPI(40, -105); } catch (e) { e1 = e; }
+  check('water call: an ArcGIS error inside HTTP 200 throws', !!e1);
+  route(() => json({ unexpected: 1 }));
+  e1 = null; try { await ctx._callWaterAPI(40, -105); } catch (e) { e1 = e; }
+  check('water call: a reply without features throws', !!e1);
+
+  // ── Private well, with and without a flood or drought finding of 4+ ──
+  const mk = (id, score) => ({ hazardId: id, scoreAssigned: score, status: 'success' });
+  const wellOf = fs => ctx._mapWaterWell(fs);
+  check('well: base is 3, Medium, with the spec sentence', (() => { const w = wellOf([mk(3, 2), mk(4, 3), mk(10, 3)]);
+    return w.score === 3 && w.confidence === 'Medium' && w.finding === 'No public water system is mapped at this address, which usually means a private well. Wells depend on your pump, your power and your groundwater.'; })());
+  check('well: river flood 4 raises to 4 and names it', (() => { const w = wellOf([mk(3, 4), mk(4, 2), mk(10, 2)]); return w.score === 4 && w.finding.endsWith('Raised one level because river and creek flood is rated 4 or more here.'); })());
+  check('well: flash flood 4 raises to 4', wellOf([mk(3, 2), mk(4, 4), mk(10, 2)]).score === 4);
+  check('well: drought 4 raises to 4 and names it', (() => { const w = wellOf([mk(3, 3), mk(4, 3), mk(10, 5)]); return w.score === 4 && /Raised one level because drought and watering limits is rated 4 or more here\.$/.test(w.finding); })());
+  check('well: 3 on every hazard does not raise (boundary)', wellOf([mk(3, 3), mk(4, 3), mk(10, 3)]).score === 3);
+  check('well: several high findings raise once and name each', (() => { const w = wellOf([mk(3, 5), mk(4, 4), mk(10, 4)]);
+    return w.score === 4 && w.finding.endsWith('Raised one level because river and creek flood, flash flood and drought and watering limits are rated 4 or more here.'); })());
+  check('well: missing or error findings do not raise', wellOf([]).score === 3 && wellOf([{ hazardId: 3, scoreAssigned: null, status: 'error' }]).score === 3);
+  check('well: source says no system mapped here', wellOf([]).source === 'EPA drinking-water system boundaries v3, 2026 (no system mapped here)');
+
+  // ── _compileFindings ──
+  ev('state = freshState();');
+  const geo = { lat: 40.015, lng: -105.2705, zip: '80302', stateAbbr: 'CO', county: 'Boulder County', fips5: '08013' };
+  const okf = (score) => ({ score, finding: 'x', confidence: 'High' });
+  const mkBase = (flood, drought) => ({ flood: okf(flood), earthquake: okf(3), wildfire: okf(3), weather: { stateAbbr: 'CO' }, drought: okf(drought),
+    epa: { chemScore: 2, finding: '2 facilities', confidence: 'Medium', highHazardCount: 1, potwCount: 1 }, landslide: null, nri: null });
+  const by = (fs, id) => fs.find(f => f.hazardId === id);
+  const downtown = ctx._compileFindings(Object.assign(mkBase(3, 2), { water: wd, soil: sd }), geo);
+  check('compile downtown: water 1 and soil 2, status success, with source and confidence',
+    by(downtown, 27).scoreAssigned === 1 && by(downtown, 27).status === 'success' && by(downtown, 27).confidence === 'High' &&
+    by(downtown, 66).scoreAssigned === 2 && by(downtown, 66).status === 'success' && by(downtown, 66).confidence === 'Medium');
+  check('compile: water and soil use the exact HAZARD_DATA names and categories',
+    by(downtown, 27).hazardName === names[27] && by(downtown, 27).category === cats[27] && by(downtown, 66).hazardName === names[66] && by(downtown, 66).category === cats[66]);
+  check('compile: both findings keep the standard shape', [27, 66].every(id => ['hazardId', 'hazardName', 'category', 'scoreAssigned', 'source', 'finding', 'confidence', 'status', 'isOverridden'].every(k => k in by(downtown, id))));
+  const foot = ctx._compileFindings(Object.assign(mkBase(2, 3), { water: { kind: 'well' }, soil: sf }), geo);
+  check('compile foothills: private well = 3 estimated, Medium; soil 1',
+    by(foot, 27).scoreAssigned === 3 && by(foot, 27).status === 'estimated' && by(foot, 27).confidence === 'Medium' && by(foot, 66).scoreAssigned === 1);
+  check('compile foothills: the well estimate is not a rule of thumb and is an answered estimate', !ctx._isRuleOfThumb(by(foot, 27)) && ctx._isAnsweredEstimate(by(foot, 27)));
+  const footFlood = ctx._compileFindings(Object.assign(mkBase(4, 3), { water: { kind: 'well' }, soil: sf }), geo);
+  check('compile well + flood 4: raised to 4 and the finding says river and creek flood',
+    by(footFlood, 27).scoreAssigned === 4 && /river and creek flood and flash flood are rated 4 or more here\.$/.test(by(footFlood, 27).finding), by(footFlood, 27).finding);
+  const footDrought = ctx._compileFindings(Object.assign(mkBase(2, 4), { water: { kind: 'well' }, soil: sf }), geo);
+  check('compile well + drought 4: raised to 4 and the finding says drought', by(footDrought, 27).scoreAssigned === 4 && /drought and watering limits is rated 4 or more/.test(by(footDrought, 27).finding));
+  const footFloodFallback = ctx._compileFindings(Object.assign(mkBase(2, 2), { flood: null, drought: null, water: { kind: 'well' } }), geo);
+  check('compile well: placeholder flood and drought (score 2) do not raise', by(footFloodFallback, 27).scoreAssigned === 3);
+  check('compile well with a mapped system: flood 5 does not change a system score', by(ctx._compileFindings(Object.assign(mkBase(5, 5), { water: wd }), geo), 27).scoreAssigned === 1);
+  const failed = ctx._compileFindings(Object.assign(mkBase(3, 2), { water: null, soil: null }), geo);
+  check('compile: failed water and soil lookups add no finding (Needs your judgment)', !by(failed, 27) && !by(failed, 66));
+  check('judgment list: 27 and 66 carry the EPA map and Web Soil Survey links',
+    ev('MANUAL_REASONS')[27].includes('https://www.epa.gov/ground-water-and-drinking-water/community-water-system-service-area-boundaries') &&
+    ev('MANUAL_REASONS')[66].includes('https://websoilsurvey.nrcs.usda.gov/'));
+  check('compile: omitting water and soil (older callers) still works', !by(ctx._compileFindings(mkBase(3, 2), geo), 27));
+  ev('state.scores[66] = { na: true }; state.scores[27] = { na: true };');
+  const ruled = ctx._compileFindings(Object.assign(mkBase(3, 2), { water: wd, soil: sd }), geo);
+  check('compile: soil and water are skipped when marked Does not apply here', !by(ruled, 27) && !by(ruled, 66));
+  ev('state = freshState();');
+
+  // Hazards sit in the right place for the report and Assess screen
+  check('soil (66) is in the Less common here group; research lists it by category like Hurricane',
+    HD.find(h => h.id === 66).group === 'rare' && HD.find(h => h.id === 7).group === 'rare' && HD.find(h => h.id === 66).category === HD.find(h => h.id === 7).category);
+  ev(`state = freshState(); _research.geocoded = ${JSON.stringify(geo)}; _research.findings = ${JSON.stringify(foot)}; _research.hasResults = true;`);
+  const html = [];
+  ctx.document.getElementById = id => id === 'research-report-content' ? { set innerHTML(v) { html.push(v); } } : null;
+  ctx._renderReport();
+  const page = html.join('');
+  const order = ['Natural hazards', 'Shifting or swelling soil under the house', 'Industrial and CBRN', 'Outages and service interruptions', 'Water outage or unsafe tap water'].map(t => page.indexOf(t));
+  check('report: the soil card lists under Natural hazards (like Hurricane), the water card under Outages and service interruptions',
+    order.every(i => i > -1) && order.every((v, i) => i === 0 || v > order[i - 1]), order.join());
+  check('report: the soil and water cards carry their finding and source text', page.includes('Lefthand: shrink-swell (LEP) up to 0.6 percent') &&
+    page.includes('EPA drinking-water system boundaries v3, 2026 (no system mapped here)') && page.includes('Rough estimate'));
+  ctx.document.getElementById = () => null;
+
+  // ── Summary wording ──
+  const est = (n, src) => Array.from({ length: n }, () => ({ status: 'estimated', source: src }));
+  const WELL = 'EPA drinking-water system boundaries v3, 2026 (no system mapped here)';
+  check('summary: a private-well estimate is not called a placeholder or a rule of thumb',
+    ctx._researchSummarySub(est(1, WELL), 0, 3) === '1 is an estimate where the source answered but holds no record for this address. 3 need your judgment.', ctx._researchSummarySub(est(1, WELL), 0, 3));
+  check('summary: well estimate, rule of thumb and a real placeholder each get their own clause',
+    ctx._researchSummarySub(est(1, WELL).concat(est(1, ev('WEATHER_RULE_SRC')), est(1, 'World Aware placeholder (x did not respond)')), 0, 2) ===
+    '1 is an estimate where the source answered but holds no record for this address. 1 is a rough placeholder because a source did not respond. No address-level source exists yet for 1 item; it uses a state rule of thumb. 2 need your judgment.');
+  check('report sentence: well estimate is its own clause',
+    ctx._sourcesSentence({ findingCount: 10, estimatedCount: 2, ruleOfThumbCount: 0, answeredEstimateCount: 1 }) ===
+    'Public data supplied the likelihood for 8 hazards; 1 is an estimate where the source answered but holds no record for this address; 1 is a rough placeholder because a source did not respond.',
+    ctx._sourcesSentence({ findingCount: 10, estimatedCount: 2, ruleOfThumbCount: 0, answeredEstimateCount: 1 }));
+  check('report sentence: older saved reports (no answeredEstimateCount) read as before',
+    ctx._sourcesSentence({ findingCount: 12, estimatedCount: 2, ruleOfThumbCount: 1 }) === 'Public data supplied the likelihood for 10 hazards; 1 is a rough placeholder because a source did not respond; no address-level source exists yet for 1 item; it uses a state rule of thumb.');
+  ev(`state = freshState(); state.researchReport = { geocoded: ${JSON.stringify(geo)}, findings: ${JSON.stringify(foot)}, timestamp: 't' }; state.researchAddress = 'x';`);
+  const rdata = ev('buildReportData()').research;
+  check('buildReportData counts the private-well estimate apart from placeholders and rules of thumb',
+    rdata.estimatedCount === 5 && rdata.ruleOfThumbCount === 4 && rdata.answeredEstimateCount === 1, JSON.stringify([rdata.estimatedCount, rdata.ruleOfThumbCount, rdata.answeredEstimateCount]));
+  ev('state = freshState();');
+
+  // ── Copy rules on every new string ──
+  const newCopy = [wd.finding, wd2.finding, wRecent.finding, wLow.finding, wLowSmall.finding, by(foot, 27).finding, by(footFlood, 27).finding,
+    by(footDrought, 27).finding, sd.finding, sf.finding, sd.source, wd.source, WELL, ev('MANUAL_REASONS')[27], ev('MANUAL_REASONS')[66],
+    'Checking your drinking-water system (EPA)', 'Checking soil shrink-swell (USDA)'];
+  check('Stage A copy: no em dash, no exclamation point', !newCopy.some(t => /[—!]/.test(t)), newCopy.filter(t => /[—!]/.test(t)).join(' | '));
+  check('Stage A copy: no "not X but Y" and no AI-style transitions', !newCopy.some(t => /\bnot (just )?[^.;]{1,40}\bbut\b|moreover|furthermore/i.test(t)), newCopy.filter(t => /\bnot (just )?[^.;]{1,40}\bbut\b|moreover|furthermore/i.test(t)).join(' | '));
+  check('Stage A copy: findings read as sentences (no placeholder syntax)', !newCopy.some(t => /\[[A-Z ]+\]|\{\w+\}|undefined|NaN|null/.test(t)));
+
+  // ── Wiring ──
+  const src = fs.readFileSync(path.join(ROOT, 'js/research.js'), 'utf8');
+  check('runner: water and soil run in the parallel set and reach _compileFindings',
+    src.includes("_tracked('water',      _callWaterAPI(lat, lng))") && src.includes("_tracked('soil',       _callSoilAPI(lat, lng))") &&
+    /\['nri'[^\]]*'water','soil'\]/.test(src) && /declarations, water, soil \},\s*\n\s*geocoded/.test(src));
+  check('soil uses the one POST helper, and no relay (it is GET-only)', src.includes('directPostForm(API_CONFIG.USDA_SDA') && !/proxyFetch\(API_CONFIG\.USDA_SDA|relayFetch\(API_CONFIG\.USDA_SDA/.test(src));
+  check('water calls are direct, not through the relay', !/proxyFetch\([^)]*(WATER|SDWIS)|relayFetch\([^)]*(WATER|SDWIS)/.test(src));
+  ctx.fetch = () => Promise.reject(new Error('no network in tests'));
+}
+
+asyncChecks().then(v31Checks).then(v32StageAChecks).catch(e => { failed++; console.log('  FAIL async checks threw — ' + e.message + '\n' + e.stack); }).then(() => {  console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 });

@@ -107,4 +107,26 @@ const API_CONFIG = {
   // USGS post-fire debris-flow assessments, layer 4 Basin Combined Hazard (count within 1 km)
   USGS_POSTFIRE:
     'https://services.arcgis.com/v01gqwM5QqNysAAi/ArcGIS/rest/services/USGS_Post_Fire_Hazard_Assessment_Data/FeatureServer/4/query',
+
+  /* ── EPA Water System Boundaries (v3) — no key required ───
+     Community water system service areas as polygons (ArcGIS Online, EPA).
+     A point query returns PWSID, PWS_Name, Population_Served_Count and
+     Service_Area_Type. No polygon at a point usually means a private well.
+     Sends CORS headers, so it is called direct (checked from Henry's
+     browser, 2026-10-31). */
+  EPA_WATER_BOUNDARIES:
+    'https://services.arcgis.com/cJ9YHowT8TU7DUyn/arcgis/rest/services/Water_System_Boundaries/FeatureServer/0/query',
+
+  /* ── EPA SDWIS violations through Envirofacts — no key required ─
+     <base>/<PWSID>/JSON returns one row per violation with lowercase
+     fields. Direct, about 1.5 s (checked 2026-10-31). */
+  EPA_SDWIS_VIOLATIONS:
+    'https://data.epa.gov/efservice/VIOLATION/PWSID',
+
+  /* ── USDA Soil Data Access (SSURGO) — no key required ─────
+     The only POST in the app: a form-encoded SQL query. Answers direct with
+     CORS (108 to 544 ms, checked 2026-10-31). The relay is GET-only, so it
+     cannot help with this one. */
+  USDA_SDA:
+    'https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest',
 };

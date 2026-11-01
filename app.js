@@ -1526,6 +1526,8 @@ function buildReportData() {
       estimatedCount: live.filter(f => f.status === 'estimated').length,
       // State rules of thumb are estimates by design, not a source that failed
       ruleOfThumbCount: live.filter(f => f.status === 'estimated' && /rule of thumb/i.test(String(f.source || ''))).length,
+      // Estimates where the source answered but holds no record for the address (private well)
+      answeredEstimateCount: live.filter(f => f.status === 'estimated' && /no system mapped here/i.test(String(f.source || ''))).length,
       unavailableCount: live.filter(f => f.status === 'error').length,
       confidence: conf,
       sources,

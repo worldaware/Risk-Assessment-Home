@@ -115,9 +115,12 @@ function _sourcesSentence(rs) {
   const real = Math.max(0, (rs.findingCount || 0) - (rs.estimatedCount || 0));
   // Saved reports from before v3.1.0 have no ruleOfThumbCount; they read as before.
   const rule  = Math.min(rs.estimatedCount || 0, rs.ruleOfThumbCount || 0);
-  const other = (rs.estimatedCount || 0) - rule;
+  // v3.2.0: estimates where the source answered but holds no record (private well)
+  const answered = Math.min((rs.estimatedCount || 0) - rule, rs.answeredEstimateCount || 0);
+  const other = (rs.estimatedCount || 0) - rule - answered;
   const parts = [];
   if (real > 0) parts.push(`Public data supplied the likelihood for ${real} hazard${real === 1 ? '' : 's'}`);
+  if (answered) parts.push(`${answered} ${answered === 1 ? 'is an estimate' : 'are estimates'} where the source answered but holds no record for this address`);
   if (other) parts.push(`${other} ${other === 1 ? 'is a' : 'are'} rough placeholder${other === 1 ? '' : 's'} because a source did not respond`);
   if (rule) parts.push(`no address-level source exists yet for ${rule} item${rule === 1 ? '' : 's'}; ${rule === 1 ? 'it uses' : 'they use'} a state rule of thumb`);
   if (parts.length === 0) return 'No public data source responded; every likelihood below was rated by hand.';

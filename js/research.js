@@ -26,6 +26,8 @@ const H_ID = {
   CHEMICAL_PLANT:     15,
   AIR_QUALITY:        23,   // "Smoke and bad air days" (absorbed dust storm in v3)
   HIGH_WIND:          63,
+  WATER:              27,   // "Water outage or unsafe tap water"
+  SOIL:               66,   // "Shifting or swelling soil under the house"
 };
 // v3.0.0 dropped the dust storm (14), wastewater (21) and WUI (55) findings:
 // those hazards merged into smoke, water outage and wildfire.
@@ -45,9 +47,11 @@ const H_NAME = {
   11: 'Landslide, rockfall and debris flow after fire',
   15: 'Chemical spill from road, rail or a nearby plant',
   23: 'Smoke and bad air days',
+  27: 'Water outage or unsafe tap water',
   63: 'High wind',
+  66: 'Shifting or swelling soil under the house',
 };
-const H_CAT = { 15: 'Industrial & CBRN' };
+const H_CAT = { 15: 'Industrial & CBRN', 27: 'Outages & Service Interruptions' };
 function _hCat(id) { return H_CAT[id] || 'Natural Hazards'; }
 
 /* Hazards no public source can score for an address, with what to check instead */
@@ -58,14 +62,14 @@ const MANUAL_REASONS = {
   20: 'Old mine workings and quarries are on county and Colorado Geological Survey maps. Local knowledge helps.',
   22: 'Disease outbreaks are regional. No address-level data exists.',
   24: 'Outage history is not public. Check your utility\'s planned shutoff map (Xcel publishes one) and how often your street loses power.',
-  27: 'Water main breaks and boil orders are tracked by your water provider. Enter what you know.',
+  27: 'Water main breaks and boil orders are tracked by your water provider. The EPA service-area lookup did not load for this address. Find your system on the EPA map at https://www.epa.gov/ground-water-and-drinking-water/community-water-system-service-area-boundaries and enter what you know.',
   36: 'Depends on how many roads lead out of your neighborhood and what could block them. Local knowledge required.',
   53: 'Civil unrest depends on where you live and work. Enter what you know.',
   54: 'Active threat risk depends on local context. Enter what you know.',
   63: 'FEMA wind records did not load for this address. Rate it from what you see on your street: downed limbs, roof damage, shutoffs.',
   64: 'Radon is only known by testing the house. Haven\'t tested: rate it 3. Tested high: 5. Tested low: 1.',
   65: 'House fire depends on the home itself: heating, wiring, dryer and cooking. Enter what you know.',
-  66: 'Swelling clay is mapped by the Colorado Geological Survey. Cracked foundations or sticking doors are a sign.',
+  66: 'The USDA soil lookup found no mapped soil layers at this address, or did not load. Look up linear extensibility on Web Soil Survey at https://websoilsurvey.nrcs.usda.gov/ and the Colorado Geological Survey swelling-soil maps. Cracked foundations or sticking doors are a sign.',
   60: 'Custom hazard. Enter manually.',
   61: 'Custom hazard. Enter manually.',
   62: 'Custom hazard. Enter manually.',
@@ -132,6 +136,8 @@ const STEPS = [
   { id: 'airquality', label: 'Estimating smoke and air quality risk' },
   { id: 'landslide',  label: 'Checking landslide susceptibility and records nearby (USGS)' },
   { id: 'declarations', label: 'Checking FEMA disaster declarations for your county' },
+  { id: 'water',      label: 'Checking your drinking-water system (EPA)' },
+  { id: 'soil',       label: 'Checking soil shrink-swell (USDA)' },
 ];
 
 /* ---------------------------------------------------------------
@@ -222,6 +228,36 @@ async function directFetch(url) {
   }
   if (!resp.ok) throw new Error('HTTP ' + resp.status);
   const data = await resp.json();
+  if (data && typeof data === 'object' && data.error) {
+    throw new Error(`Upstream error ${data.error.code || ''} ${data.error.message || ''}`.trim());
+  }
+  return data;
+}
+
+/**
+ * Direct POST of a form-encoded body. Used only by USDA Soil Data Access,
+ * which takes its SQL in a POST and sends CORS headers. The Content-Type is
+ * a CORS-safelisted one, so the browser sends no preflight. The relay is
+ * GET-only and cannot carry this call.
+ */
+async function directPostForm(url, fields) {
+  const ctrl  = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), API_CONFIG.TIMEOUT_MS);
+  const body  = Object.keys(fields)
+    .map(k => encodeURIComponent(k) + '=' + encodeURIComponent(fields[k])).join('&');
+  let resp;
+  try {
+    resp = await fetch(url, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+      signal:  ctrl.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!resp.ok) throw new Error('HTTP ' + resp.status);
+  const data = await resp.json();   // an empty body (no rows) throws here, which is a failure
   if (data && typeof data === 'object' && data.error) {
     throw new Error(`Upstream error ${data.error.code || ''} ${data.error.message || ''}`.trim());
   }
@@ -1256,6 +1292,245 @@ function _applyDeclarationFloors(findings, counts, countyLabel, stateAbbr) {
 }
 
 /* ---------------------------------------------------------------
+   API 9 — DRINKING WATER (EPA)
+   Route: direct (ArcGIS Online and Envirofacts send CORS headers, checked
+   2026-10-31).
+   1. Water System Boundaries v3: which community water system's service
+      area holds the point (PWSID, name, people served).
+   2. SDWIS violations for that PWSID through Envirofacts.
+   No polygon usually means a private well. The well finding is built here;
+   _compileFindings adds one level when flood or drought is already high.
+--------------------------------------------------------------- */
+
+const WATER_SRC_FULL   = 'EPA drinking-water system boundaries v3 and SDWIS violations, 2026';
+const WATER_SRC_BOUNDS = 'EPA drinking-water system boundaries v3, 2026';
+const WATER_SRC_WELL   = 'EPA drinking-water system boundaries v3, 2026 (no system mapped here)';
+const WATER_SMALL_SYSTEM = 3300;   // people served; below this the score rises one level
+
+/** Estimates where the source answered but holds no record for the address (the private-well path). */
+function _isAnsweredEstimate(f) {
+  return !!f && f.status === 'estimated' && /no system mapped here/i.test(String(f.source || ''));
+}
+
+function _commas(n) {
+  return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+/**
+ * The service area to use from a point query. Several polygons can overlap
+ * (a district inside a city). Residential service areas come first, then the
+ * smallest population served, since that is the retail system nearest the tap.
+ */
+function _pickWaterSystem(features) {
+  const rows = (Array.isArray(features) ? features : [])
+    .map(f => (f && f.attributes) || null)
+    .filter(a => a && /^[A-Z0-9]{9}$/i.test(String(a.PWSID || '').trim()));
+  if (rows.length === 0) return null;
+  const pop = a => { const n = Number(a.Population_Served_Count); return isFinite(n) && n >= 0 ? n : null; };
+  const resi = a => /residential/i.test(String(a.Service_Area_Type || '')) ? 0 : 1;
+  rows.sort((x, y) => resi(x) - resi(y) ||
+    (pop(x) === null ? Infinity : pop(x)) - (pop(y) === null ? Infinity : pop(y)));
+  const a = rows[0];
+  return {
+    pwsid: String(a.PWSID).trim().toUpperCase(),
+    name: String(a.PWS_Name || 'this water system').replace(/[<>&"]/g, '').trim() || 'this water system',
+    population: pop(a),
+  };
+}
+
+/** Milliseconds (UTC midnight) of a SDWIS date such as "2017-04-01 00:00:00", or null. */
+function _sdwisDate(v) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v === undefined || v === null ? '' : v));
+  return m ? Date.UTC(+m[1], +m[2] - 1, +m[3]) : null;
+}
+
+/** Counts the score rules need from the violation rows. */
+function _waterViolationStats(rows, now) {
+  const d = now || new Date();
+  const cut5  = Date.UTC(d.getFullYear() - 5,  d.getMonth(), d.getDate());
+  const cut10 = Date.UTC(d.getFullYear() - 10, d.getMonth(), d.getDate());
+  const s = { total: Array.isArray(rows) ? rows.length : 0, healthBased: 0, lastYear: null, healthLast5: 0, tier1Last10: 0, unresolved: 0 };
+  (Array.isArray(rows) ? rows : []).forEach(r => {
+    if (!r || typeof r !== 'object') return;
+    const hb    = String(_pickField(r, ['IS_HEALTH_BASED_IND']) || '').trim().toUpperCase() === 'Y';
+    const began = _sdwisDate(_pickField(r, ['COMPL_PER_BEGIN_DATE']));
+    const tier1 = Number(_pickField(r, ['PUBLIC_NOTIFICATION_TIER'])) === 1;
+    if (hb) {
+      s.healthBased += 1;
+      if (began !== null) {
+        const y = new Date(began).getUTCFullYear();
+        if (s.lastYear === null || y > s.lastYear) s.lastYear = y;
+        if (began >= cut5) s.healthLast5 += 1;
+      }
+      if (_pickField(r, ['RTC_DATE']) === undefined) s.unresolved += 1;
+    }
+    if (tier1 && began !== null && began >= cut10) s.tier1Last10 += 1;
+  });
+  return s;
+}
+
+/**
+ * Score and finding for a mapped system. violations is the row array, or null
+ * when the violation history could not be read (score from population only).
+ */
+function _mapWaterSystem(sys, violations, now) {
+  const small = sys.population !== null && sys.population < WATER_SMALL_SYSTEM;
+  const who = `On ${sys.name} (${sys.pwsid}${sys.population !== null ? `, ${_commas(sys.population)} people` : ''}).`;
+  if (!Array.isArray(violations)) {
+    return {
+      kind: 'system', pwsid: sys.pwsid,
+      score: small ? 2 : 1,
+      finding: `${who} The violation history could not be read, so this score uses the number of people served only.`,
+      confidence: 'Low', source: WATER_SRC_BOUNDS,
+    };
+  }
+  const st = _waterViolationStats(violations, now);
+  let score = 1;
+  if (small) score += 1;
+  if (st.healthLast5 > 0) score += 1;
+  if (st.tier1Last10 > 0) score += 1;
+  if (st.unresolved > 0) score += 1;
+  score = Math.min(5, score);
+
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  const parts = [];
+  if (st.healthBased === 0) {
+    parts.push('no health-based violations on record');
+  } else {
+    parts.push(`${plural(st.healthBased, 'health-based violation')}${st.lastYear !== null ? `, last in ${st.lastYear}` : ''}`);
+    parts.push(st.healthLast5 > 0 ? `${st.healthLast5} began in the last 5 years` : 'none in the last 5 years');
+  }
+  parts.push(st.tier1Last10 > 0
+    ? `${plural(st.tier1Last10, 'acute (Tier 1) violation')} in the last 10 years`
+    : 'no acute (Tier 1) violations in the last 10 years');
+  let text = `${who} ${parts.join('; ').replace(/^./, c => c.toUpperCase())}.`;
+  if (st.unresolved > 0) {
+    text += ` ${st.unresolved === 1 ? '1 health-based violation has' : `${st.unresolved} health-based violations have`} no recorded return to compliance.`;
+  }
+  if (small) text += ` Systems serving fewer than ${_commas(WATER_SMALL_SYSTEM)} people score one level higher.`;
+  text += ' Main breaks and boil-water orders are not in this record.';
+  return { kind: 'system', pwsid: sys.pwsid, score, finding: text, confidence: 'High', source: WATER_SRC_FULL };
+}
+
+async function _callWaterAPI(lat, lng) {
+  console.log('[EPA Water] Starting for', _coarse(lat), _coarse(lng));
+  const url = `${API_CONFIG.EPA_WATER_BOUNDARIES}?geometry=${_esriPointParam(lat, lng)}` +
+    `&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects` +
+    `&outFields=PWSID,PWS_Name,Population_Served_Count,Service_Area_Type&returnGeometry=false&f=json`;
+  // A failed boundaries call throws: the hazard goes to "Needs your judgment".
+  const data = await directFetch(url);
+  if (!data || !Array.isArray(data.features)) throw new Error('Unexpected water boundaries response');
+
+  const sys = _pickWaterSystem(data.features);
+  if (!sys) {
+    console.log('[EPA Water] No service area at this point (private well)');
+    return { kind: 'well' };
+  }
+  let rows = null;
+  try {
+    const v = await directFetch(`${API_CONFIG.EPA_SDWIS_VIOLATIONS}/${sys.pwsid}/JSON`);
+    if (Array.isArray(v)) rows = v;
+    else console.warn('[EPA Water] violations response was not a list');
+  } catch (e) {
+    console.warn('[EPA Water] violations not read:', e.message);
+  }
+  const result = _mapWaterSystem(sys, rows, new Date());
+  console.log('[EPA Water] Result:', result);
+  return result;
+}
+
+/** Private-well result; flood or drought at 4 or more adds one level. */
+function _mapWaterWell(findings) {
+  const high = [];
+  [H_ID.FLOOD_RIVERINE, H_ID.FLASH_FLOOD, H_ID.DROUGHT].forEach(id => {
+    const f = (findings || []).find(x => x.hazardId === id);
+    if (f && typeof f.scoreAssigned === 'number' && f.scoreAssigned >= 4) high.push(H_NAME[id].toLowerCase());
+  });
+  let text = 'No public water system is mapped at this address, which usually means a private well. ' +
+    'Wells depend on your pump, your power and your groundwater.';
+  if (high.length > 0) {
+    const list = high.length === 1 ? high[0] : `${high.slice(0, -1).join(', ')} and ${high[high.length - 1]}`;
+    text += ` Raised one level because ${list} ${high.length === 1 ? 'is' : 'are'} rated 4 or more here.`;
+  }
+  return { score: Math.min(5, 3 + (high.length > 0 ? 1 : 0)), finding: text, confidence: 'Medium', source: WATER_SRC_WELL };
+}
+
+/* ---------------------------------------------------------------
+   API 10 — SOIL SHRINK-SWELL (USDA Soil Data Access, SSURGO)
+   Route: direct POST (CORS, checked 2026-10-31). Linear extensibility
+   (lep_r, percent) of every horizon above 150 cm in the major components of
+   the map unit under the point. The largest value sets the score.
+--------------------------------------------------------------- */
+
+const SOIL_SRC = 'USDA NRCS Soil Data Access (SSURGO), linear extensibility';
+
+function _soilSql(lat, lng) {
+  return 'SELECT c.compname, c.comppct_r, ch.hzdept_r, ch.hzdepb_r, ch.lep_r ' +
+    `FROM SDA_Get_Mukey_from_intersection_with_WktWgs84('point(${_coarse(lng)} ${_coarse(lat)})') AS k ` +
+    'JOIN component c ON c.mukey = k.mukey JOIN chorizon ch ON ch.cokey = c.cokey ' +
+    "WHERE c.majcompflag = 'Yes' AND ch.hzdept_r < 150 ORDER BY c.comppct_r DESC, ch.hzdept_r";
+}
+
+/** Linear extensibility (percent) to Likelihood: under 3 = 1, 3 to 4.5 = 2, 4.5 to 6 = 3, 6 to 9 = 4, 9 and up = 5. */
+function _soilScore(lep) {
+  return _binScore(lep, [3, 4.5, 6, 9]);
+}
+
+function _soilClass(lep) {
+  return lep >= 9 ? 'very high' : lep >= 6 ? 'high' : lep >= 3 ? 'moderate' : 'low';
+}
+
+/**
+ * Result from a Soil Data Access reply { Table: [[columns], [row], ...] }.
+ * Null lep_r counts as 0, but a reply where every lep_r is null holds no
+ * shrink-swell data at all, so it returns null instead of a "low" score.
+ */
+function _mapSoilTable(data) {
+  const table = data && Array.isArray(data.Table) ? data.Table : null;
+  if (!table || table.length < 2 || !Array.isArray(table[0])) return null;
+  const col = n => table[0].findIndex(c => String(c).toLowerCase() === n);
+  const iName = col('compname'), iTop = col('hzdept_r'), iBot = col('hzdepb_r'), iLep = col('lep_r');
+  if (iName < 0 || iLep < 0) return null;
+  let best = null, anyValue = false;
+  table.slice(1).forEach(r => {
+    if (!Array.isArray(r)) return;
+    const top = iTop >= 0 ? parseFloat(r[iTop]) : NaN;
+    if (iTop >= 0 && isFinite(top) && top >= 150) return;
+    const raw = parseFloat(r[iLep]);
+    if (isFinite(raw)) anyValue = true;
+    const lep = isFinite(raw) && raw > 0 ? raw : 0;
+    if (!best || lep > best.lep) {
+      best = { lep, name: String(r[iName] || 'The main soil').replace(/[<>&"]/g, '').trim() || 'The main soil',
+               top: iTop >= 0 ? r[iTop] : null, bot: iBot >= 0 ? r[iBot] : null };
+    }
+  });
+  if (!best || !anyValue) return null;
+  const val = String(Number(best.lep.toFixed(1)));
+  const depth = (best.top !== null && best.top !== undefined && best.bot !== null && best.bot !== undefined &&
+                 isFinite(parseFloat(best.top)) && isFinite(parseFloat(best.bot)))
+    ? ` in a layer at ${Math.round(parseFloat(best.top))} to ${Math.round(parseFloat(best.bot))} cm` : '';
+  return {
+    score: _soilScore(best.lep),
+    finding: `${best.name}: shrink-swell (LEP) up to ${val} percent${depth}; ${_soilClass(best.lep)}. ` +
+             'A soil map describes a map unit, not the ground under one house.',
+    confidence: 'Medium',
+    source: SOIL_SRC,
+    lep: best.lep,
+  };
+}
+
+async function _callSoilAPI(lat, lng) {
+  console.log('[USDA SDA] Starting for', _coarse(lat), _coarse(lng));
+  // No rows (water, rock, unmapped) and any failure both throw, so the hazard
+  // goes to "Needs your judgment" with the Web Soil Survey link.
+  const data = await directPostForm(API_CONFIG.USDA_SDA, { query: _soilSql(lat, lng), format: 'JSON+COLUMNNAME' });
+  const result = _mapSoilTable(data);
+  if (!result) throw new Error('No shrink-swell data for this location');
+  console.log('[USDA SDA] Result:', result);
+  return result;
+}
+
+/* ---------------------------------------------------------------
    DERIVED: AIR QUALITY SCORE
 --------------------------------------------------------------- */
 
@@ -1297,7 +1572,7 @@ function _deriveAirQualityScore(whpScore, epaHighHazardCount, stateAbbr) {
 
 function _compileFindings(apiResults, geocoded) {
   const {
-    flood, earthquake, wildfire, weather, drought, epa, landslide, nri, declarations,
+    flood, earthquake, wildfire, weather, drought, epa, landslide, nri, declarations, water, soil,
   } = apiResults;
 
   const stateAbbr     = geocoded.stateAbbr || weather?.stateAbbr || '';
@@ -1510,6 +1785,36 @@ function _compileFindings(apiResults, geocoded) {
     });
   }
 
+  // ── DRINKING WATER (27) ───────────────────────────────────
+  // A mapped system is scored from its violation record. No mapped system
+  // means a private well, which depends on the flood and drought findings
+  // above. A failed lookup adds no finding (judgment list with the EPA map).
+  if (water && !_researchSkipsNa(H_ID.WATER, stateAbbr)) {
+    const w = water.kind === 'well' ? _mapWaterWell(findings) : water;
+    findings.push({
+      hazardId: H_ID.WATER, hazardName: H_NAME[27], category: _hCat(27),
+      scoreAssigned: w.score,
+      source: w.source,
+      finding: w.finding,
+      confidence: w.confidence,
+      status: water.kind === 'well' ? 'estimated' : 'success', isOverridden: false,
+    });
+  }
+
+  // ── SOIL SHRINK-SWELL (66) ────────────────────────────────
+  // Sits in "Less common here" on the Assess screen; the research report
+  // groups by category, so it lists with Natural Hazards like Hurricane.
+  if (soil && !_researchSkipsNa(H_ID.SOIL, stateAbbr)) {
+    findings.push({
+      hazardId: H_ID.SOIL, hazardName: H_NAME[66], category: _hCat(66),
+      scoreAssigned: soil.score,
+      source: soil.source || SOIL_SRC,
+      finding: soil.finding,
+      confidence: soil.confidence,
+      status: 'success', isOverridden: false,
+    });
+  }
+
   // ── FEMA DECLARATION FLOORS (raise only, after everything else) ──
   if (declarations) {
     // Floors are an extra; a bug here must not discard the findings.
@@ -1625,7 +1930,7 @@ async function startResearch() {
   }
 
   // ── PARALLEL API CALLS (spinners update independently) ──
-  ['nri','flood','earthquake','wildfire','weather','drought','epa','airquality','landslide','declarations']
+  ['nri','flood','earthquake','wildfire','weather','drought','epa','airquality','landslide','declarations','water','soil']
     .forEach(id => _setStep(id, 'running'));
 
   const { lat, lng, zip, fips5, stateFips, countyFips } = geocoded;
@@ -1637,7 +1942,7 @@ async function startResearch() {
   // One NRI call feeds hail, wind, winter, tornado, the flood fallback and
   // the landslide fallback. Flood waits on it only if it reaches Method D.
   const nriP = _tracked('nri', _callNRIAPI(lat, lng, fips5));
-  const [nri, flood, earthquake, wildfire, weather, drought, epa, landslide, declarations] =
+  const [nri, flood, earthquake, wildfire, weather, drought, epa, landslide, declarations, water, soil] =
     await Promise.all([
       nriP,
       _tracked('flood',      _callFloodAPI(lat, lng, fips5, nriP)),
@@ -1648,6 +1953,8 @@ async function startResearch() {
       _tracked('epa',        _callEPAAPI(zip)),
       _tracked('landslide',  _callLandslideAPI(lat, lng)),
       _tracked('declarations', _callDeclarationsAPI(stateFips, countyFips)),
+      _tracked('water',      _callWaterAPI(lat, lng)),
+      _tracked('soil',       _callSoilAPI(lat, lng)),
     ]);
 
   if (run !== _research.runId) return;   // cancelled while the lookups ran
@@ -1656,13 +1963,13 @@ async function startResearch() {
   _setStep('airquality', (wildfire && epa) ? 'success' : 'error');
 
   console.log('[Research] All API calls settled. Results:', {
-    nri, flood, earthquake, wildfire, weather, drought, epa, landslide, declarations
+    nri, flood, earthquake, wildfire, weather, drought, epa, landslide, declarations, water, soil
   });
 
   // ── COMPILE FINDINGS ──────────────────────────────────────
   try {
     _research.findings = _compileFindings(
-      { flood, earthquake, wildfire, weather, drought, epa, landslide, nri, declarations },
+      { flood, earthquake, wildfire, weather, drought, epa, landslide, nri, declarations, water, soil },
       geocoded
     );
     _research.hasResults = true;
@@ -2169,8 +2476,10 @@ function _renderReport() {
  */
 function _researchSummarySub(estimated, failedCount, manualCount) {
   const rule  = estimated.filter(_isRuleOfThumb).length;
-  const other = estimated.length - rule;
+  const answered = estimated.filter(_isAnsweredEstimate).length;
+  const other = estimated.length - rule - answered;
   return [
+    answered > 0 ? `${answered} ${answered === 1 ? 'is an estimate' : 'are estimates'} where the source answered but holds no record for this address.` : '',
     other > 0 ? `${other} ${other === 1 ? 'is a' : 'are'} rough placeholder${other === 1 ? '' : 's'} because a source did not respond.` : '',
     rule > 0 ? `No address-level source exists yet for ${rule} item${rule === 1 ? '' : 's'}; ${rule === 1 ? 'it uses' : 'they use'} a state rule of thumb.` : '',
     failedCount > 0 ? `${failedCount} could not be scored.` : '',
