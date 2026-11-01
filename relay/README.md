@@ -2,7 +2,7 @@
 
 Several government hazard services (USGS, FEMA, the Forest Service, the Drought Monitor) refuse requests that come straight from a web page. This small Cloudflare Worker fetches them for the app and passes the answer back. It only talks to an approved list of government and university sites, only answers World Aware's own web addresses, and keeps no logs.
 
-It also shields the Iowa Environmental Mesonet (IEM), Iowa State University's archive of National Weather Service warnings. IEM answers web pages directly, but asks not to be called from busy sites, so the app asks the relay first and the relay keeps each IEM answer for 30 days (see "Caching" below).
+It can also shield the Iowa Environmental Mesonet (IEM), Iowa State University's archive of National Weather Service warnings. IEM answers web pages directly but asks not to be called from busy sites. The relay can keep each IEM answer for 30 days, but only on a custom domain (see "Caching" below), so v3.2.0 calls IEM directly (`IEM_VIA_RELAY: false` in `js/apiConfig.js`).
 
 The free Cloudflare plan covers it (100,000 requests a day).
 
@@ -66,9 +66,15 @@ There is a soft limit of 60 requests a minute per visitor, kept in memory only. 
 
 Answers from mesonet.agron.iastate.edu are stored in Cloudflare's cache for 30 days, keyed by the full IEM address the app asked for. The app rounds the coordinates to 2 decimals (about 1 km) before it asks, so neighbours share one stored answer, and it asks for warnings up to 1 January of the current year, so the answer does not change until the next year. The stored copy holds only the IEM reply; its key holds the rounded coordinates (about 1 km), not the street address, and nothing about the visitor. A response header `X-Relay-Cache` says `HIT` or `MISS`.
 
-Cloudflare only runs this cache for a Worker on a custom domain. On the free `*.workers.dev` address the cache calls do nothing, so every IEM request still goes to Iowa State (and the app still works). To turn the cache on, add a custom domain to the Worker in the Cloudflare dashboard (for example `relay.beworldaware.com`, under the Worker's settings for domains and routes), then put that address in `RELAY_URL` in `js/apiConfig.js`.
+On a miss, the upstream call and the cache write run as one task the Worker hands to Cloudflare (`waitUntil`), so the cache still fills if the visitor gives up first.
 
-If the relay is not set up or does not answer, the app calls IEM directly, which IEM allows.
+Cloudflare only runs this cache for a Worker on a custom domain. On the free `*.workers.dev` address the cache calls do nothing, so every IEM request would still go to Iowa State. That is why the app calls IEM directly for now. To switch to the relay:
+
+1. Add a custom domain to the Worker in the Cloudflare dashboard (for example `relay.beworldaware.com`, under the Worker's settings for domains and routes).
+2. Put that address in `RELAY_URL` in `js/apiConfig.js` and set `IEM_VIA_RELAY: true`.
+3. Run `wrangler deploy` and check with the curl below.
+
+With the flag on, the app asks the relay first, gives it 7 seconds, and calls IEM directly if the relay fails, runs out of time or answers without a warning list.
 
 After any change to `worker.js`, run `wrangler deploy` from this folder again.
 

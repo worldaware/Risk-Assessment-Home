@@ -1601,7 +1601,9 @@ const IEM_FX = {
   foothills: iemEvents(spread(63, Y10), { zone: 'COZ035' }),
 };
 const NCEI_FX = {
-  search: { count: 2, results: [{ id: 'us-climate-normals_1991-2020_v1.0.1_annualseasonal_multivariate_by-station_c20230404.tar.gz:USC00050848.csv', name: 'USC00050848.csv', stations: [{ id: 'USC00050848', name: 'BOULDER, CO US' }] }] },
+  // Result shape as read live on 2026-10-31 (review): coordinates sit on the result as boundingPoints, lon then lat; stations carry none
+  search: { count: 2, results: [{ id: 'us-climate-normals_1991-2020_v1.0.1_annualseasonal_multivariate_by-station_c20230404.tar.gz:USC00050848.csv', name: 'USC00050848.csv',
+    boundingPoints: [{ coordinates: [-105.2667, 39.9919], type: 'point' }], stations: [{ id: 'USC00050848', name: 'BOULDER, CO US', dataTypes: [{ id: 'ANN-TMAX-AVGNDS-GRTH090' }] }] }] },
   data: [{ 'ANN-TMAX-AVGNDS-GRTH090': '    33.1', 'ANN-TMAX-AVGNDS-GRTH100': '     0.6', 'ANN-TMIN-AVGNDS-LSTH000': '     3.9', STATION: 'USC00050848' }],
   searchUrl: 'https://www.ncei.noaa.gov/access/services/search/v1/data?dataset=normals-annualseasonal-1991-2020&bbox=40.15,-105.45,39.90,-105.10&dataTypes=ANN-TMAX-AVGNDS-GRTH090&limit=5',
   dataUrl: 'https://www.ncei.noaa.gov/access/services/data/v1?dataset=normals-annualseasonal-1991-2020&stations=USC00050848&dataTypes=ANN-TMAX-AVGNDS-GRTH090,ANN-TMAX-AVGNDS-GRTH100,ANN-TMIN-AVGNDS-LSTH000&format=json',
@@ -1720,10 +1722,16 @@ async function v32StageBChecks() {
   check('wind with no warnings and NRI 0: 1, says no warnings', wZero.score === 1 && wZero.finding.startsWith('No High Wind Warnings here (NWS, 2015 to 2025) and 0 thunderstorm'), wZero.finding);
   check('wind: no IEM result maps to null (NRI-only path)', ctx._mapWindWarnings(null, 1.2) === null);
 
-  // ── IEM call: relay first, then direct ──
+  // ── IEM call: direct in v3.2.0 (IEM_VIA_RELAY false); relay first when the flag is on ──
   const iemReply = { events: IEM_FX.downtown, generated_at: '2026-10-31T00:00:00Z' };
   const savedRelay = cfg.RELAY_URL;
+  check('apiConfig: IEM_VIA_RELAY is false in this release', cfg.IEM_VIA_RELAY === false);
   cfg.RELAY_URL = 'https://relay.test';
+  route(url => url.startsWith('https://relay.test/') ? Promise.reject(new Error('relay should not be called')) : json(iemReply));
+  let wc0 = await ctx._callWarningsAPI(40.015, -105.2705);
+  check('IEM call with the flag off: one direct call even though RELAY_URL is set',
+    seen.length === 1 && seen[0].url.startsWith(cfg.IEM_VTEC_BYPOINT + '?lat=40.0') && wc0.counts.highWind === 24);
+  cfg.IEM_VIA_RELAY = true;
   route(url => url.startsWith('https://relay.test/') ? json(iemReply) : Promise.reject(new Error('direct should not be called')));
   let wc = await ctx._callWarningsAPI(40.015, -105.2705);
   const relayed = decodeURIComponent((seen[0].url.split('?url=')[1]) || '');
@@ -1745,9 +1753,13 @@ async function v32StageBChecks() {
   route(() => Promise.reject(new Error('down')));
   e1 = null; try { await ctx._callWarningsAPI(40, -105); } catch (e) { e1 = e; }
   check('IEM call: relay and direct both fail throws (NRI-only finding)', !!e1 && seen.length === 2);
+  route(url => url.startsWith('https://relay.test/') ? json({ error: null, message: 'cached error page' }) : json(iemReply));
+  check('IEM call with the flag on: a relay 200 without an events list is a miss, and direct answers',
+    (await ctx._callWarningsAPI(40.015, -105.2705)).counts.highWind === 24 && seen.length === 2 && seen[1].url.startsWith(cfg.IEM_VTEC_BYPOINT));
   route(() => json({ nope: 1 }));
   e1 = null; try { await ctx._callWarningsAPI(40, -105); } catch (e) { e1 = e; }
-  check('IEM call: a reply without an events list throws', !!e1);
+  check('IEM call: a reply without an events list from both throws', !!e1 && seen.length === 2);
+  cfg.IEM_VIA_RELAY = false;
   cfg.RELAY_URL = savedRelay;
 
   // ── NCEI normals: URLs and station choice ──
@@ -1756,7 +1768,18 @@ async function v32StageBChecks() {
     ctx._normalsSearchUrl(40.015, -105.2705));
   check('normals data URL matches the captured request', ctx._normalsDataUrl('USC00050848') === NCEI_FX.dataUrl, ctx._normalsDataUrl('USC00050848'));
   const st = ctx._pickNormalsStation(NCEI_FX.search, 40.015, -105.2705);
-  check('station pick without coordinates: the first listed, BOULDER, CO US', st.id === 'USC00050848' && st.name === 'BOULDER, CO US' && st.km === null, JSON.stringify(st));
+  check('station pick, live result shape: BOULDER, CO US from the result\'s boundingPoints, about 2.6 km', st.id === 'USC00050848' && st.name === 'BOULDER, CO US' &&
+    Math.abs(st.km - 2.6) < 0.2, JSON.stringify(st));
+  const noCoords = { results: [{ name: 'USC00050848.csv', stations: [{ id: 'USC00050848', name: 'BOULDER, CO US' }] }, { name: 'USW00094075.csv', stations: [{ id: 'USW00094075', name: 'BOULDER 14 W, CO US' }] }] };
+  check('station pick without any coordinates: the first listed', ctx._pickNormalsStation(noCoords, 40.015, -105.2705).id === 'USC00050848' &&
+    ctx._pickNormalsStation(noCoords, 40.015, -105.2705).km === null);
+  const mountain = { name: 'USW00094075.csv', boundingPoints: [{ coordinates: [-105.5434, 40.0354], type: 'point' }], stations: [{ id: 'USW00094075', name: 'BOULDER 14 W, CO US' }] };
+  const gross = { name: 'USC00053629.csv', boundingPoints: [{ coordinates: [-105.3667, 39.95], type: 'point' }], stations: [{ id: 'USC00053629', name: 'GROSS RESERVOIR, CO US' }] };
+  check('station pick: with a mountain station listed first, the nearest result (Boulder) wins; order does not matter',
+    ctx._pickNormalsStation({ results: [mountain, gross, NCEI_FX.search.results[0]] }, 40.015, -105.2705).id === 'USC00050848' &&
+    ctx._pickNormalsStation({ results: [NCEI_FX.search.results[0], gross, mountain] }, 40.015, -105.2705).id === 'USC00050848' &&
+    ctx._pickNormalsStation({ results: [mountain, NCEI_FX.search.results[0]] }, 40.04, -105.53).id === 'USW00094075');
+  check('station pick: a result with no station list uses the id in its file name', ctx._pickNormalsStation({ results: [{ name: 'USC00050848.csv', boundingPoints: [{ coordinates: [-105.2667, 39.9919] }] }] }, 40, -105.27).id === 'USC00050848');
   const twoSt = (a, b) => ({ results: [{ stations: [a] }, { stations: [b] }] });
   const far = { id: 'USC00051234', name: 'FAR AWAY', latitude: 40.2, longitude: -105.0 };
   const near = { id: 'USC00050848', name: 'BOULDER, CO US', latitude: 39.9919, longitude: -105.2667 };
@@ -1840,8 +1863,17 @@ async function v32StageBChecks() {
     { attributes: { YEAR: 2021, MONTH_NUMBER: '2', Unhealthy_for_Sensitive_Group: null, Unhealthy: '50', Very_Unhealthy: '25', Hazardous: null } },
     { attributes: { YEAR: '2021', MONTH_NUMBER: 3, Unhealthy_for_Sensitive_Group: null, Unhealthy: null, Very_Unhealthy: null, Hazardous: null } }]);
   const mx = ctx._airDaysFromRows(mixed);
-  check('geopub averaging: categories add, nulls are 0, string values parse, average over the years returned',
-    Math.abs(mx.byYear[2022] - 3.1) < 1e-9 && Math.abs(mx.byYear[2021] - 21) < 1e-9 && Math.abs(mx.days - 12.05) < 1e-9 && mx.firstYear === 2021 && mx.lastYear === 2022, JSON.stringify(mx));
+  check('geopub averaging: categories add, nulls are 0, string values parse; only complete years count (2021 has 2 months)',
+    Math.abs(mx.byYear[2022] - 3.1) < 1e-9 && Math.abs(mx.byYear[2021] - 21) < 1e-9 && Math.abs(mx.days - 3.1) < 1e-9 &&
+    mx.firstYear === 2022 && mx.lastYear === 2022 && mx.yearCount === 1 && mx.partial === false, JSON.stringify(mx));
+  const plusOne = ctx._airDaysFromRows(geopubRows(2023, BOULDER_2023_PCT).concat([{ attributes: { YEAR: 2024, MONTH_NUMBER: 1, Unhealthy_for_Sensitive_Group: 0 } }]));
+  check('geopub: one month of a following year does not halve the average (Boulder 2023 stays about 6)',
+    Math.abs(plusOne.days - 6.012) < 1e-9 && plusOne.lastYear === 2023, JSON.stringify(plusOne));
+  const partialOnly = ctx._airDaysFromRows(geopubRows(2024, [0, 0, 0, 0, 6.5, 0]));
+  const partialF = ctx._mapAirDays(partialOnly, 'Boulder County');
+  check('geopub: with no complete year, the months present are used and the finding says partial year',
+    partialOnly.partial === true && partialOnly.yearCount === 1 && /\(EPA, 2024, partial year\)/.test(partialF.finding), partialF.finding);
+  check('geopub: a repeated month row is counted once', Math.abs(ctx._airDaysFromRows(geopubRows(2023, BOULDER_2023_PCT).concat(geopubRows(2023, BOULDER_2023_PCT).slice(4, 5))).days - 6.012) < 1e-9);
   check('geopub: rows without a usable year or month are skipped; none usable is no data',
     ctx._airDaysFromRows([{ attributes: { YEAR: null, MONTH_NUMBER: 1, Unhealthy: 5 } }, { attributes: { YEAR: 2020, MONTH_NUMBER: 13, Unhealthy: 5 } }]) === null &&
     ctx._airDaysFromRows([]) === null && ctx._airDaysFromRows(null) === null);
@@ -1979,9 +2011,13 @@ async function v32StageBChecks() {
     /warnings, normals, airdays(, radon, power)? \},\s*\n\s*geocoded/.test(src));
   check('IEM goes relay-first; normals and AQI days are direct', /relayThenDirect\(_iemUrl\(/.test(src) && /directFetch\(_normalsSearchUrl\(/.test(src) &&
     /directFetch\(_normalsDataUrl\(/.test(src) && /directFetch\(_airDaysUrl\(/.test(src));
-  check('relay budget plus a direct retry fits inside the _tracked cap', ev('RELAY_FIRST_BUDGET_MS') + cfg.TIMEOUT_MS < cfg.TIMEOUT_MS + cfg.PROXY_EXTRA_MS + 3000);
+  // The direct call's deadline now covers the body too (review S2), so this sum is the worst case
+  check('relay budget plus a direct retry (headers and body) plus the margin fits inside the _tracked cap',
+    ev('RELAY_FIRST_BUDGET_MS') + cfg.TIMEOUT_MS + ev('CAP_MARGIN_MS') <= ev('_trackedCapMs()') && ev('_trackedCapMs()') === cfg.TIMEOUT_MS + cfg.PROXY_EXTRA_MS + 3000);
   const html2 = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
-  check('privacy statement names the new recipients (NOAA climate data, USDA, Iowa State)', /NOAA's climate data center/.test(html2) && /the USDA and Iowa State University's weather archive/.test(html2));
+  const priv = html2.slice(html2.indexOf('id="about-privacy"')).replace(/\s+/g, ' ');
+  check('privacy statement names Iowa State\'s warning archive, NOAA\'s climate data center, the USDA soil service and the EPA, and no relay cache',
+    priv.includes("Iowa State University's archive of weather warnings, NOAA's climate data center, the USDA soil service and the EPA.") && !/cache/i.test(priv.slice(0, priv.indexOf('</div>'))));
   // ── End to end: startResearch with every host mocked (downtown Boulder) ──
   console.log('v3.2.0 Stage B: full research run with mocked hosts');
   {
@@ -2009,7 +2045,7 @@ async function v32StageBChecks() {
       if (u.startsWith(cfg.EPA_WATER_BOUNDARIES)) return json({ features: [{ attributes: WATER_FX.downtown }] });
       if (u.startsWith(cfg.EPA_SDWIS_VIOLATIONS)) return json(WATER_FX.violations);
       if (u.startsWith(cfg.USDA_SDA)) return json(SDA_FX.downtown);
-      if (u.startsWith(cfg.IEM_VTEC_BYPOINT)) return t ? json({ events: IEM_FX.downtown }) : Promise.reject(new Error('IEM should go through the relay'));
+      if (u.startsWith(cfg.IEM_VTEC_BYPOINT)) return t ? Promise.reject(new Error('IEM is direct in v3.2.0')) : json({ events: IEM_FX.downtown });
       if (u.startsWith(cfg.NCEI_SEARCH)) return json(NCEI_FX.search);
       if (u.startsWith(cfg.NCEI_DATA)) return json(NCEI_FX.data);
       if (u.startsWith(cfg.EPA_AQI_COUNTY)) return json({ features: fiveYr });
@@ -2025,7 +2061,7 @@ async function v32StageBChecks() {
     check('full run: the three new steps succeed and the smoke step reads as data', ['warnings', 'normals', 'airdays', 'airquality'].every(s => stE[s] === 'success'), JSON.stringify(stE));
     check('full run: wind 3 (IEM), heat 3 (normals), winter 4, smoke 4 (EPA), water 1, soil 2',
       [63, 9, 8, 23, 27, 66].map(id => by(fsE, id) && by(fsE, id).scoreAssigned).join() === '3,3,4,4,1,2', [63, 9, 8, 23, 27, 66].map(id => by(fsE, id) && by(fsE, id).scoreAssigned).join());
-    check('full run: IEM went through the relay; NCEI and geopub went direct', hosts.includes('relay:mesonet.agron.iastate.edu') && !hosts.includes('mesonet.agron.iastate.edu') &&
+    check('full run: IEM, NCEI and geopub all went direct (IEM_VIA_RELAY false)', !hosts.includes('relay:mesonet.agron.iastate.edu') && hosts.includes('mesonet.agron.iastate.edu') &&
       hosts.includes('www.ncei.noaa.gov') && hosts.includes('geopub.epa.gov'));
     const subE = ((page2.join('').match(/<span class="report-summary-sub">([^<]*)<\/span>/) || [])[1]) || '';
     check('full run, Colorado: 0 items on the state rule of thumb in the summary line', fsE.filter(f => ctx._isRuleOfThumb(f)).length === 0 && subE && !/rule of thumb/.test(subE), subE);
@@ -2172,7 +2208,12 @@ async function v32StageCChecks() {
       radonFile.zones['Boulder, CO'] === 1 && radonFile.zones['Cook, IL'] === 2 && radonFile.zones['Miami-Dade, FL'] === 3 && radonFile.zones['St. Louis, MO'] === 2,
       JSON.stringify(radonFile).slice(0, 200));
     check('build script radon: rows with no zone or a zone outside 1 to 3 are skipped', !('Bad Row, CO' in radonFile.zones) && !('Unzoned, CO' in radonFile.zones) &&
-      Object.keys(radonFile.zones).length === 10 && r1.stdout.includes('2 rows skipped'), r1.stdout);
+      Object.keys(radonFile.zones).length === 11 && r1.stdout.includes('2 rows skipped'), r1.stdout);
+    check('build script radon: zonesByFips from the county list; Baltimore City and Baltimore County keep their own codes',
+      radonFile.zonesByFips && radonFile.zonesByFips['08013'] === 1 && radonFile.zonesByFips['24510'] === 3 && radonFile.zonesByFips['24005'] === 2 &&
+      radonFile.zonesByFips['27053'] === 1 && Object.keys(radonFile.zonesByFips).length === 7 && /7 with a county code, 4 without/.test(r1.stdout), JSON.stringify(radonFile.zonesByFips));
+    check('build script radon: zonesByFips comes before the name table', Object.keys(radonFile).indexOf('zonesByFips') > -1 &&
+      Object.keys(radonFile).indexOf('zonesByFips') < Object.keys(radonFile).indexOf('zones'));
     check('build script radon: keys sorted', Object.keys(radonFile.zones).join('|') === Object.keys(radonFile.zones).slice().sort().join('|'));
     check('build script power: { built, source, year, byCounty, byState }',
       powerFile.built === '2026-10-31' && powerFile.source === 'https://www.eia.gov/electricity/data/eia861/zip/f8612025.zip' && powerFile.year === 2025 &&
@@ -2207,13 +2248,16 @@ async function v32StageCChecks() {
     const out2 = path.join(tmp, 'data2');
     run(baseArgs(out2).concat(['--only', 'radon']));
     check('build script: --only radon writes just the radon file', fs.existsSync(path.join(out2, 'radon-zones.json')) && !fs.existsSync(path.join(out2, 'power-reliability.json')));
-    check('build script: the file is JSON that reads one county per line', radonText.split('\n').length === 17 && /\n    "Boulder, CO": 1,\n/.test(radonText));
+    check('build script: the file is JSON that reads one county per line', radonText.split('\n').length === 27 && /\n    "Boulder, CO": 1,\n/.test(radonText) && /\n    "08013": 1,\n/.test(radonText), String(radonText.split('\n').length));
+    const offline = run(['--out', path.join(tmp, 'data5'), '--radon-file', path.join(FX, 'radon-zones-sample.json'), '--only', 'radon', '--min-radon', '5']);
+    const offlineFile = JSON.parse(fs.readFileSync(path.join(tmp, 'data5', 'radon-zones.json'), 'utf8'));
+    check('build script: a local radon file without a county list stays offline and writes names only', offline.status === 0 && !('zonesByFips' in offlineFile) && offlineFile.zones['Boulder, CO'] === 1);
 
     // Failures: nothing is written for the failed source, exit code 1
     const out3 = path.join(tmp, 'data3');
     const low = run(['--out', out3, '--radon-file', path.join(FX, 'radon-zones-sample.json'), '--only', 'radon']);
     check('build script: a radon file with far fewer counties than expected fails, writes nothing, exits 1',
-      low.status === 1 && /Only 10 radon zone rows/.test(low.stderr) && !fs.existsSync(path.join(out3, 'radon-zones.json')), low.stderr);
+      low.status === 1 && /Only 11 radon zone rows/.test(low.stderr) && !fs.existsSync(path.join(out3, 'radon-zones.json')), low.stderr);
     fs.writeFileSync(path.join(tmp, 'bad.json'), '{"rows":[]}');
     const bad = run(['--out', out3, '--radon-file', path.join(tmp, 'bad.json'), '--only', 'radon']);
     check('build script: a radon file without a "data" array fails', bad.status === 1 && /no "data" array/.test(bad.stderr));
@@ -2258,7 +2302,10 @@ async function v32StageCChecks() {
     check('build script: no dependencies at load (xlsx only inside readSheets, only for .xlsx files)', !/^const .*require\('xlsx'\)/m.test(scriptSrc) && (scriptSrc.match(/require\('xlsx'\)/g) || []).length === 1 &&
       (scriptSrc.match(/require\('([^'.][^']*)'\)/g) || []).every(m => /'(fs|os|path|child_process|xlsx)'/.test(m)));
     check('build script: sends an identifying User-Agent on downloads and defaults to the spec sources',
-      /User-Agent': UA/.test(scriptSrc) && scriptSrc.includes('radon-zones-202406.json') && scriptSrc.includes('f861${year}.zip') && /year: 2025/.test(scriptSrc));
+      /User-Agent': UA/.test(scriptSrc) && scriptSrc.includes('radon-zones-202406.json') && scriptSrc.includes('f861${year}.zip') && /year: defaultEiaYear\(\)/.test(scriptSrc) && !/\|\| 2025/.test(scriptSrc));
+    check('build script: default EIA year comes from the date (final data appears in October of the next year)',
+      bd.defaultEiaYear(new Date(Date.UTC(2026, 9, 31))) === 2025 && bd.defaultEiaYear(new Date(Date.UTC(2026, 8, 30))) === 2024 &&
+      bd.defaultEiaYear(new Date(Date.UTC(2027, 6, 2))) === 2025 && bd.parseArgs([]).year === bd.defaultEiaYear());
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -2293,7 +2340,7 @@ async function v32StageCChecks() {
     rm(1).finding === 'Boulder County is in EPA radon zone 1 (highest). About half of Colorado homes test above the action level. Only a test answers it for your house.' &&
     rm(1).confidence === 'Low' && rm(1).source === 'EPA Map of Radon Zones (county), 2024', rm(1).finding);
   check('radon outside Colorado does not borrow the Colorado statistic; it states EPA\'s zone meaning',
-    rm(1, 'MN').finding === 'Boulder County is in EPA radon zone 1 (highest). EPA predicts an average indoor level above 4 pCi/L, its action level, in zone 1 counties. Only a test answers it for your house.' &&
+    rm(1, 'MN').finding === 'Boulder County is in EPA radon zone 1 (highest). EPA predicts an average indoor screening level above 4 pCi/L, its action level, in zone 1 counties. Only a test answers it for your house.' &&
     /between 2 and 4 pCi\/L/.test(rm(2).finding) && /below 2 pCi\/L/.test(rm(3).finding) && !/Colorado/.test(rm(2).finding));
   const Z = radonFile.zones;
   const rl = (c, s) => { const h = ctx._radonLookup(Z, c, s); return h && h.zone; };
@@ -2307,19 +2354,42 @@ async function v32StageCChecks() {
 
   // ── Radon file call: absent, present ──
   route(() => json(radonFile));
-  const rc = await ctx._callRadonAPI('Boulder County', 'CO');
+  const rc = await ctx._callRadonAPI('08013', 'Boulder County', 'CO');
   check('radon call: one GET of the relative data path, no relay, zone 1', seen.length === 1 && seen[0].url === 'data/radon-zones.json' && !seen[0].opts.method && rc.zone === 1);
   route(() => Promise.resolve({ ok: false, status: 404, json: async () => ({}) }));
-  e1 = null; try { await ctx._callRadonAPI('Boulder County', 'CO'); } catch (e) { e1 = e; }
+  e1 = null; try { await ctx._callRadonAPI('08013', 'Boulder County', 'CO'); } catch (e) { e1 = e; }
   check('radon call: file absent (404) throws a NO_DATA_FILE error, so the hazard stays on "Needs your judgment"', !!e1 && e1.code === 'NO_DATA_FILE' && /not published yet/.test(e1.message));
   route(() => Promise.resolve({ ok: true, status: 200, json: async () => { throw new SyntaxError('Unexpected token <'); } }));
-  e1 = null; try { await ctx._callRadonAPI('Boulder County', 'CO'); } catch (e) { e1 = e; }
+  e1 = null; try { await ctx._callRadonAPI('08013', 'Boulder County', 'CO'); } catch (e) { e1 = e; }
   check('radon call: an HTML page served for the missing file (not JSON) throws', !!e1);
   route(() => json(radonFile));
-  e1 = null; try { await ctx._callRadonAPI('Atlantis County', 'CO'); } catch (e) { e1 = e; }
+  e1 = null; try { await ctx._callRadonAPI('08999', 'Atlantis County', 'CO'); } catch (e) { e1 = e; }
   check('radon call: a county that is not in the file throws', !!e1 && /not in the radon zone file/.test(e1.message));
+  // S4: FIPS first, then the county name; a city never stands in for a county
+  route(() => json(radonFile));
+  check('radon call by FIPS: Baltimore city 24510 = zone 3 and Baltimore County 24005 = zone 2, whatever name comes with it',
+    (await ctx._callRadonAPI('24510', 'Baltimore', 'MD')).zone === 3 && (await ctx._callRadonAPI('24005', 'Baltimore City', 'MD')).zone === 2);
+  check('radon call: a FIPS missing from the table falls back to the county name', (await ctx._callRadonAPI('08999', 'Boulder County', 'CO')).zone === 1);
+  route(() => json({ built: 'x', zones: radonFile.zones }));
+  check('radon call: a file without zonesByFips (older build) uses the name', (await ctx._callRadonAPI('08013', 'Boulder County', 'CO')).zone === 1);
+  route(() => json({ zonesByFips: { '51760': 3 }, zones: { 'Richmond, VA': 2, 'Richmond City, VA': 3 } }));
+  check('radon call: Richmond city by FIPS is zone 3, not Richmond County\'s 2', (await ctx._callRadonAPI('51760', '', 'VA')).zone === 3);
+  e1 = null; try { await ctx._callRadonAPI('', '', 'VA'); } catch (e) { e1 = e; }
+  check('radon call: no FIPS and no county name finds nothing (the city is never used)', !!e1);
+  // Geocoder: countyName is FCC's county, else the geocoder's county field, never its city
+  const geoRoute = (nom, fcc) => route(url => url.startsWith('https://nominatim.openstreetmap.org/') ? json(nom)
+    : url.startsWith('https://geo.fcc.gov/') ? (fcc ? json(fcc) : Promise.reject(new Error('down'))) : Promise.reject(new Error('unrouted ' + url)));
+  const richmond = [{ lat: '37.54', lon: '-77.44', display_name: 'Richmond, Virginia', address: { city: 'Richmond', 'ISO3166-2-lvl4': 'US-VA', postcode: '23219' } }];
+  geoRoute(richmond, { County: { FIPS: '51760', name: 'Richmond city' }, State: { code: 'VA' } });
+  const gR = await ctx._geocode('900 E Broad St, Richmond, VA');
+  check('geocode: FCC county name wins for countyName (Richmond city), the FIPS is 51760', gR.countyName === 'Richmond city' && gR.fips5 === '51760', JSON.stringify(gR));
+  geoRoute(richmond, null);
+  const gR2 = await ctx._geocode('900 E Broad St, Richmond, VA');
+  check('geocode: with FCC down and no county from the geocoder, countyName stays empty (not the city)', gR2.countyName === '' && gR2.county === 'Richmond', JSON.stringify(gR2));
+  geoRoute([{ lat: '40.015', lon: '-105.2705', address: { county: 'Boulder County', city: 'Boulder', 'ISO3166-2-lvl4': 'US-CO' } }], null);
+  check('geocode: the geocoder\'s county field is used when FCC is down', (await ctx._geocode('x')).countyName === 'Boulder County');
   route(() => json([1, 2]));
-  e1 = null; try { await ctx._callRadonAPI('Boulder County', 'CO'); } catch (e) { e1 = e; }
+  e1 = null; try { await ctx._callRadonAPI('08013', 'Boulder County', 'CO'); } catch (e) { e1 = e; }
   check('radon call: a file that is not an object throws', !!e1);
 
   // ── Power mapping ──
@@ -2349,7 +2419,7 @@ async function v32StageCChecks() {
   const pst = ctx._mapPowerReliability(ps2, 'Larimer County', 'CO');
   check('power state fallback: says no utility is listed for the county and gives the state figure',
     pst.finding.startsWith('No utility is listed for Larimer County, so this is the CO figure: utilities there averaged 249 minutes without power a year including major events (EIA-861, 2020 to 2025).') &&
-    pst.score === 3 && pst.source === 'EIA-861 reliability, median 2020 to 2025');
+    pst.score === 3 && pst.source === 'EIA-861 reliability, customer-weighted mean of utility medians 2020 to 2025', pst.source);
   check('power: thousands get a comma, one year reads as one year', ctx._mapPowerReliability({ level: 'county', saidi: 1500, utility: 'Remote Coop Alaska', years: [2025, 2025], utilityCount: 1 }, 'X Borough', 'AK').finding.startsWith('Customers of Remote Coop Alaska averaged 1,500 minutes') &&
     ctx._mapPowerReliability({ level: 'county', saidi: 1500, utility: 'R', years: [2025, 2025], utilityCount: 1 }, 'X', 'AK').source === 'EIA-861 reliability, median 2025');
   check('power: no usable value gives nothing', ctx._mapPowerReliability(null, 'X', 'CO') === null && ctx._mapPowerReliability({ level: 'county', saidi: 0 }, 'X', 'CO') === null);
@@ -2392,7 +2462,7 @@ async function v32StageCChecks() {
   check('compile: radon or power marked Does not apply here: no finding', !by(comp({ radon: rc, power: pc }), 64) && !by(comp({ radon: rc, power: pc }), 24));
   ev('state = freshState();');
   const mnGeo = { lat: 44.98, lng: -93.27, zip: '55401', stateAbbr: 'MN', county: 'Hennepin County', fips5: '27053' };
-  const mnR = await (async () => { route(() => json(radonFile)); return ctx._callRadonAPI('Hennepin County', 'MN'); })();
+  const mnR = await (async () => { route(() => json(radonFile)); return ctx._callRadonAPI('27053', 'Hennepin County', 'MN'); })();
   const mnP = await (async () => { route(() => json(powerFile)); return ctx._callPowerAPI('27053', 'MN'); })();
   const mn = ctx._compileFindings(Object.assign({}, base, { radon: mnR, power: mnP, nri: { tract: Object.assign({ COUNTY: 'Hennepin' }, NRI_FX.minneapolis), county: null } }), mnGeo);
   check('compile Minneapolis: radon zone 1 = 4 with the generic EPA sentence, power 160 minutes = 2, county named',
@@ -2463,7 +2533,9 @@ async function v32StageCChecks() {
   const mr = ev('MANUAL_REASONS');
   check('judgment list: radon (64) and power (24) keep their reasons and now link to EPA and EIA',
     /Haven't tested: rate it 3\. Tested high: 5\. Tested low: 1\./.test(mr[64]) && mr[64].includes('https://www.epa.gov/radon') &&
-    /planned shutoff map \(Xcel publishes one\)/.test(mr[24]) && mr[24].includes('https://www.eia.gov/electricity/data/eia861/'));
+    /your electric utility's planned shutoff map and/.test(mr[24]) && !/Xcel/.test(mr[24]) && mr[24].includes('https://www.eia.gov/electricity/data/eia861/'));
+  check('judgment list: power names Xcel only for a Colorado address', /planned shutoff map \(Xcel publishes one\)/.test(ctx._manualReason(24, 'CO')) &&
+    !/Xcel/.test(ctx._manualReason(24, 'MN')) && !/Xcel/.test(ctx._manualReason(24, '')) && ctx._manualReason(64, 'CO') === mr[64]);
 
   // ── Full run with every host mocked: data files present, then absent ──
   console.log('v3.2.0 Stage C: full research run, data files present and absent');
@@ -2535,7 +2607,7 @@ async function v32StageCChecks() {
     /if \(!response \|\| response\.status !== 200\) return response;/.test(sw) && /caches\.open\(CACHE_NAME\)\.then\(cache => cache\.put\(event\.request, clone\)\)/.test(sw));
   const src = fs.readFileSync(path.join(ROOT, 'js/research.js'), 'utf8');
   check('runner: radon and power run in the parallel set with the geocoded county, state and FIPS',
-    src.includes("_tracked('radon',      _callRadonAPI(county, stateAbbr))") && src.includes("_tracked('power',      _callPowerAPI(fips5, stateAbbr))") &&
+    src.includes("_tracked('radon',      _callRadonAPI(fips5, countyName, stateAbbr))") && src.includes("_tracked('power',      _callPowerAPI(fips5, stateAbbr))") &&
     /'airdays','radon','power'\]/.test(src) && /airdays, radon, power \},\s*\n\s*geocoded/.test(src));
   check('data files are read with the same-origin helper, not the relay', /directFetch\(relPath\)/.test(src) && !/relayFetch\(API_CONFIG\.DATA_|proxyFetch\(API_CONFIG\.DATA_/.test(src));
   // Committed data files, when present, must have the shape the app reads
@@ -2568,6 +2640,213 @@ async function v32StageCChecks() {
   ctx.fetch = () => Promise.reject(new Error('no network in tests'));
 }
 
-asyncChecks().then(v31Checks).then(v32StageAChecks).then(v32StageBChecks).then(v32StageCChecks).catch(e => { failed++; console.log('  FAIL async checks threw — ' + e.message + '\n' + e.stack); }).then(() => {  console.log(`\n${passed} passed, ${failed} failed`);
+/* ---------------------------------------------------------------
+   v3.2.0 review fixes (v32-review.md): deadlines that cover the body,
+   the water violations budget, relay-then-direct timing, neutral step
+   states, the well after floors, IEM dedupe without an event number, and
+   the relay filling its cache inside waitUntil. This sandbox uses Node's
+   real AbortController so aborts can be observed, and small timeouts.
+--------------------------------------------------------------- */
+async function v32ReviewChecks() {
+  console.log('v3.2.0 review fixes');
+  const noop = () => {};
+  const ctx = {
+    console: { log: noop, warn: noop, error: console.error },
+    document: { getElementById: () => null, querySelector: () => null, querySelectorAll: () => [], addEventListener: noop },
+    localStorage: { getItem: () => null, setItem: noop, removeItem: noop },
+    AbortController, setTimeout, clearTimeout, URL, Number, String, Math, Date, Array, Object, JSON, RegExp, Error, Promise, Set, Map,
+    fetch: () => Promise.reject(new Error('no network in tests')),
+  };
+  ctx.window = ctx; ctx.globalThis = ctx; ctx.addEventListener = noop; ctx.navigator = {};
+  vm.createContext(ctx);
+  ['js/apiConfig.js', 'js/scoreMapper.js', 'js/research.js', 'js/actions.js', 'js/report.js',
+   'js/importValidator.js', 'js/checklist.js', 'app.js']
+    .forEach(f => vm.runInContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), ctx, { filename: f }));
+  const ev = code => vm.runInContext(code, ctx);
+  const cfg = ev('API_CONFIG');
+  const saved = { t: cfg.TIMEOUT_MS, p: cfg.PROXY_EXTRA_MS, r: cfg.RELAY_URL, v: cfg.IEM_VIA_RELAY };
+  const json = body => Promise.resolve({ ok: true, status: 200, json: async () => body });
+  const stalled = () => Promise.resolve({ ok: true, status: 200, json: () => new Promise(() => {}) });
+  const later = (ms, v) => new Promise(r => setTimeout(() => r(v), ms));
+  const seen = [];
+  const route = handler => { seen.length = 0; ctx.fetch = (url, opts) => { seen.push({ url: String(url), opts: opts || {} }); return handler(String(url), opts || {}); }; };
+  const by = (fs_, id) => fs_.find(f => f.hazardId === id);
+  let e1, t0;
+  try {
+    // ── S1: one deadline over headers and body ──
+    cfg.TIMEOUT_MS = 150; cfg.PROXY_EXTRA_MS = 0;
+    route(() => stalled());
+    t0 = Date.now(); e1 = null;
+    try { await ctx.directFetch('https://example.test/x'); } catch (e) { e1 = e; }
+    const el = Date.now() - t0;
+    check('directFetch: headers then a stalled body rejects at the deadline (was: hung)', !!e1 && /timed out after 150ms/.test(e1.message) && el >= 140 && el < 1000, `${el} ms`);
+    check('directFetch: the request is aborted at the deadline', seen[0].opts.signal && seen[0].opts.signal.aborted === true);
+    route(() => json({ ok: 1 }));
+    check('directFetch: a normal answer still resolves, with a per-call timeout option', (await ctx.directFetch('https://example.test/x', { timeoutMs: 50 })).ok === 1 && seen[0].opts.signal.aborted === false);
+    route(() => stalled());
+    e1 = null; try { await ctx.directPostForm('https://example.test/p', { a: 1 }); } catch (e) { e1 = e; }
+    check('directPostForm: a stalled body also rejects at the deadline', !!e1 && /timed out/.test(e1.message));
+
+    // ── S1: water keeps a found system when the violations body stalls ──
+    route(url => url.startsWith(cfg.EPA_WATER_BOUNDARIES) ? json({ features: [{ attributes: WATER_FX.downtown }] }) : stalled());
+    t0 = Date.now();
+    const tw = await ctx._tracked('water', ctx._callWaterAPI(40.015, -105.2705));
+    check('water: stalled violations body gives the population-only finding inside the cap (was: lost, step error)',
+      tw && tw.kind === 'system' && tw.confidence === 'Low' && tw.score === 1 && /violation history could not be read/.test(tw.finding) &&
+      ev('_research.stepStatuses.water') === 'success' && Date.now() - t0 < ev('_trackedCapMs()'), JSON.stringify(tw));
+    check('water: the violations call got a deadline (no longer than TIMEOUT_MS)', seen.length === 2 && seen[1].opts.signal.aborted === true);
+    check('water violations budget: time left before the cap less the margin, at most TIMEOUT_MS, 0 when under 250 ms',
+      ctx._violationsBudgetMs(Date.now(), 10000) === 150 && ctx._violationsBudgetMs(Date.now() - 9400, 10000) <= 100 &&
+      ctx._violationsBudgetMs(Date.now() - 9300, 10000) === 0 && ctx._violationsBudgetMs(Date.now() - 9000, 10000) === 150);
+    cfg.TIMEOUT_MS = 10000; cfg.PROXY_EXTRA_MS = 5000;
+    check('water violations budget with production constants: boundaries at 8.5 s leaves about 9 s, capped at 10 s',
+      Math.abs(ctx._violationsBudgetMs(Date.now() - 8500) - 9000) < 50 && ctx._violationsBudgetMs(Date.now()) === 10000 &&
+      ctx._violationsBudgetMs(Date.now() - 17300) === 0);
+    cfg.TIMEOUT_MS = 150; cfg.PROXY_EXTRA_MS = 0;
+    route(() => json({ features: [{ attributes: { PWSID: '', PWS_Name: 'X' } }] }));
+    e1 = null; try { await ctx._callWaterAPI(40, -105); } catch (e) { e1 = e; }
+    check('water (nit 2): polygons without a usable PWSID are a failed lookup, not a private well', !!e1 && /usable PWSID/.test(e1.message));
+
+    // ── S2: relay then direct, with the flag on ──
+    cfg.RELAY_URL = 'https://relay.test';
+    route(url => url.startsWith('https://relay.test/') ? new Promise(() => {}) : later(30, { ok: true, status: 200, json: () => later(30, { events: [] }) }));
+    t0 = Date.now();
+    const rd = await ctx.relayThenDirect('https://mesonet.agron.iastate.edu/json/x', { useRelay: true, budgetMs: 100, capMs: 1000, accept: d => Array.isArray(d.events) });
+    check('relayThenDirect: a hung relay is aborted when its budget ends, then direct answers (body included)',
+      Array.isArray(rd.events) && seen.length === 2 && seen[0].opts.signal.aborted === true && Date.now() - t0 < 1000, `${Date.now() - t0} ms`);
+    route(url => url.startsWith('https://relay.test/') ? new Promise(() => {}) : stalled());
+    t0 = Date.now(); e1 = null;
+    try { await ctx.relayThenDirect('https://x.test/y', { useRelay: true, budgetMs: 100, capMs: 700 }); } catch (e) { e1 = e; }
+    const el2 = Date.now() - t0;
+    check('relayThenDirect: direct gets only the time left before the cap, body included, so it settles before the cap', !!e1 && el2 < 700 - 400, `${el2} ms`);
+    route(() => json({ events: [] }));
+    await ctx.relayThenDirect('https://x.test/y', { useRelay: false });
+    check('relayThenDirect: useRelay false calls direct only', seen.length === 1 && seen[0].url === 'https://x.test/y');
+    route(() => json({ events: [] }));
+    await ctx.relayThenDirect('https://x.test/y');
+    check('relayThenDirect: by default it follows API_CONFIG.IEM_VIA_RELAY (false)', seen.length === 1 && seen[0].url === 'https://x.test/y');
+    route(url => url.startsWith('https://relay.test/') ? json({ nope: 1 }) : json({ events: [1] }));
+    check('relayThenDirect: a relay 200 the caller does not accept is a miss', (await ctx.relayThenDirect('https://x.test/y', { useRelay: true, accept: d => Array.isArray(d.events) })).events.length === 1 && seen.length === 2);
+    route(() => new Promise(() => {}));
+    e1 = null; try { await ctx.relayThenDirect('https://x.test/y', { useRelay: true, budgetMs: 100, capMs: 600 }); } catch (e) { e1 = e; }
+    check('relayThenDirect: no time left after the relay means no direct call', !!e1 && /No time left/.test(e1.message) && seen.length === 1);
+    const src = fs.readFileSync(path.join(ROOT, 'js/research.js'), 'utf8');
+    check('relayFetch takes a timeout and covers the body (no separate json() outside the deadline)', /async function relayFetch\(targetUrl, opts\)/.test(src) &&
+      /_fetchJsonWithin\(wrappedUrl, \{ referrerPolicy: 'no-referrer' \}, totalTimeout, 'Relay HTTP '\)/.test(src));
+
+    // ── Nit 5: IEM events without an event number ──
+    const NOW25 = new Date(2025, 5, 1);
+    const evn = (url, id) => ({ wfo: 'BOU', phenomena: 'HW', significance: 'W', eventid: id, issue: '2020-03-01T00:00:00Z', ugc: 'COZ039', url });
+    const c5 = ctx._countIemEvents([evn('a', null), evn('b', null), evn('b', null), evn('c', undefined), evn('d', 4), evn('e', 4)], NOW25);
+    check('IEM dedupe (nit 5): a missing event number keys on the event link, so different warnings stay apart', c5.counts.highWind === 4, JSON.stringify(c5.counts));
+
+    // ── Nit 1: the well is computed after the floors and ignores hazards ruled out ──
+    ev('state = freshState();');
+    const geo = { lat: 40.04, lng: -105.33, zip: '80302', stateAbbr: 'CO', county: 'Boulder County', fips5: '08013' };
+    const ok = s => ({ score: s, finding: 'x', confidence: 'High' });
+    const base = { flood: ok(4), earthquake: ok(3), wildfire: ok(3), weather: { stateAbbr: 'CO' }, drought: ok(2),
+      epa: { chemScore: 2, finding: '2', confidence: 'Medium', highHazardCount: 0, potwCount: 0 }, landslide: null, nri: null, water: { kind: 'well' } };
+    check('well: flood 4 raises it (baseline)', by(ctx._compileFindings(base, geo), 27).scoreAssigned === 4);
+    ev('state.scores[3] = { na: true }; state.scores[4] = { na: true };');
+    const naW = by(ctx._compileFindings(base, geo), 27);
+    check('well (nit 1): flood marked Does not apply here is not a reason to raise it', naW.scoreAssigned === 3 && !/Raised/.test(naW.finding), naW.finding);
+    ev('state = freshState();');
+    const floors = ev('DECLARATION_FLOORS');
+    const fl = floors.find(f => f.types.includes('Flood'));
+    const savedRules = fl.rules;
+    fl.rules = [[3, 4]];
+    const afterFloor = ctx._compileFindings(Object.assign({}, base, { flood: ok(2), declarations: { Flood: 5 } }), geo);
+    fl.rules = savedRules;
+    check('well (nit 1): runs after the declaration floors (a floor lifting flood to 4 raises the well)', by(afterFloor, 3).scoreAssigned === 4 && by(afterFloor, 27).scoreAssigned === 4);
+
+    // ── Nit 9: neutral step states ──
+    route(() => json({ Table: [['compname', 'lep_r']] }));
+    const soilT = await ctx._tracked('soil', ctx._callSoilAPI(40, -105));
+    check('soil with no rows is a neutral "no record" step, not an error', soilT === null && ev('_research.stepStatuses.soil') === 'norecord' && ev("_research.failCodes.soil") === 'NO_RECORD');
+    route(() => json({ features: [] }));
+    await ctx._tracked('airdays', ctx._callAirDaysAPI('08013'));
+    check('airdays with no monitor rows is a neutral "no record" step', ev('_research.stepStatuses.airdays') === 'norecord');
+    route(() => json({ features: [{ attributes: { YEAR: null } }] }));
+    await ctx._tracked('airdays', ctx._callAirDaysAPI('08013'));
+    check('airdays rows that cannot be read stay an error', ev('_research.stepStatuses.airdays') === 'error');
+    route(() => Promise.reject(new Error('down')));
+    await ctx._tracked('soil', ctx._callSoilAPI(40, -105));
+    check('soil network failure stays an error', ev('_research.stepStatuses.soil') === 'error');
+    check('step notes: "Not available yet" for skipped, county and soil wording for no record, nothing otherwise',
+      ctx._stepNote('radon', 'skipped') === 'Not available yet' && ctx._stepNote('airdays', 'norecord') === 'No air monitor in this county' &&
+      ctx._stepNote('soil', 'norecord') === 'No soil data mapped here' && ctx._stepNote('soil', 'error') === '' && ctx._stepNote('soil', 'success') === '');
+    // A minimal element to watch the DOM changes
+    const mkEl = () => {
+      const kids = [], attrs = {};
+      const icon = { innerHTML: '' };
+      const el = {
+        className: '', children: kids, title: '',
+        querySelector: sel => sel === '.step-icon' ? icon : (kids.find(k => sel === '.' + k.className) || null),
+        appendChild: k => { kids.push(k); k.remove = () => kids.splice(kids.indexOf(k), 1); return k; },
+        removeAttribute: n => { if (n === 'title') el.title = ''; delete attrs[n]; },
+      };
+      return { el, icon, kids };
+    };
+    const S = mkEl();
+    ctx.document.getElementById = id => id === 'step-radon' ? S.el : null;
+    ctx.document.createElement = tag => ({ tagName: tag, className: '', textContent: '' });
+    ctx._renderStepItem('radon', 'skipped');
+    check('skipped step: minus icon, "Not available yet" after the label and as the title', /i-minus/.test(S.icon.innerHTML) && S.kids.length === 1 &&
+      S.kids[0].tagName === 'small' && S.kids[0].textContent === 'Not available yet' && S.el.title === 'Not available yet' && S.el.className === 'research-step step-skipped');
+    ctx._renderStepItem('radon', 'success');
+    check('the note goes away when the step changes to a normal state', S.kids.length === 0 && S.el.title === '' && S.el.className === 'research-step step-success');
+    const A = mkEl();
+    ctx.document.getElementById = id => id === 'step-airdays' ? A.el : null;
+    ctx._renderStepItem('airdays', 'norecord');
+    check('no-record step: neutral look (minus icon, muted class) with its note, no warning triangle', /i-minus/.test(A.icon.innerHTML) && !/triangle/.test(A.icon.innerHTML) &&
+      A.el.className === 'research-step step-skipped' && A.kids[0].textContent === 'No air monitor in this county');
+    ctx.document.getElementById = () => null;
+    check('styles: the step note is styled', /\.step-note \{/.test(fs.readFileSync(path.join(ROOT, 'styles.css'), 'utf8')));
+
+    // ── Copy (nit 11) ──
+    const sd = ctx._mapSoilTable(SDA_FX.downtown);
+    check('soil sentence without the contrast', sd.finding.endsWith('A soil map describes a map unit of several acres; the ground under one house can differ.') && !/, not the ground/.test(sd.finding));
+    check('radon zone text says screening level', ['1', '2', '3'].every(z => /average indoor screening level/.test(ev('RADON_ZONE_INFO')[z].level)));
+
+    // ── Workflow (nit 13) ──
+    const wf = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'data-refresh.yml'), 'utf8');
+    check('workflow: checkout keeps no credentials; no fixed EIA year; action tags unchanged', /actions\/checkout@v4\s*\n\s+with:\s*\n(\s+#.*\n)*\s+persist-credentials: false/.test(wf) &&
+      !/'2025'/.test(wf) && /if \[ -n "\$EIA_YEAR" \]/.test(wf) && wf.includes('peter-evans/create-pull-request@v6') && wf.includes('actions/setup-node@v4'));
+  } finally {
+    cfg.TIMEOUT_MS = saved.t; cfg.PROXY_EXTRA_MS = saved.p; cfg.RELAY_URL = saved.r; cfg.IEM_VIA_RELAY = saved.v;
+    ctx.fetch = () => Promise.reject(new Error('no network in tests'));
+  }
+
+  // ── S5: the Worker fills its cache inside waitUntil ──
+  console.log('relay/worker.js: cache fill survives the client going away');
+  const w = await import(require('url').pathToFileURL(path.join(ROOT, 'relay/worker.js')).href);
+  const realFetch = globalThis.fetch, realCaches = globalThis.caches;
+  const store = new Map();
+  globalThis.caches = { default: { match: async r => { const x = store.get(r.url); return x ? x.clone() : undefined; }, put: async (r, resp) => { store.set(r.url, resp.clone()); } } };
+  let release;
+  const gate = new Promise(r => { release = r; });
+  globalThis.fetch = async () => { await gate; return new Response('{"events":[]}', { status: 200, headers: { 'Content-Type': 'application/json' } }); };
+  try {
+    const IEM = 'https://mesonet.agron.iastate.edu/json/vtec_events_bypoint.py?lat=40.01&lon=-105.27&sdate=2015-01-01&edate=2026-01-01';
+    const waits = [];
+    const respP = w.handleRequest(new Request('https://relay.test/?url=' + encodeURIComponent(IEM), { headers: { Origin: 'https://worldaware.github.io' } }), {}, { waitUntil: p => waits.push(p) });
+    await later(10);
+    check('worker: on a miss, waitUntil holds the upstream task before the upstream has answered', waits.length === 1 && store.size === 0);
+    release();
+    await waits[0];
+    check('worker: that task alone fills the cache, whether or not the visitor is still there', store.size === 1);
+    const r = await respP;
+    check('worker: the visitor who waited still gets the answer (MISS)', r.status === 200 && r.headers.get('X-Relay-Cache') === 'MISS' && (await r.text()) === '{"events":[]}');
+    const nonCached = [];
+    globalThis.fetch = async () => new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+    await w.handleRequest(new Request('https://relay.test/?url=' + encodeURIComponent('https://earthquake.usgs.gov/ws/x'), { headers: { Origin: 'https://worldaware.github.io' } }), {}, { waitUntil: p => nonCached.push(p) });
+    check('worker: hosts that are not cached use no waitUntil', nonCached.length === 0);
+  } finally {
+    globalThis.fetch = realFetch;
+    if (realCaches === undefined) delete globalThis.caches; else globalThis.caches = realCaches;
+  }
+}
+
+asyncChecks().then(v31Checks).then(v32StageAChecks).then(v32StageBChecks).then(v32StageCChecks).then(v32ReviewChecks).catch(e => { failed++; console.log('  FAIL async checks threw — ' + e.message + '\n' + e.stack); }).then(() => {  console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 });

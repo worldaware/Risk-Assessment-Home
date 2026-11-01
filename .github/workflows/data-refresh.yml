@@ -4,16 +4,18 @@ name: Data refresh
 # data/power-reliability.json (EIA-861 utility reliability by county) with
 # scripts/build-data.js, then opens a pull request with whatever changed.
 # It never pushes to main: review the pull request and merge it yourself.
-# EIA publishes the final data for a year in October of the next year, so bump
-# the default year below each October (or pick the year when you run it by hand).
+# EIA publishes the final data for a year in October of the next year. With no
+# year given, the script works out the latest final year from today's date
+# (from October, last year; before October, the year before). Pick a year by
+# hand only to rebuild an older one.
 
 on:
   workflow_dispatch:
     inputs:
       eia_year:
-        description: 'EIA-861 data year (the f861<year>.zip file)'
+        description: 'EIA-861 data year (the f861<year>.zip file); leave empty for the latest final year'
         required: false
-        default: '2025'
+        default: ''
   schedule:
     # Yearly, July 2 at 09:17 UTC (first week of July)
     - cron: '17 9 2 7 *'
@@ -27,6 +29,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Keep the token out of .git/config while npm install and the script run;
+          # create-pull-request uses its own token input.
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -34,8 +40,13 @@ jobs:
         run: npm install xlsx@0.18.5 --no-save
       - name: Build the data files
         env:
-          EIA_YEAR: ${{ inputs.eia_year || '2025' }}
-        run: node scripts/build-data.js --out data --year "$EIA_YEAR"
+          EIA_YEAR: ${{ inputs.eia_year }}
+        run: |
+          if [ -n "$EIA_YEAR" ]; then
+            node scripts/build-data.js --out data --year "$EIA_YEAR"
+          else
+            node scripts/build-data.js --out data
+          fi
       - name: Open a pull request with the changed data files
         uses: peter-evans/create-pull-request@v6
         with:

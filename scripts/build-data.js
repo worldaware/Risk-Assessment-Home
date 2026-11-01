@@ -4,7 +4,8 @@
    Builds the two static data files the app reads for radon (64) and
    long power outages (24):
 
-     data/radon-zones.json       county -> EPA radon zone (1, 2 or 3)
+     data/radon-zones.json       county -> EPA radon zone (1, 2 or 3), by
+                                 5-digit FIPS (zonesByFips) and by name (zones)
      data/power-reliability.json county -> utilities with their SAIDI
 
    Run by .github/workflows/data-refresh.yml once a year. Node 20, no
@@ -13,11 +14,11 @@
    --no-save`; the app itself has no dependencies. CSV input needs nothing.
 
    Usage:
-     node scripts/build-data.js [--out data] [--year 2025]
+     node scripts/build-data.js [--out data] [--year YYYY]   (default: the latest final EIA-861 year)
        [--radon-file <json>]            use a local copy of the EPA file
        [--eia-zip <zip>]...             use local EIA-861 zips (repeatable)
        [--eia-dir <dir>]...             use folders of already-extracted EIA files (repeatable)
-       [--fips-file <txt>]              Census county code list (national_county.txt)
+       [--fips-file <txt>]              Census county code list (national_county.txt); radon and power both use it
        [--history-years 5]              how many EIA-861 years to download and read
        [--only radon|power]
        [--built YYYY-MM-DD]             stamp to use (default today)
@@ -45,8 +46,18 @@ const MAX_SAIDI = 100000;   // minutes a year; anything above is a reporting err
 --------------------------------------------------------------- */
 const REPEATABLE = new Set(['eia-zip', 'eia-dir']);
 
+/**
+ * Latest EIA-861 year with final data on a date: EIA publishes year Y in
+ * October of Y + 1, so from October that is last year, before October the
+ * year before. (The July run of the workflow therefore reads two years back.)
+ */
+function defaultEiaYear(now) {
+  const d = now || new Date();
+  return d.getUTCMonth() >= 9 ? d.getUTCFullYear() - 1 : d.getUTCFullYear() - 2;
+}
+
 function parseArgs(argv) {
-  const o = { out: 'data', year: 2025, historyYears: 5, only: '', built: '', minRadon: 3000, minPowerCounties: 1500,
+  const o = { out: 'data', year: defaultEiaYear(), historyYears: 5, only: '', built: '', minRadon: 3000, minPowerCounties: 1500,
               radonFile: '', eiaZip: [], eiaDir: [], fipsFile: '' };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -177,27 +188,40 @@ function writeData(file, payload, builtDate) {
 --------------------------------------------------------------- */
 
 /**
- * EPA radon zones { data: [ { "County,State": "Boulder, CO", Zone: "1", ... } ] }
- * into { built, source, zones: { "Boulder, CO": 1 } }.
+ * EPA radon zones { data: [ { "County,State": "Boulder, CO", "COUNTY LABEL": "Boulder County", Zone: "1", ... } ] }
+ * into { built, source, zonesByFips: { "08013": 1 }, zones: { "Boulder, CO": 1 } }.
+ * zonesByFips comes from opts.countyIndex (buildCountyIndex), matched on the
+ * full county label first so "Baltimore City" never takes Baltimore County's
+ * code. The app looks up the FIPS first and uses the names only as a fallback.
  */
 function buildRadon(raw, opts) {
   opts = opts || {};
   const rows = raw && Array.isArray(raw.data) ? raw.data : null;
   if (!rows) throw new Error('Radon file has no "data" array');
-  const zones = {};
-  let skipped = 0;
+  const zones = {}, byFips = {};
+  let skipped = 0, unmatched = 0;
+  const idx = opts.countyIndex || null;
   rows.forEach(r => {
     const key = String((r && (r['County,State'] || r['County, State'])) || '').replace(/\s+/g, ' ').trim();
     const zone = parseInt(r && r.Zone, 10);
     if (!/^.+, [A-Z]{2}$/.test(key) || ![1, 2, 3].includes(zone)) { skipped++; return; }
     zones[key] = zone;
+    if (idx) {
+      const st = key.slice(-2), name = key.slice(0, -4);
+      const label = String((r && r['COUNTY LABEL']) || '').trim();
+      const fips = (label && idx.lookup(st, label)) || idx.lookup(st, name);
+      if (fips) byFips[fips] = zone; else unmatched++;
+    }
   });
-  const sorted = {};
-  Object.keys(zones).sort().forEach(k => { sorted[k] = zones[k]; });
+  const sort = o => { const out = {}; Object.keys(o).sort().forEach(k => { out[k] = o[k]; }); return out; };
+  const sorted = sort(zones);
   const n = Object.keys(sorted).length;
   const min = opts.minRadon === undefined ? 3000 : opts.minRadon;
   if (n < min) throw new Error(`Only ${n} radon zone rows were usable (expected at least ${min}); the file layout may have changed`);
-  return { payload: { built: '', source: RADON_URL, zones: sorted }, count: n, skipped };
+  const payload = { built: '', source: RADON_URL };
+  if (idx) payload.zonesByFips = sort(byFips);
+  payload.zones = sorted;
+  return { payload, count: n, skipped, fipsCount: Object.keys(byFips).length, unmatched };
 }
 
 /* ---------------------------------------------------------------
@@ -402,7 +426,7 @@ function buildPower(reliability, territory, countyIndex, opts) {
   }
   return {
     payload: {
-      built: '', source: opts.source || eiaZipUrl(opts.year || 2025), year: yearRange[1], yearRange,
+      built: '', source: opts.source || eiaZipUrl(opts.year || defaultEiaYear()), year: yearRange[1], yearRange,
       stateMethod: 'customer-weighted mean of utility medians; plain median where no customer counts',
       byCounty: sortedCounty, byState,
     },
@@ -437,6 +461,19 @@ async function main(argv) {
   const built = o.built || new Date().toISOString().slice(0, 10);
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-data-'));
   const failures = [];
+  // Census county list, read once and shared by radon (FIPS keys) and power
+  let countyIndexP = null;
+  const countyIndex = () => {
+    if (!countyIndexP) {
+      countyIndexP = (async () => {
+        if (o.fipsFile) return buildCountyIndex(fs.readFileSync(o.fipsFile, 'utf8'));
+        const f = path.join(tmp, 'national_county.txt');
+        await download(FIPS_URL, f);
+        return buildCountyIndex(fs.readFileSync(f, 'utf8'));
+      })();
+    }
+    return countyIndexP;
+  };
   try {
     if (o.only !== 'power') {
       try {
@@ -447,9 +484,15 @@ async function main(argv) {
           await download(RADON_URL, f);
           raw = JSON.parse(fs.readFileSync(f, 'utf8'));
         }
-        const r = buildRadon(raw, { minRadon: o.minRadon });
+        let idx = null;
+        // A local radon file with no local county list stays offline (tests): names only
+        if (o.fipsFile || !o.radonFile) try { idx = await countyIndex(); } catch (e) {
+          console.warn(`county code list not read (${e.message}); radon-zones.json gets names only`);
+        }
+        const r = buildRadon(raw, { minRadon: o.minRadon, countyIndex: idx });
         writeData(path.join(o.out, 'radon-zones.json'), r.payload, built);
-        console.log(`radon-zones.json: ${r.count} counties${r.skipped ? `, ${r.skipped} rows skipped` : ''}`);
+        console.log(`radon-zones.json: ${r.count} counties${r.skipped ? `, ${r.skipped} rows skipped` : ''}` +
+          (idx ? `, ${r.fipsCount} with a county code, ${r.unmatched} without` : ''));
       } catch (e) { failures.push(`radon: ${e.message}`); console.error(`radon failed: ${e.message}`); }
     }
     if (o.only !== 'radon') {
@@ -468,19 +511,10 @@ async function main(argv) {
             const d = path.join(tmp, `eia-${y}`); unzipTo(z, d); dirs.push(d);
           }
         }
-        let countyIndex = null;
-        let text = '';
-        if (o.fipsFile) text = fs.readFileSync(o.fipsFile, 'utf8');
+        let idx = null;
         const { reliability, territory } = readEia(dirs);
-        if (territory.length > 0 && territory.some(t => !t.fips)) {
-          if (!text) {
-            const f = path.join(tmp, 'national_county.txt');
-            await download(FIPS_URL, f);
-            text = fs.readFileSync(f, 'utf8');
-          }
-          countyIndex = buildCountyIndex(text);
-        }
-        const p = buildPower(reliability, territory, countyIndex,
+        if (territory.length > 0 && territory.some(t => !t.fips)) idx = await countyIndex();
+        const p = buildPower(reliability, territory, idx,
           { historyYears: o.historyYears, minPowerCounties: o.minPowerCounties, year: o.year });
         writeData(path.join(o.out, 'power-reliability.json'), p.payload, built);
         console.log(`power-reliability.json: ${p.counts.counties} counties, ${p.counts.utilities} utility-state pairs, ${p.counts.states} states, ` +
@@ -495,7 +529,7 @@ async function main(argv) {
 
 module.exports = {
   parseArgs, parseCsv, countyKey, stringifyData, buildRadon, findHeader, parseReliability, parseTerritory,
-  buildCountyIndex, buildPower, readEia, main,
+  buildCountyIndex, buildPower, readEia, main, defaultEiaYear,
 };
 
 if (require.main === module) {

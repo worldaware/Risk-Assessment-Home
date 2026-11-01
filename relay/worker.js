@@ -235,46 +235,63 @@ export async function handleRequest(request, env, ctx) {
     }
   }
 
+  // On a cache miss the upstream fetch, the body read and the cache write
+  // run as one task handed to ctx.waitUntil, so a visitor who gives up (or
+  // a client that disconnects) does not cancel the fill: the next visitor
+  // then gets the stored copy instead of hitting IEM again.
+  const task = fetchOutcome(target, ttl, cache, key);
+  if (cache && ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(task.catch(() => {}));
+  const out = await task;
+
+  if (out.error) return plain(out.status, out.error, origin);
+  const h = corsHeaders(origin);
+  h.set('Content-Type', out.contentType);
+  h.set('Cache-Control', out.ok ? 'public, max-age=' + (ttl || 3600) : 'no-store');
+  h.set('X-Content-Type-Options', 'nosniff');
+  if (out.cache) h.set('X-Relay-Cache', out.cache);
+  return new Response(out.body, { status: out.status, headers: h });
+}
+
+/**
+ * Upstream call with the 10 s timeout. For a cached host with a 200 answer
+ * the body is read (inside the same timeout) and a clean copy, with no CORS
+ * or cookie headers, is written to the cache before this resolves.
+ * Resolves to { status, ok, contentType, body, cache } or { status, error }.
+ */
+async function fetchOutcome(target, ttl, cache, key) {
   const ctrl  = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), UPSTREAM_TIMEOUT_MS);
-  let result;
   try {
-    result = await fetchUpstream(target, ctrl.signal, ttl);
-  } catch (err) {
-    const timedOut = err && err.name === 'AbortError';
-    return plain(timedOut ? 504 : 502, timedOut ? 'Upstream timed out' : 'Upstream unreachable', origin);
-  } finally {
-    clearTimeout(timer);
-  }
-  if (result.blocked) return plain(403, 'Upstream redirected to a host that is not allowed: ' + result.host, origin);
-  if (result.tooMany) return plain(502, 'Too many upstream redirects', origin);
+    let result;
+    try {
+      result = await fetchUpstream(target, ctrl.signal, ttl);
+    } catch (err) {
+      const timedOut = err && err.name === 'AbortError';
+      return { status: timedOut ? 504 : 502, error: timedOut ? 'Upstream timed out' : 'Upstream unreachable' };
+    }
+    if (result.blocked) return { status: 403, error: 'Upstream redirected to a host that is not allowed: ' + result.host };
+    if (result.tooMany) return { status: 502, error: 'Too many upstream redirects' };
 
-  const up = result.resp;
-  const contentType = up.headers.get('Content-Type') || 'application/octet-stream';
-  const h  = corsHeaders(origin);
-  h.set('Content-Type', contentType);
-  h.set('Cache-Control', up.ok ? 'public, max-age=' + (ttl || 3600) : 'no-store');
-  h.set('X-Content-Type-Options', 'nosniff');
-
-  if (cache && up.status === 200) {
-    // Store a clean copy (no CORS or cookie headers) and answer with the same bytes.
+    const up = result.resp;
+    const contentType = up.headers.get('Content-Type') || 'application/octet-stream';
+    if (!(cache && up.status === 200)) {
+      return { status: up.status, ok: up.ok, contentType, body: up.body, cache: '' };
+    }
     let body;
     try {
       body = await up.arrayBuffer();
     } catch {
-      return plain(502, 'Upstream body could not be read', origin);
+      return { status: 502, error: 'Upstream body could not be read' };
     }
     const stored = new Response(body, {
       status: 200,
       headers: { 'Content-Type': contentType, 'Cache-Control': 'public, max-age=' + ttl },
     });
-    const put = Promise.resolve().then(() => cache.put(key, stored)).catch(() => {});
-    if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(put);
-    else await put;
-    h.set('X-Relay-Cache', 'MISS');
-    return new Response(body, { status: 200, headers: h });
+    try { await cache.put(key, stored); } catch { /* a failed write only costs the next visitor a miss */ }
+    return { status: 200, ok: true, contentType, body, cache: 'MISS' };
+  } finally {
+    clearTimeout(timer);
   }
-  return new Response(up.body, { status: up.status, headers: h });
 }
 
 export default {

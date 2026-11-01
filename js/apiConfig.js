@@ -132,13 +132,17 @@ const API_CONFIG = {
 
   /* ── Iowa Environmental Mesonet: NWS warnings by point — no key required ─
      Every NWS watch and warning (VTEC) whose zone or county covers the
-     point. Answers direct with CORS (checked 2026-10-31), but IEM asks not
-     to be called from busy sites, so the app goes through the relay first
-     (the Worker caches IEM answers for 30 days) and calls direct only when
-     the relay is not set up or fails. Coordinates are rounded to 2 decimals
-     so neighbours share one cached answer. */
+     point. Answers direct with CORS (checked 2026-10-31). Coordinates are
+     rounded to 2 decimals (about 1 km) before the call. */
   IEM_VTEC_BYPOINT:
     'https://mesonet.agron.iastate.edu/json/vtec_events_bypoint.py',
+  /* IEM asks not to be called from busy sites. The relay can cache IEM
+     answers for 30 days, but Cloudflare's Cache API only works for a Worker
+     on a custom domain, and RELAY_URL is a workers.dev address, where the
+     cache does nothing. So v3.2.0 calls IEM direct. Set this to true once
+     the relay runs on a custom domain and RELAY_URL points at it: the app
+     then asks the relay first and calls direct only when the relay fails. */
+  IEM_VIA_RELAY: false,
 
   /* ── NOAA NCEI 1991-2020 climate normals — no key required ─
      Search finds normals stations in a box (bbox order north,west,south,east);

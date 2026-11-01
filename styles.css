@@ -343,6 +343,7 @@ textarea.input { min-height: 72px; resize: vertical; }
 .step-error .step-icon { color: var(--color-warning); }
 .step-skipped .step-icon { color: var(--color-text-muted, #777); }
 .step-skipped { color: var(--color-text-muted, #777); }
+.step-note { margin-left: auto; font-size: var(--text-sm); color: var(--color-text-muted, #777); }
 @keyframes spin { to { transform: rotate(360deg); } }
 .research-timing { margin-top: var(--space-3); font-size: var(--text-sm); color: var(--color-text-muted); }
 

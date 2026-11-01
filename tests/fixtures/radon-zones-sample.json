@@ -71,6 +71,13 @@
    "Zone": "2"
   },
   {
+   "County,State": "Baltimore City, MD",
+   "COUNTY LABEL": "Baltimore City",
+   "STATE": "Maryland",
+   "Region": "3",
+   "Zone": "3"
+  },
+  {
    "County,State": "Bad Row, CO",
    "COUNTY LABEL": "Bad Row County",
    "STATE": "Colorado",
