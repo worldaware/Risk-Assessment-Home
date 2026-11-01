@@ -209,7 +209,8 @@ console.log('Relay wiring');
   check('relayFetch exists and proxyFetch is an alias', /async function relayFetch\(/.test(src) && /return relayFetch\(url\)/.test(src));
   check('relay keeps referrerPolicy no-referrer', /referrerPolicy: 'no-referrer'/.test(src));
   check('flood Method C (envelope) removed', !src.includes('esriGeometryEnvelope'));
-  check('flood gets the 5-digit FIPS', src.includes("_callFloodAPI(lat, lng, fips5)"));
+  // v3.1.0: the call also passes the shared NRI promise, so match the FIPS argument only
+  check('flood gets the 5-digit FIPS', /_callFloodAPI\(lat, lng, fips5\b/.test(src));
   check('wildfire uses WHP 2023 classified image service (GeoPlatform copy)', cfg.includes('imagery.geoplatform.gov/iipp/rest/services/Fire_Aviation/USFS_EDW_RMRS_WildfireHazardPotentialClassified/ImageServer/identify'));
   check('flood tries the Esri NFHL copy first, direct', cfg.includes('USA_Flood_Hazard_Areas_view/FeatureServer/0/query') && src.includes('Method 0'));
   check('flood: Esri spelling "0.2 Percent" scores moderate', g.mapFloodZoneToScore('X', '0.2 Percent Annual Chance Flood Hazard').score === 3);
@@ -634,7 +635,7 @@ console.log('v3.0.0 hazard cut');
     const rd = ev('buildReportData()');
     check('report data: na hazards not ranked', !rd.scored.some(it => it.id === 1 || it.id === 18));
     check('report data: ruledOut lists every na hazard by name, in screen order', JSON.stringify(rd.ruledOut) === JSON.stringify(['Wildfire', 'Hurricane', 'Tsunami', 'Volcanic ash', 'Nuclear or radiological incident']), JSON.stringify(rd.ruledOut));
-    check('export carries the checklist and na flags', (() => { const x = ev('buildExportData()'); return x.checklist && x.checklist.hh1 && x.scores[7].na === true && x.version === '3.0.0'; })());
+    check('export carries the checklist and na flags', (() => { const x = ev('buildExportData()'); return x.checklist && x.checklist.hh1 && x.scores[7].na === true && x.version === ev('APP_VERSION'); })());
   }
 
   // normalizeState: v2 saved state
@@ -927,6 +928,306 @@ console.log('v3.0.0 hazard cut');
   }
 }
 
+
+/* ---------------------------------------------------------------
+   v3.1.0 NRI and landslide
+   Values are the live rows captured from Henry's browser on 2026-10-31
+   (downtown 40.0150,-105.2705; foothills 40.0394,-105.3320; Boulder County),
+   plus four out-of-state tracts read the same day.
+--------------------------------------------------------------- */
+const NRI_FX = {
+  downtown:  { COUNTY: 'Boulder', TRACTFIPS: '08013012206', CWAV_AFREQ: 1.1052631578947372, HAIL_AFREQ: 6.274038864769396, HWAV_AFREQ: 0.7894736842105264,
+               LNDS_AFREQ: 0.00000630059, LTNG_AFREQ: 47.188475999999994, SWND_AFREQ: 1.1794377543572774, TRND_AFREQ: 0.00035723177862237,
+               WFIR_RISKR: 'Very Low', WNTW_AFREQ: 14.526315789473687 },
+  foothills: { COUNTY: 'Boulder', TRACTFIPS: '08013013704', CWAV_AFREQ: 0.3840218010347142, HAIL_AFREQ: 5.099036394701887, HWAV_AFREQ: 0.15308426333004188,
+               LNDS_AFREQ: 0.0190610275, LTNG_AFREQ: 49.298451129552625, SWND_AFREQ: 0.9102506690207331, TRND_AFREQ: 0.01719642911618637,
+               WFIR_RISKR: 'Very High', WNTW_AFREQ: 16.47790895127154 },
+  county:    { AREA: 747.9461882100001, COUNTY: 'Boulder', STCOFIPS: '08013', CWAV_AFREQ: 0.5918800291218647, HAIL_AFREQ: 5.479481243434043,
+               HWAV_AFREQ: 0.30520413564463056, LNDS_AFREQ: 0.26682081889, SWND_AFREQ: 0.9974086441717701, TRND_AFREQ: 0.5238448942072822,
+               WNTW_AFREQ: 21.4001613081911,
+               IFLD_AFREQ: 4.2 /* test value only: the live Boulder IFLD_AFREQ was not captured */ },
+  houston:     { HAIL_AFREQ: 2.33, SWND_AFREQ: 1.49, WNTW_AFREQ: 1.11, CWAV_AFREQ: 0.47, HWAV_AFREQ: 14.58, LNDS_AFREQ: 0.00011 },
+  phoenix:     { HAIL_AFREQ: 0.34, SWND_AFREQ: 1.84, WNTW_AFREQ: 0.16, CWAV_AFREQ: 0, HWAV_AFREQ: 23.42 },
+  minneapolis: { HAIL_AFREQ: 6.51, SWND_AFREQ: 4.83, WNTW_AFREQ: 16.58, CWAV_AFREQ: 8.95, HWAV_AFREQ: 6.68 },
+  seattle:     { HAIL_AFREQ: 0.01, SWND_AFREQ: 0.01, WNTW_AFREQ: 5.16, CWAV_AFREQ: 0, HWAV_AFREQ: 5.05 },
+};
+
+async function v31Checks() {
+  console.log('v3.1.0 NRI and landslide');
+  const noop = () => {};
+  const ctx = {
+    console: { log: noop, warn: noop, error: console.error },
+    document: { getElementById: () => null, querySelector: () => null, querySelectorAll: () => [], addEventListener: noop },
+    localStorage: { getItem: () => null, setItem: noop, removeItem: noop },
+    AbortController: class { constructor() { this.signal = {}; } abort() {} },
+    setTimeout, clearTimeout, URL, Number, String, Math, Date, Array, Object, JSON, RegExp, Error, Promise, Set, Map,
+    fetch: () => Promise.reject(new Error('no network in tests')),
+  };
+  ctx.window = ctx; ctx.globalThis = ctx; ctx.addEventListener = noop; ctx.navigator = {};
+  vm.createContext(ctx);
+  ['js/apiConfig.js', 'js/scoreMapper.js', 'js/research.js', 'js/actions.js', 'js/report.js',
+   'js/importValidator.js', 'js/checklist.js', 'app.js']
+    .forEach(f => vm.runInContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), ctx, { filename: f }));
+  const ev = code => vm.runInContext(code, ctx);
+  const cfg = ev('API_CONFIG');
+  const HD = ev('HAZARD_DATA');
+  const names = Object.fromEntries(HD.map(h => [h.id, h.name]));
+  const REMOVED = [14, 16, 19, 21, 25, 26, 28, 29, 30, 31, 32, 33, 34, 35, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 55, 56, 57, 58, 59];
+
+  // Config
+  check('apiConfig: NRI_TRACT and NRI_COUNTY are the FEMA ArcGIS Online layers',
+    /XG15cJAlne2vxtgt\/arcgis\/rest\/services\/National_Risk_Index_Census_Tracts\/FeatureServer\/0\/query$/.test(cfg.NRI_TRACT) &&
+    /XG15cJAlne2vxtgt\/arcgis\/rest\/services\/National_Risk_Index_Counties\/FeatureServer\/0\/query$/.test(cfg.NRI_COUNTY));
+  check('apiConfig: FEMA_NRI_COUNTY kept as relay fallback', cfg.FEMA_NRI_COUNTY === 'https://hazards.fema.gov/nri/api/county');
+  check('apiConfig: landslide tile service, inventory layer 11 and post-fire layer 4',
+    cfg.USGS_LANDSLIDE === 'https://tiles.arcgis.com/tiles/v01gqwM5QqNysAAi/arcgis/rest/services/US_Landslide_Susceptibility/MapServer' &&
+    /US_Landslide_point_v2\/FeatureServer\/11\/query$/.test(cfg.USGS_LANDSLIDE_INVENTORY) &&
+    /USGS_Post_Fire_Hazard_Assessment_Data\/FeatureServer\/4\/query$/.test(cfg.USGS_POSTFIRE));
+  check('apiConfig: OpenFEMA declarations', cfg.OPENFEMA_DECLARATIONS === 'https://www.fema.gov/api/open/v2/DisasterDeclarationsSummaries');
+
+  // outFields: only fields confirmed on the December 2025 layers
+  const CONFIRMED = ['HAIL_AFREQ', 'TRND_AFREQ', 'SWND_AFREQ', 'WNTW_AFREQ', 'CWAV_AFREQ', 'HWAV_AFREQ', 'LNDS_AFREQ', 'LTNG_AFREQ', 'IFLD_AFREQ', 'WFIR_RISKR'];
+  const outFields = url => (decodeURIComponent(url).match(/[?&]outFields=([^&]*)/) || [])[1] || '';
+  const tf = outFields(ctx._nriTractUrl(40.015, -105.2705)).split(',');
+  const cf = outFields(ctx._nriCountyUrl('08013')).split(',');
+  check('NRI tract outFields: only confirmed fields', tf.length > 3 && tf.every(f => CONFIRMED.concat(['TRACTFIPS', 'COUNTY']).includes(f)), tf.join());
+  check('NRI county outFields: only confirmed fields', cf.length > 3 && cf.every(f => CONFIRMED.concat(['COUNTY', 'AREA', 'STCOFIPS']).includes(f)), cf.join());
+  check('no NRI request names RFLD', !/RFLD/.test(ctx._nriTractUrl(40, -105) + ctx._nriCountyUrl('08013')));
+  check('NRI tract query uses the JSON point geometry form',
+    decodeURIComponent(ctx._nriTractUrl(40.015, -105.2705)).includes('geometry={"x":-105.2705,"y":40.015,"spatialReference":{"wkid":4326}}'));
+  check('NRI county query is by 5-digit STCOFIPS', decodeURIComponent(ctx._nriCountyUrl('08013')).includes("where=STCOFIPS='08013'"));
+
+  // Mappings, Boulder fixtures
+  const hail = v => ctx._mapNRIHail(v).score, wind = v => ctx._mapNRIWind(v).score;
+  const winter = (w, c) => ctx._mapNRIWinter(w, c).score;
+  check('hail: downtown 6.27 = 5', hail(NRI_FX.downtown.HAIL_AFREQ) === 5);
+  check('hail: finding says events a year near this tract', /^About 6\.3 hail events a year recorded near this tract \(FEMA NRI\)$/.test(ctx._mapNRIHail(6.274).finding), ctx._mapNRIHail(6.274).finding);
+  check('hail: cut points 0.99/1/2/3.5/5', hail(0.99) === 1 && hail(1) === 2 && hail(2) === 3 && hail(3.5) === 4 && hail(5) === 5);
+  check('wind: downtown SWND 1.18 = 2, Medium, thunderstorm wind only', wind(NRI_FX.downtown.SWND_AFREQ) === 2 &&
+    ctx._mapNRIWind(1.18).confidence === 'Medium' && ctx._mapNRIWind(1.18).finding.includes('Thunderstorm wind only; downslope windstorms are not counted'));
+  check('winter: downtown WNTW 14.5 = 4, CWAV 1.1 (< 2) adds nothing', winter(NRI_FX.downtown.WNTW_AFREQ, NRI_FX.downtown.CWAV_AFREQ) === 4);
+  check('winter: foothills WNTW 16.5 = 5', winter(NRI_FX.foothills.WNTW_AFREQ, NRI_FX.foothills.CWAV_AFREQ) === 5);
+  check('winter: CWAV 2 or more adds one (14.5 -> 5), capped at 5', winter(14.5, 2) === 5 && winter(7, 2.5) === 4 && winter(20, 9) === 5);
+  const trn = ctx._mapNRITornado(NRI_FX.county.TRND_AFREQ, NRI_FX.county.AREA, 'Boulder County');
+  check('tornado: Boulder County 0.5238 / 747.9 sq mi = 0.70 per 1,000 sq mi = 3', trn.score === 3 && Math.abs(trn.density - 0.70) < 0.005, JSON.stringify(trn));
+  check('tornado: finding names the county, Medium confidence', trn.finding.includes('Boulder County') && trn.confidence === 'Medium');
+  check('tornado: density cut points', [[0.19, 1], [0.2, 2], [0.5, 3], [0.8, 4], [1.0, 5]].every(([d, s]) => ctx._mapNRITornado(d, 1000, '').score === s));
+  check('tornado: zero area is no data', ctx._mapNRITornado(0.5, 0, '') === null);
+  check('landslide fallback: foothills LNDS 0.019 = 3, Low, tract-level', ctx._mapNRILandslide(NRI_FX.foothills.LNDS_AFREQ).score === 3 &&
+    ctx._mapNRILandslide(0.019).confidence === 'Low' && ctx._mapNRILandslide(0.019).finding.includes('tract-level, FEMA NRI'));
+  check('landslide fallback: downtown LNDS 0.0000063 = 1; cut points', ctx._mapNRILandslide(NRI_FX.downtown.LNDS_AFREQ).score === 1 &&
+    [[0.0009, 1], [0.001, 2], [0.01, 3], [0.05, 4], [0.2, 5]].every(([v, s]) => ctx._mapNRILandslide(v).score === s));
+  check('missing NRI values are no data', ctx._mapNRIHail(null) === null && ctx._mapNRIWind(undefined) === null &&
+    ctx._mapNRIWinter('', 3) === null && ctx._mapNRILandslide(null) === null);
+
+  // Out-of-state tracts (live values, 2026-10-31)
+  const X = NRI_FX;
+  check('hail: Houston 3, Phoenix 1, Minneapolis 5, Seattle 1',
+    [hail(X.houston.HAIL_AFREQ), hail(X.phoenix.HAIL_AFREQ), hail(X.minneapolis.HAIL_AFREQ), hail(X.seattle.HAIL_AFREQ)].join() === '3,1,5,1');
+  check('winter: Houston 1, Phoenix 1, Minneapolis 5, Seattle 3',
+    [X.houston, X.phoenix, X.minneapolis, X.seattle].map(r => winter(r.WNTW_AFREQ, r.CWAV_AFREQ)).join() === '1,1,5,3',
+    [X.houston, X.phoenix, X.minneapolis, X.seattle].map(r => winter(r.WNTW_AFREQ, r.CWAV_AFREQ)).join());
+  check('wind: Minneapolis 4, Seattle 1', wind(X.minneapolis.SWND_AFREQ) === 4 && wind(X.seattle.SWND_AFREQ) === 1);
+
+  // Landslide tile math and colours
+  const t1 = ctx._lsTileFor(40.0150, -105.2705), t2 = ctx._lsTileFor(40.0394, -105.3320);
+  check('tile math: downtown 12/1550/850 px 130,223', [t1.level, t1.row, t1.col, t1.px, t1.py].join() === '12,1550,850,130,223', JSON.stringify(t1));
+  check('tile math: foothills 12/1550/849 px 284,38', [t2.level, t2.row, t2.col, t2.px, t2.py].join() === '12,1550,849,284,38', JSON.stringify(t2));
+  const LEG = ev('LS_LEGEND_FALLBACK');
+  const m = (rgba, tol) => ctx._lsMatchClass(rgba, LEG, tol);
+  check('colour: 231,33,36 alpha 191 = class 4', m([231, 33, 36, 191]) === 4);
+  check('colour: 0,0,0,0 = negligible (0)', m([0, 0, 0, 0]) === 0);
+  check('colour: near a legend colour matches within tolerance', m([245, 40, 30, 255]) === 4 && m([120, 20, 18, 200]) === 5 && m([250, 210, 120, 191]) === 1);
+  check('colour: far from every legend colour is no match', m([0, 128, 255, 255]) === null && m([231, 33, 36, 191], 0) === 4 && m([235, 33, 36, 191], 2) === null);
+  check('colour: built-in legend table matches the fixture',
+    JSON.stringify(LEG) === JSON.stringify({ 1: [251, 213, 117], 2: [247, 168, 20], 3: [241, 129, 129], 4: [231, 33, 36], 5: [114, 16, 15] }));
+  const px = (...cols) => cols.reduce((a, c) => a.concat(c), []);
+  const red = [231, 33, 36, 191], clear = [0, 0, 0, 0];
+  check('3x3 mode: majority colour wins', ctx._lsModeColor(px(red, red, red, red, red, clear, clear, clear, clear)).join() === '231,33,36,191');
+  check('3x3 mode: mostly transparent reads as no colour', ctx._lsModeColor(px(red, red, clear, clear, clear, clear, clear, red, clear)).join() === '0,0,0,0');
+  const lr = (c, i, p) => ctx._landslideResult(c, i, p);
+  check('landslide classes: negligible 1, class 1 2, 2 3, 3 4, 4 5, 5 5',
+    [0, 1, 2, 3, 4, 5].map(c => lr(c, 0, 0).score).join() === '1,2,3,4,5,5');
+  check('landslide confidence: High for negligible and 4 to 5, Medium for 1 to 3',
+    [0, 1, 2, 3, 4, 5].map(c => lr(c, 0, 0).confidence).join() === 'High,Medium,Medium,Medium,High,High');
+  check('landslide finding: "Susceptibility class 4 of 5 at this point"', lr(4, 0, 0).finding.startsWith('Susceptibility class 4 of 5 at this point'));
+  check('landslide modifier: inventory within 1 km adds one and says so', lr(2, 1, 0).score === 4 && /landslide inventory/.test(lr(2, 1, 0).finding));
+  check('landslide modifier: post-fire basin adds one and says so', lr(0, 0, 2).score === 2 && /post-fire debris-flow basin/.test(lr(0, 0, 2).finding));
+  check('landslide modifier: both add one only, capped at 5', lr(2, 3, 1).score === 4 && lr(5, 1, 1).score === 5);
+  check('landslide modifier: an unchecked layer is named', /Not checked: landslide inventory/.test(lr(1, null, 0).finding) && lr(1, null, null).score === 2);
+
+  // OpenFEMA counts and floors
+  const rows = [
+    ...Array.from({ length: 9 }, (_, i) => ({ disasterNumber: 5000 + i, incidentType: 'Fire', declarationDate: '2010-09-07T00:00:00.000Z', fipsCountyCode: '013' })),
+    ...Array.from({ length: 5 }, (_, i) => ({ disasterNumber: 4000 + i, incidentType: 'Flood', declarationDate: '2013-09-14T00:00:00.000Z', fipsCountyCode: '013' })),
+    { disasterNumber: 3000, incidentType: 'Snowstorm', declarationDate: '2003-03-20T00:00:00.000Z', fipsCountyCode: '013' },
+    { disasterNumber: 3001, incidentType: 'Snowstorm', declarationDate: '2007-01-05T00:00:00.000Z', fipsCountyCode: '013' },
+    { disasterNumber: 2000, incidentType: 'Coastal Storm', declarationDate: '2005-09-02T00:00:00.000Z', fipsCountyCode: '000' },
+    { disasterNumber: 1000, incidentType: 'Tornado', declarationDate: '1995-06-01T00:00:00.000Z', fipsCountyCode: '013' },
+    { disasterNumber: 5000, incidentType: 'Fire', declarationDate: '2010-09-07T00:00:00.000Z', fipsCountyCode: '013' },
+  ];
+  const counts = ctx._countDeclarations(rows, 2000);
+  check('declarations: county 000 rows ignored, pre-2000 ignored, repeats counted once',
+    JSON.stringify(counts) === JSON.stringify({ Fire: 9, Flood: 5, Snowstorm: 2 }), JSON.stringify(counts));
+  ev('state = freshState();');
+  const mk = (id, score, status) => ({ hazardId: id, hazardName: names[id], category: 'Natural Hazards', scoreAssigned: score, source: 'S', finding: 'F', confidence: 'High', status: status || 'success', isOverridden: false });
+  let fs1 = [mk(1, 1), mk(3, 2), mk(4, 5), mk(8, 4), mk(6, 1)];
+  const changed = ctx._applyDeclarationFloors(fs1, counts, 'Boulder County', 'CO');
+  check('floor: Boulder 9 fire raises wildfire 1 to 4', fs1[0].scoreAssigned === 4 &&
+    fs1[0].finding === 'F. FEMA has declared 9 fire disasters in Boulder County since 2000.' && fs1[0].source === 'S', fs1[0].finding);
+  check('floor: 5 floods raise river flood 2 to 3, never lower flash flood 5', fs1[1].scoreAssigned === 3 && fs1[2].scoreAssigned === 5 && fs1[2].finding === 'F');
+  check('floor: winter already 4 stays 4, tornado with no declarations stays 1', fs1[3].scoreAssigned === 4 && fs1[4].scoreAssigned === 1);
+  check('floor: returns the changed ids', JSON.stringify(changed) === '[1,3]', JSON.stringify(changed));
+  const fs2 = [mk(1, 2)];
+  ctx._applyDeclarationFloors(fs2, { Fire: 4, Snowstorm: 1, 'Severe Ice Storm': 1, Tornado: 2 }, 'X County', 'CO');
+  check('floor: 3 to 5 fires raise wildfire to 3; no finding is created for winter or tornado', fs2.length === 1 && fs2[0].scoreAssigned === 3);
+  const fs3 = [mk(8, 2), mk(6, 2), mk(7, 1, 'estimated')];
+  ev('state.scores[7] = {};');
+  ctx._applyDeclarationFloors(fs3, { Snowstorm: 1, 'Severe Ice Storm': 1, Tornado: 2, Hurricane: 1, Typhoon: 1 }, 'X County', 'FL');
+  check('floor: snowstorm plus ice storm, tornado, hurricane plus typhoon each raise to 3', fs3.every(f => f.scoreAssigned === 3) && fs3[2].status === 'estimated');
+  ev('state = freshState();');
+  const fs4 = [mk(7, 1, 'estimated')];
+  ctx._applyDeclarationFloors(fs4, { Hurricane: 3 }, 'X County', 'CO');
+  check('floor: hurricane ruled out (na) is not raised', fs4[0].scoreAssigned === 1);
+  check('floor: no counts changes nothing', ctx._applyDeclarationFloors([mk(1, 1)], null, '', 'CO').length === 0);
+
+  // _compileFindings with NRI
+  ev('state = freshState();');
+  const geo = { lat: 40.015, lng: -105.2705, zip: '80302', stateAbbr: 'CO', county: 'Boulder County', fips5: '08013' };
+  const ok = { score: 3, finding: 'x', confidence: 'High' };
+  const base = { flood: ok, earthquake: ok, wildfire: ok, weather: { stateAbbr: 'CO' }, drought: ok,
+    epa: { chemScore: 2, finding: '2 facilities', confidence: 'Medium', highHazardCount: 1, potwCount: 1 } };
+  const by = (fs, id) => fs.find(f => f.hazardId === id);
+  const withNri = ctx._compileFindings(Object.assign({}, base, { landslide: null, nri: { tract: NRI_FX.downtown, county: NRI_FX.county } }), geo);
+  check('NRI: hail 5, wind 2, winter 4, tornado 3, all public data',
+    [5, 63, 8, 6].map(id => by(withNri, id) && by(withNri, id).scoreAssigned).join() === '5,2,4,3' &&
+    [5, 63, 8, 6].every(id => by(withNri, id).status === 'success'), [5, 63, 8, 6].map(id => JSON.stringify(by(withNri, id))).join(' | '));
+  check('NRI: tract source label and confidence', by(withNri, 5).source === 'FEMA National Risk Index (census tract), December 2025 release' &&
+    by(withNri, 5).confidence === 'High' && by(withNri, 8).confidence === 'High' && by(withNri, 63).confidence === 'Medium');
+  check('NRI: tornado uses the county label and names Boulder County', by(withNri, 6).source === 'FEMA National Risk Index (county), December 2025 release' &&
+    by(withNri, 6).finding.includes('Boulder County'));
+  check('NRI: extreme heat stays on the state rule of thumb', by(withNri, 9).status === 'estimated' && /rule of thumb/.test(by(withNri, 9).source));
+  check('NRI: landslide falls back to tract LNDS when the tile fails (downtown = 1, Low)', by(withNri, 11).scoreAssigned === 1 && by(withNri, 11).confidence === 'Low' &&
+    by(withNri, 11).status === 'success');
+  const foot = ctx._compileFindings(Object.assign({}, base, { landslide: null, nri: { tract: NRI_FX.foothills, county: NRI_FX.county } }), geo);
+  check('NRI: foothills winter 5, landslide fallback 3', by(foot, 8).scoreAssigned === 5 && by(foot, 11).scoreAssigned === 3);
+  const usgs = Object.assign(ctx._landslideResult(4, 0, 0), { source: ev('LS_SRC') });
+  const withTile = ctx._compileFindings(Object.assign({}, base, { landslide: usgs, nri: { tract: NRI_FX.foothills, county: NRI_FX.county } }), geo);
+  check('landslide: USGS tile class 4 = 5 with the 2024 source label', by(withTile, 11).scoreAssigned === 5 &&
+    by(withTile, 11).source === 'USGS landslide susceptibility 2024 (90 m)' && by(withTile, 11).confidence === 'High');
+  const noNri = ctx._compileFindings(Object.assign({}, base, { landslide: null, nri: null }), geo);
+  check('no NRI: hail, winter and tornado use the state rule of thumb', [5, 8, 6].every(id => by(noNri, id).status === 'estimated' && /rule of thumb/.test(by(noNri, id).source)));
+  check('no NRI: no high wind finding (stays on the judgment list)', !by(noNri, 63));
+  check('no NRI and no tile: no landslide finding (judgment list)', !by(noNri, 11));
+  const decl = ctx._compileFindings(Object.assign({}, base, { wildfire: { score: 1, finding: 'USFS Wildfire Hazard Potential: Very Low', confidence: 'High' },
+    landslide: null, nri: { tract: NRI_FX.downtown, county: NRI_FX.county }, declarations: { Fire: 9, Flood: 5, Snowstorm: 2 } }), geo);
+  const declNone = ctx._compileFindings(Object.assign({}, base, { wildfire: { score: 1, finding: 'USFS Wildfire Hazard Potential: Very Low', confidence: 'High' },
+    landslide: null, nri: { tract: NRI_FX.downtown, county: NRI_FX.county } }), geo);
+  check('compile: declaration floor raises wildfire 1 to 4, after the smoke estimate (smoke unchanged)', by(decl, 1).scoreAssigned === 4 &&
+    by(declNone, 1).scoreAssigned === 1 && by(decl, 1).finding.endsWith('FEMA has declared 9 fire disasters in Boulder County since 2000.') &&
+    by(decl, 23).scoreAssigned === by(declNone, 23).scoreAssigned, by(decl, 1).finding);
+  const partial = ctx._compileFindings(Object.assign({}, base, { landslide: null, nri: { tract: null, county: NRI_FX.county } }), geo);
+  check('NRI county only: tornado from NRI, hail and winter on the rule of thumb', by(partial, 6).status === 'success' &&
+    by(partial, 5).status === 'estimated' && by(partial, 8).status === 'estimated' && !by(partial, 63));
+  const outside = ctx._compileFindings(Object.assign({}, base, { landslide: null, nri: { tract: Object.assign({ COUNTY: 'Hennepin' }, NRI_FX.minneapolis), county: null } }), { stateAbbr: 'MN' });
+  check('Minneapolis tract: hail 5, wind 4, winter 5', [5, 63, 8].map(id => by(outside, id).scoreAssigned).join() === '5,4,5');
+
+  const all = [withNri, foot, withTile, noNri, decl, partial, outside].reduce((a, b) => a.concat(b), []);
+  check('v3.1 findings never reference removed ids', all.every(f => !REMOVED.includes(f.hazardId)));
+  check('v3.1 finding names match HAZARD_DATA', all.every(f => f.hazardName === names[f.hazardId]), all.filter(f => f.hazardName !== names[f.hazardId]).map(f => f.hazardId).join());
+  check('v3.1 findings keep the shape', all.every(f => ['hazardId', 'hazardName', 'category', 'scoreAssigned', 'source', 'finding', 'confidence', 'status'].every(k => k in f)));
+  // New copy only (older USFS and flood source strings still carry em dashes, out of scope here)
+  const copy = all.filter(f => /National Risk Index|USGS landslide/.test(f.source)).map(f => f.source + ' ' + f.finding)
+    .concat(all.map(f => (String(f.finding).match(/FEMA has declared[^]*$/) || [])[0]).filter(Boolean))
+    .concat([ev('MANUAL_REASONS')[11], ev('MANUAL_REASONS')[63]]);
+  check('v3.1 copy: no em dash or exclamation point', copy.length > 0 && !copy.some(t => /[—!]/.test(t)), copy.filter(t => /[—!]/.test(t)).join(' | '));
+
+  // Summary wording
+  const est = (n, src) => Array.from({ length: n }, () => ({ status: 'estimated', source: src }));
+  const RULE = ev('WEATHER_RULE_SRC');
+  check('summary: rule of thumb items get their own sentence',
+    ctx._researchSummarySub(est(1, RULE), 0, 3) === 'No address-level source exists yet for 1 item; it uses a state rule of thumb. 3 need your judgment.',
+    ctx._researchSummarySub(est(1, RULE), 0, 3));
+  check('summary: two rule of thumb items, plural',
+    ctx._researchSummarySub(est(2, RULE), 0, 3) === 'No address-level source exists yet for 2 items; they use a state rule of thumb. 3 need your judgment.');
+  check('summary: real placeholders still say a source did not respond',
+    ctx._researchSummarySub(est(2, 'World Aware placeholder (x did not respond)').concat(est(1, RULE)), 1, 4) ===
+    '2 are rough placeholders because a source did not respond. No address-level source exists yet for 1 item; it uses a state rule of thumb. 1 could not be scored. 4 need your judgment.');
+  check('research with NRI in Colorado: only extreme heat is on the rule of thumb', withNri.filter(f => ctx._isRuleOfThumb(f)).map(f => f.hazardId).join() === '9');
+  check('report sentence splits rule of thumb from placeholders',
+    ctx._sourcesSentence({ findingCount: 12, estimatedCount: 2, ruleOfThumbCount: 1 }) ===
+    'Public data supplied the likelihood for 10 hazards; 1 is a rough placeholder because a source did not respond; no address-level source exists yet for 1 item; it uses a state rule of thumb.',
+    ctx._sourcesSentence({ findingCount: 12, estimatedCount: 2, ruleOfThumbCount: 1 }));
+  check('report sentence for an old saved report reads as before', ctx._sourcesSentence({ findingCount: 3, estimatedCount: 1 }) ===
+    'Public data supplied the likelihood for 2 hazards; 1 is a rough placeholder because a source did not respond.');
+  check('MANUAL_REASONS: landslide points to the USGS map, no "no source"', /https:\/\/www\.usgs\.gov\/tools\/us-landslide-inventory-and-susceptibility-map/.test(ev('MANUAL_REASONS')[11]));
+  const steps = ev('STEPS');
+  check('steps: nri and declarations steps with the spec labels',
+    steps.some(s => s.id === 'nri' && s.label === 'Checking FEMA National Risk Index for your census tract') &&
+    steps.some(s => s.id === 'declarations' && s.label === 'Checking FEMA disaster declarations for your county'));
+
+  // Network paths with mocked fetch (no network in tests)
+  const json = body => Promise.resolve({ ok: true, status: 200, json: async () => body });
+  const seen = [];
+  const route = handler => { seen.length = 0; ctx.fetch = (url) => { seen.push(String(url)); return handler(String(url)); }; };
+
+  route(url => url.includes('Census_Tracts') ? json({ features: [{ attributes: NRI_FX.downtown }] })
+    : url.includes('National_Risk_Index_Counties') ? json({ features: [{ attributes: NRI_FX.county }] })
+    : Promise.reject(new Error('unexpected ' + url)));
+  const nri = await ctx._callNRIAPI(40.015, -105.2705, '08013');
+  check('_callNRIAPI: tract and county rows, both direct, in parallel', nri.tract.TRACTFIPS === '08013012206' && nri.county.COUNTY === 'Boulder' &&
+    seen.length === 2 && seen.every(u => u.startsWith('https://services.arcgis.com/XG15cJAlne2vxtgt/')));
+  route(url => url.includes('Census_Tracts') ? json({ error: { code: 400, message: "'outFields' parameter is invalid" } })
+    : json({ features: [{ attributes: NRI_FX.county }] }));
+  const half = await ctx._callNRIAPI(40.015, -105.2705, '08013');
+  check('_callNRIAPI: an ArcGIS error on one layer keeps the other', half.tract === null && half.county.AREA > 700);
+  route(() => Promise.reject(new Error('down')));
+  let nriErr = null; try { await ctx._callNRIAPI(40, -105, '08013'); } catch (e) { nriErr = e; }
+  check('_callNRIAPI: throws when both fail', !!nriErr);
+
+  // Flood Method D from the shared NRI result, with the relay off
+  const savedRelay = cfg.RELAY_URL;
+  cfg.RELAY_URL = '';
+  route(url => url.includes('USA_Flood_Hazard_Areas') ? Promise.reject(new Error('down')) : Promise.reject(new Error('unexpected ' + url)));
+  const fl = await ctx._callFloodAPI(40.015, -105.2705, '08013', Promise.resolve({ tract: NRI_FX.downtown, county: NRI_FX.county }));
+  check('flood Method D: county IFLD_AFREQ 4.2 = 3, county-wide, without the relay', fl.score === 3 && /county-wide/.test(fl.finding) && /Boulder County/.test(fl.finding), JSON.stringify(fl));
+  route(url => url.includes('National_Risk_Index_Counties') ? json({ features: [{ attributes: { COUNTY: 'Boulder', AREA: 747.9 } }] }) : Promise.reject(new Error('down')));
+  let flErr = null; try { await ctx._callFloodAPI(40.015, -105.2705, '08013', Promise.resolve(null)); } catch (e) { flErr = e; }
+  check('flood Method D: missing IFLD_AFREQ is handled; relay off still says so', flErr && flErr.code === 'RELAY_NOT_CONFIGURED');
+  cfg.RELAY_URL = savedRelay;
+
+  // OpenFEMA call
+  route(url => json({ DisasterDeclarationsSummaries: rows }));
+  const dc = await ctx._callDeclarationsAPI('08', '013');
+  const durl = decodeURIComponent(seen[0] || '');
+  check('_callDeclarationsAPI: direct, state and county filter, select and top', durl.startsWith('https://www.fema.gov/api/open/v2/DisasterDeclarationsSummaries?') &&
+    durl.includes("$filter=fipsStateCode eq '08' and fipsCountyCode eq '013'") && durl.includes('$select=disasterNumber,incidentType,declarationDate,fipsCountyCode') &&
+    durl.includes('$top=1000') && dc.Fire === 9, durl);
+  let dErr = null; try { await ctx._callDeclarationsAPI('', ''); } catch (e) { dErr = e; }
+  check('_callDeclarationsAPI: no FIPS throws (step fails quietly)', !!dErr);
+
+  // Landslide call with the tile reader stubbed (no canvas in node)
+  route(url => url.includes('returnCountOnly=true') ? json({ count: url.includes('US_Landslide_point_v2') ? 1 : 0 }) : Promise.reject(new Error('unexpected ' + url)));
+  ev('_lsLegendTable = () => Promise.resolve({ table: LS_LEGEND_FALLBACK, fromService: false });');
+  let tileAsked = null;
+  ctx._lsSample = async (u, x, y) => { tileAsked = [u, x, y]; return [241, 129, 129, 191]; };
+  const ls = await ctx._callLandslideAPI(40.0394, -105.3320);
+  check('_callLandslideAPI: reads tile 12/1550/849 at 284,38', tileAsked && tileAsked[0] === cfg.USGS_LANDSLIDE + '/tile/12/1550/849' && tileAsked[1] === 284 && tileAsked[2] === 38, JSON.stringify(tileAsked));
+  check('_callLandslideAPI: class 3 plus an inventory landslide within 1 km = 5', ls.score === 5 && /class 3 of 5/.test(ls.finding) && /landslide inventory/.test(ls.finding) && ls.source === 'USGS landslide susceptibility 2024 (90 m)', JSON.stringify(ls));
+  check('_callLandslideAPI: modifier queries are count-only within 1,000 m', seen.length === 2 && seen.every(u => u.includes('distance=1000') && u.includes('units=esriSRUnit_Meter') && u.includes('returnCountOnly=true')));
+  ctx._lsSample = async () => { throw new Error('Landslide tile could not be read: tainted'); };
+  let lsErr = null; try { await ctx._callLandslideAPI(40.0394, -105.3320); } catch (e) { lsErr = e; }
+  check('_callLandslideAPI: a tainted canvas is a failure (NRI fallback takes over)', lsErr && /tainted/.test(lsErr.message));
+  check('_lsReadPixels throws without a canvas (node)', (() => { try { ctx._lsReadPixels({}, 0, 0, 1, 1); return false; } catch (e) { return true; } })());
+  ctx.fetch = () => Promise.reject(new Error('no network in tests'));
+
+  // Wiring
+  const src = fs.readFileSync(path.join(ROOT, 'js/research.js'), 'utf8');
+  check('runner: one NRI promise shared with flood', /const nriP = _tracked\('nri', _callNRIAPI\(lat, lng, fips5\)\)/.test(src) && src.includes('_callFloodAPI(lat, lng, fips5, nriP)'));
+  check('landslide tile image uses crossOrigin anonymous', /img\.crossOrigin = 'anonymous'/.test(src));
+  check('extreme heat comment explains why NRI HWAV is not used', /HWAV_AFREQ\s*\/\/\s*rates Boulder "Very Low"/.test(src));
+}
+
 console.log('Privacy statement placement (Henry, 2026-10-31)');
 {
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
@@ -943,7 +1244,6 @@ console.log('Privacy statement placement (Henry, 2026-10-31)');
   check('About statement sits at the bottom, below the version line', aboutNote > about.indexOf('class="about-version"'));
 }
 
-asyncChecks().catch(e => { failed++; console.log('  FAIL async checks threw — ' + e.message); }).then(() => {
-  console.log(`\n${passed} passed, ${failed} failed`);
+asyncChecks().then(v31Checks).catch(e => { failed++; console.log('  FAIL async checks threw — ' + e.message + '\n' + e.stack); }).then(() => {  console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 });

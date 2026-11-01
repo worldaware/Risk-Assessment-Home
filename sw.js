@@ -8,7 +8,8 @@
 // v2.3.0: owned relay; flood and wildfire from CORS-enabled copies.
 // v2.4.0: Import from JSON, Continue card, default action items, walk-through card, share text, custom-domain guide.
 // v3.0.0: hazard cut to 20 core + 8 less common, household checklist sets impact, "Does not apply here".
-const CACHE_NAME = 'wa-risk-v3.0.0';
+// v3.1.0: FEMA National Risk Index for hail, wind, winter, tornado; USGS landslide map; FEMA declaration floors.
+const CACHE_NAME = 'wa-risk-v3.1.0';
 
 // App shell files to cache on install
 const APP_SHELL = [
