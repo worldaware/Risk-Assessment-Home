@@ -1,6 +1,8 @@
 # World Aware relay
 
-Several government hazard services (USGS, FEMA, the Forest Service, the Drought Monitor) refuse requests that come straight from a web page. This small Cloudflare Worker fetches them for the app and passes the answer back. It only talks to an approved list of government sites, only answers World Aware's own web addresses, and keeps no logs.
+Several government hazard services (USGS, FEMA, the Forest Service, the Drought Monitor) refuse requests that come straight from a web page. This small Cloudflare Worker fetches them for the app and passes the answer back. It only talks to an approved list of government and university sites, only answers World Aware's own web addresses, and keeps no logs.
+
+It can also shield the Iowa Environmental Mesonet (IEM), Iowa State University's archive of National Weather Service warnings. IEM answers web pages directly but asks not to be called from busy sites. The relay can keep each IEM answer for 30 days, but only on a custom domain (see "Caching" below), so v3.2.0 calls IEM directly (`IEM_VIA_RELAY: false` in `js/apiConfig.js`).
 
 The free Cloudflare plan covers it (100,000 requests a day).
 
@@ -54,11 +56,35 @@ To update the Worker later, run `wrangler deploy` again from this folder.
 
 ## What it allows
 
-Target sites: earthquake.usgs.gov, hazards.fema.gov, msc.fema.gov, usdmdataservices.unl.edu, droughtmonitor.unl.edu, services.arcgis.com, apps.fs.usda.gov, geocoding.geo.census.gov. To add one, edit `ALLOWED_HOSTS` in `worker.js` and deploy again.
+Target sites: earthquake.usgs.gov, hazards.fema.gov, msc.fema.gov, usdmdataservices.unl.edu, droughtmonitor.unl.edu, services.arcgis.com, apps.fs.usda.gov, geocoding.geo.census.gov, mesonet.agron.iastate.edu. To add one, edit `ALLOWED_HOSTS` in `worker.js` and deploy again.
 
 Web pages that may use it: https://worldaware.github.io, https://risk.beworldaware.com, https://illustrious-capybara-0ad110.netlify.app and its deploy previews. Edit `ALLOWED_ORIGINS` in `worker.js` to change this. Testing the app from your own computer (localhost) is not on the list, so lookups there will fail until you add it.
 
-There is a soft limit of 60 requests a minute per visitor, kept in memory only.
+There is a soft limit of 60 requests a minute per visitor, kept in memory only. Answers served from the cache count toward it too.
+
+## Caching (IEM only)
+
+Answers from mesonet.agron.iastate.edu are stored in Cloudflare's cache for 30 days, keyed by the full IEM address the app asked for. The app rounds the coordinates to 2 decimals (about 1 km) before it asks, so neighbours share one stored answer, and it asks for warnings up to 1 January of the current year, so the answer does not change until the next year. The stored copy holds only the IEM reply; its key holds the rounded coordinates (about 1 km), not the street address, and nothing about the visitor. A response header `X-Relay-Cache` says `HIT` or `MISS`.
+
+On a miss, the upstream call and the cache write run as one task the Worker hands to Cloudflare (`waitUntil`), so the cache still fills if the visitor gives up first.
+
+Cloudflare only runs this cache for a Worker on a custom domain. On the free `*.workers.dev` address the cache calls do nothing, so every IEM request would still go to Iowa State. That is why the app calls IEM directly for now. To switch to the relay:
+
+1. Add a custom domain to the Worker in the Cloudflare dashboard (for example `relay.beworldaware.com`, under the Worker's settings for domains and routes).
+2. Put that address in `RELAY_URL` in `js/apiConfig.js` and set `IEM_VIA_RELAY: true`.
+3. Run `wrangler deploy` and check with the curl below.
+
+With the flag on, the app asks the relay first, gives it 7 seconds, and calls IEM directly if the relay fails, runs out of time or answers without a warning list.
+
+After any change to `worker.js`, run `wrangler deploy` from this folder again.
+
+To check IEM through the relay after deploying (set `RELAY` as in step 5 first):
+
+```
+curl -s -D - -o /dev/null -H "Origin: https://worldaware.github.io" "$RELAY/?url=https%3A%2F%2Fmesonet.agron.iastate.edu%2Fjson%2Fvtec_events_bypoint.py%3Flat%3D40.01%26lon%3D-105.27%26sdate%3D2015-01-01%26edate%3D2026-01-01"
+```
+
+The first run shows a 200 status line and, on a custom domain, `x-relay-cache: MISS`; a second run should show `x-relay-cache: HIT`. On workers.dev expect `MISS` every time.
 
 ## Open items
 

@@ -1,0 +1,10 @@
+CO,08,001,Adams County,H1
+CO,08,013,Boulder County,H1
+CO,08,031,Denver County,H6
+CO,08,069,Larimer County,H1
+CO,08,123,Weld County,H1
+MN,27,053,Hennepin County,H1
+MN,27,123,Ramsey County,H1
+AK,02,013,Aleutians East Borough,H1
+MD,24,005,Baltimore County,H1
+MD,24,510,Baltimore city,C7

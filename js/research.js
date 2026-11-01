@@ -26,6 +26,10 @@ const H_ID = {
   CHEMICAL_PLANT:     15,
   AIR_QUALITY:        23,   // "Smoke and bad air days" (absorbed dust storm in v3)
   HIGH_WIND:          63,
+  WATER:              27,   // "Water outage or unsafe tap water"
+  SOIL:               66,   // "Shifting or swelling soil under the house"
+  POWER:              24,   // "Long power outage, including planned safety shutoffs"
+  RADON:              64,
 };
 // v3.0.0 dropped the dust storm (14), wastewater (21) and WUI (55) findings:
 // those hazards merged into smoke, water outage and wildfire.
@@ -45,9 +49,16 @@ const H_NAME = {
   11: 'Landslide, rockfall and debris flow after fire',
   15: 'Chemical spill from road, rail or a nearby plant',
   23: 'Smoke and bad air days',
+  27: 'Water outage or unsafe tap water',
   63: 'High wind',
+  66: 'Shifting or swelling soil under the house',
+  24: 'Long power outage, including planned safety shutoffs',
+  64: 'Radon',
 };
-const H_CAT = { 15: 'Industrial & CBRN' };
+const H_CAT = {
+  15: 'Industrial & CBRN', 27: 'Outages & Service Interruptions',
+  24: 'Outages & Service Interruptions', 64: 'Home',
+};
 function _hCat(id) { return H_CAT[id] || 'Natural Hazards'; }
 
 /* Hazards no public source can score for an address, with what to check instead */
@@ -57,19 +68,27 @@ const MANUAL_REASONS = {
   11: 'The USGS landslide map did not load for this address. Look it up at https://www.usgs.gov/tools/us-landslide-inventory-and-susceptibility-map and rate it higher for a steep slope or a burn scar above you.',
   20: 'Old mine workings and quarries are on county and Colorado Geological Survey maps. Local knowledge helps.',
   22: 'Disease outbreaks are regional. No address-level data exists.',
-  24: 'Outage history is not public. Check your utility\'s planned shutoff map (Xcel publishes one) and how often your street loses power.',
-  27: 'Water main breaks and boil orders are tracked by your water provider. Enter what you know.',
+  24: 'Outage history by address is not public. Check your electric utility\'s planned shutoff map and how often your street loses power. Utility averages are in the EIA reliability tables at https://www.eia.gov/electricity/data/eia861/.',
+  27: 'Water main breaks and boil orders are tracked by your water provider. The EPA service-area lookup did not load for this address. Find your system on the EPA map at https://www.epa.gov/ground-water-and-drinking-water/community-water-system-service-area-boundaries and enter what you know.',
   36: 'Depends on how many roads lead out of your neighborhood and what could block them. Local knowledge required.',
   53: 'Civil unrest depends on where you live and work. Enter what you know.',
   54: 'Active threat risk depends on local context. Enter what you know.',
-  63: 'FEMA wind records did not load for this address. Rate it from what you see on your street: downed limbs, roof damage, shutoffs.',
-  64: 'Radon is only known by testing the house. Haven\'t tested: rate it 3. Tested high: 5. Tested low: 1.',
+  63: 'NWS warning records and FEMA wind records did not load for this address. Rate it from what you see on your street: downed limbs, roof damage, shutoffs.',
+  64: 'Radon is only known by testing the house. Haven\'t tested: rate it 3. Tested high: 5. Tested low: 1. EPA radon information is at https://www.epa.gov/radon.',
   65: 'House fire depends on the home itself: heating, wiring, dryer and cooking. Enter what you know.',
-  66: 'Swelling clay is mapped by the Colorado Geological Survey. Cracked foundations or sticking doors are a sign.',
+  66: 'The USDA soil lookup found no mapped soil layers at this address, or did not load. Look up linear extensibility on Web Soil Survey at https://websoilsurvey.nrcs.usda.gov/ and the Colorado Geological Survey swelling-soil maps. Cracked foundations or sticking doors are a sign.',
   60: 'Custom hazard. Enter manually.',
   61: 'Custom hazard. Enter manually.',
   62: 'Custom hazard. Enter manually.',
 };
+
+/** Judgment text for a hazard; Colorado addresses get the Xcel pointer for power. */
+function _manualReason(id, stateAbbr) {
+  if (id === 24 && String(stateAbbr || '').toUpperCase() === 'CO') {
+    return MANUAL_REASONS[24].replace('your electric utility\'s planned shutoff map', 'your electric utility\'s planned shutoff map (Xcel publishes one)');
+  }
+  return MANUAL_REASONS[id];
+}
 
 /**
  * Whether research should leave a hazard alone because it is marked
@@ -132,6 +151,13 @@ const STEPS = [
   { id: 'airquality', label: 'Estimating smoke and air quality risk' },
   { id: 'landslide',  label: 'Checking landslide susceptibility and records nearby (USGS)' },
   { id: 'declarations', label: 'Checking FEMA disaster declarations for your county' },
+  { id: 'water',      label: 'Checking your drinking-water system (EPA)' },
+  { id: 'soil',       label: 'Checking soil shrink-swell (USDA)' },
+  { id: 'warnings',   label: 'Counting NWS warnings over this point (Iowa Environmental Mesonet)' },
+  { id: 'normals',    label: 'Checking NOAA climate normals for the nearest station' },
+  { id: 'airdays',    label: 'Counting bad-air days for your county (EPA)' },
+  { id: 'radon',      label: 'Looking up your county on the EPA radon zone map' },
+  { id: 'power',      label: 'Checking utility outage records for your county (EIA)' },
 ];
 
 /* ---------------------------------------------------------------
@@ -151,11 +177,52 @@ function withTimeout(promise, ms, label) {
 /** Error codes that change the wording of a placeholder finding. */
 const RELAY_NOT_CONFIGURED = 'RELAY_NOT_CONFIGURED';
 const NO_SOURCE            = 'NO_SOURCE';
+const NO_DATA_FILE         = 'NO_DATA_FILE';   // static data file not published yet
+const NO_RECORD            = 'NO_RECORD';      // the source answered and holds nothing for this place
 
 function _codedError(code, message) {
   const e = new Error(message);
   e.code = code;
   return e;
+}
+
+/* How long _tracked lets one lookup run, and the margin a lookup keeps
+   between its own deadlines and that cap so its answer still lands. */
+const TRACKED_SLACK_MS = 3000;
+const CAP_MARGIN_MS    = 500;
+function _trackedCapMs() {
+  return API_CONFIG.TIMEOUT_MS + API_CONFIG.PROXY_EXTRA_MS + TRACKED_SLACK_MS;
+}
+/** Time a lookup that started at startedAt can still spend before the cap, less the margin. */
+function _timeLeftMs(startedAt, capMs) {
+  return (capMs || _trackedCapMs()) - (Date.now() - startedAt) - CAP_MARGIN_MS;
+}
+
+/**
+ * fetch() and parse the JSON body under one deadline that covers both the
+ * headers and the body. When the deadline passes the request is aborted and
+ * the call rejects, even if the server sent headers and then stalled.
+ * httpPrefix is the start of the error message for a non-2xx status.
+ */
+async function _fetchJsonWithin(url, init, ms, httpPrefix) {
+  const ctrl = new AbortController();
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      try { ctrl.abort(); } catch (e) { /* nothing to abort */ }
+      reject(new Error(`Request timed out after ${ms}ms`));
+    }, ms);
+  });
+  const work = (async () => {
+    const resp = await fetch(url, Object.assign({}, init, { signal: ctrl.signal }));
+    if (!resp.ok) throw new Error(httpPrefix + resp.status);
+    return resp.json();
+  })();
+  try {
+    return await Promise.race([work, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -165,29 +232,16 @@ function _codedError(code, message) {
  * Throws a RELAY_NOT_CONFIGURED error, without any network call, while
  * RELAY_URL is empty.
  */
-async function relayFetch(targetUrl) {
+async function relayFetch(targetUrl, opts) {
   const base = String(API_CONFIG.RELAY_URL || '').trim().replace(/\/+$/, '');
   if (!base) throw _codedError(RELAY_NOT_CONFIGURED, 'Relay not configured');
 
   const wrappedUrl   = base + '/?url=' + encodeURIComponent(targetUrl);
-  const totalTimeout = API_CONFIG.TIMEOUT_MS + API_CONFIG.PROXY_EXTRA_MS;
+  const totalTimeout = (opts && opts.timeoutMs) || (API_CONFIG.TIMEOUT_MS + API_CONFIG.PROXY_EXTRA_MS);
 
-  // Abort the underlying request on timeout instead of letting it run on;
-  // no referrer so the relay never learns which page sent it.
-  const ctrl  = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), totalTimeout);
-  let response;
-  try {
-    response = await fetch(wrappedUrl, { signal: ctrl.signal, referrerPolicy: 'no-referrer' });
-  } finally {
-    clearTimeout(timer);
-  }
-
-  if (!response.ok) {
-    throw new Error(`Relay HTTP ${response.status}`);
-  }
-
-  const result = await response.json();
+  // The request is aborted when the deadline passes (body included) instead
+  // of running on; no referrer so the relay never learns which page sent it.
+  const result = await _fetchJsonWithin(wrappedUrl, { referrerPolicy: 'no-referrer' }, totalTimeout, 'Relay HTTP ');
   // ArcGIS services wrap errors in HTTP 200. An error object is a failure,
   // not an empty result.
   if (result === null || result === undefined) throw new Error('Empty body from relay');
@@ -211,21 +265,68 @@ async function proxyFetch(url) {
  * No custom User-Agent: browsers set their own, and a custom one forces a
  * CORS preflight that some of these services reject.
  */
-async function directFetch(url) {
-  const ctrl  = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), API_CONFIG.TIMEOUT_MS);
-  let resp;
-  try {
-    resp = await fetch(url, { signal: ctrl.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-  if (!resp.ok) throw new Error('HTTP ' + resp.status);
-  const data = await resp.json();
+async function directFetch(url, opts) {
+  // One deadline for headers and body: a server that stalls after the
+  // headers cannot hold the lookup past it.
+  const ms = (opts && opts.timeoutMs) || API_CONFIG.TIMEOUT_MS;
+  const data = await _fetchJsonWithin(url, {}, ms, 'HTTP ');
   if (data && typeof data === 'object' && data.error) {
     throw new Error(`Upstream error ${data.error.code || ''} ${data.error.message || ''}`.trim());
   }
   return data;
+}
+
+/**
+ * Direct POST of a form-encoded body. Used only by USDA Soil Data Access,
+ * which takes its SQL in a POST and sends CORS headers. The Content-Type is
+ * a CORS-safelisted one, so the browser sends no preflight. The relay is
+ * GET-only and cannot carry this call.
+ */
+async function directPostForm(url, fields) {
+  const body  = Object.keys(fields)
+    .map(k => encodeURIComponent(k) + '=' + encodeURIComponent(fields[k])).join('&');
+  // An empty body (no rows) fails to parse and throws, which is a failure
+  const data = await _fetchJsonWithin(url, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body,
+  }, API_CONFIG.TIMEOUT_MS, 'HTTP ');
+  if (data && typeof data === 'object' && data.error) {
+    throw new Error(`Upstream error ${data.error.code || ''} ${data.error.message || ''}`.trim());
+  }
+  return data;
+}
+
+/* The relay attempt in relayThenDirect gets this long (the request is
+   aborted when it ends). The direct call then gets the time left before
+   _tracked's cap, body included: 7 s + 10 s + 0.5 s margin < 18 s. */
+const RELAY_FIRST_BUDGET_MS = 7000;
+
+/**
+ * For a host that answers direct but asks to be shielded from browser
+ * traffic (Iowa Environmental Mesonet). With opts.useRelay (by default
+ * API_CONFIG.IEM_VIA_RELAY, false in v3.2.0) it asks the relay first and
+ * calls direct when the relay is not set up, fails, runs out of its budget
+ * or answers with something opts.accept rejects. Otherwise it calls direct.
+ * opts.budgetMs and opts.capMs exist for tests.
+ */
+async function relayThenDirect(url, opts) {
+  const o = opts || {};
+  const startedAt = Date.now();
+  const capMs  = o.capMs || _trackedCapMs();
+  const useRelay = o.useRelay === undefined ? API_CONFIG.IEM_VIA_RELAY === true : !!o.useRelay;
+  if (useRelay && String(API_CONFIG.RELAY_URL || '').trim()) {
+    try {
+      const data = await relayFetch(url, { timeoutMs: o.budgetMs || RELAY_FIRST_BUDGET_MS });
+      if (typeof o.accept !== 'function' || o.accept(data)) return data;
+      console.warn('[Relay] answer was not the expected shape, calling direct');
+    } catch (e) {
+      console.warn('[Relay] failed, calling direct:', e.message);
+    }
+  }
+  const left = _timeLeftMs(startedAt, capMs);
+  if (left < 250) throw new Error('No time left for a direct call');
+  return directFetch(url, { timeoutMs: Math.min(API_CONFIG.TIMEOUT_MS, left) });
 }
 
 /**
@@ -263,6 +364,9 @@ async function _geocode(address) {
   console.log('[Geocode] Starting for address:', address);
 
   let lat, lng, zip, stateAbbr, county, city, displayAddress;
+  // County name for county-table lookups (radon): the geocoder's county
+  // field only, replaced by the FCC name below; never a city or town.
+  let countyName = '';
 
   /* ── PRIMARY: Nominatim ────────────────────────────────── */
   const nominatimUrl =
@@ -298,6 +402,7 @@ async function _geocode(address) {
     // Nominatim's key is "ISO3166-2-lvl4" (hyphens), value like "US-CO"
     stateAbbr    = r.address?.['ISO3166-2-lvl4']?.split('-')[1] || '';
     county       = r.address?.county || r.address?.city || r.address?.town || '';
+    countyName   = r.address?.county || '';
     city         = r.address?.city   || r.address?.town || r.address?.village || '';
     displayAddress = r.display_name || address;
     nominatimOk  = true;
@@ -340,6 +445,7 @@ async function _geocode(address) {
     zip          = cp.zip    || '';
     stateAbbr    = cp.state  || '';
     county       = cp.county || '';
+    countyName   = cp.county || '';
     city         = cp.city   || '';
     displayAddress = m.matchedAddress || address;
 
@@ -384,6 +490,8 @@ async function _geocode(address) {
       // FCC state/county fill in any gaps from Nominatim
       if (!stateAbbr && fccState) stateAbbr = fccState;
       if (!county && fccCounty)   county    = fccCounty;
+      // FCC's county is authoritative (it comes with the FIPS code)
+      if (fccCounty) countyName = fccCounty;
 
       console.log('[Geocode] FIPS:', fips5, 'state:', stateAbbr, 'county:', county);
     }
@@ -402,6 +510,7 @@ async function _geocode(address) {
   const result = {
     lat, lng, zip, stateAbbr,
     county:        county || '',
+    countyName:    String(countyName || '').replace(/[<>&"]/g, '').trim(),
     city:          city   || '',
     stateFips, countyFips, fips5,
     displayAddress,
@@ -928,17 +1037,31 @@ function _mapNRIWind(afreq) {
   };
 }
 
-/** Winter storm and extreme cold (id 8): tract WNTW_AFREQ, plus one level for frequent cold waves. */
-function _mapNRIWinter(wntwAfreq, cwavAfreq) {
+/**
+ * Winter storm and extreme cold (id 8): tract WNTW_AFREQ, plus one level for
+ * deep cold. With station normals (v3.2.0), 5 or more nights a year at or
+ * below 0 F add the level; without them, NRI cold wave days of 2 or more do.
+ */
+function _mapNRIWinter(wntwAfreq, cwavAfreq, normals) {
   const w = _nriNum(wntwAfreq);
   if (w === null) return null;
-  const c = _nriNum(cwavAfreq);
   const base = _binScore(w, [2, 5, 10, 15]);
+  const head = `About ${_fmtRate(w)} winter weather days a year recorded for this tract (FEMA NRI)`;
+  const nights = normals && normals.station ? _normalsNum(normals.d0) : null;
+  if (nights !== null) {
+    const cold = nights >= COLD_NIGHTS_RAISE;
+    return {
+      score: cold ? Math.min(5, base + 1) : base,
+      finding: head + (cold ? `; ${_fmt1(nights)} nights a year at or below 0 F at ${normals.station.name} (${NORMALS_PERIOD}) add one level` : ''),
+      confidence: 'High',
+      coldFromNormals: cold,
+    };
+  }
+  const c = _nriNum(cwavAfreq);
   const cold = c !== null && c >= 2;
   return {
     score: cold ? Math.min(5, base + 1) : base,
-    finding: `About ${_fmtRate(w)} winter weather days a year recorded for this tract (FEMA NRI)` +
-             (cold ? `; about ${_fmtRate(c)} cold wave days a year add one level` : ''),
+    finding: head + (cold ? `; about ${_fmtRate(c)} cold wave days a year add one level` : ''),
     confidence: 'High',
   };
 }
@@ -1256,6 +1379,814 @@ function _applyDeclarationFloors(findings, counts, countyLabel, stateAbbr) {
 }
 
 /* ---------------------------------------------------------------
+   API 9 — DRINKING WATER (EPA)
+   Route: direct (ArcGIS Online and Envirofacts send CORS headers, checked
+   2026-10-31).
+   1. Water System Boundaries v3: which community water system's service
+      area holds the point (PWSID, name, people served).
+   2. SDWIS violations for that PWSID through Envirofacts.
+   No polygon usually means a private well. The well finding is built here;
+   _compileFindings adds one level when flood or drought is already high.
+--------------------------------------------------------------- */
+
+const WATER_SRC_FULL   = 'EPA drinking-water system boundaries v3 and SDWIS violations, 2026';
+const WATER_SRC_BOUNDS = 'EPA drinking-water system boundaries v3, 2026';
+const WATER_SRC_WELL   = 'EPA drinking-water system boundaries v3, 2026 (no system mapped here)';
+const WATER_SMALL_SYSTEM = 3300;   // people served; below this the score rises one level
+
+/** Estimates where the source answered but holds no record for the address (the private-well path). */
+function _isAnsweredEstimate(f) {
+  return !!f && f.status === 'estimated' && /no system mapped here/i.test(String(f.source || ''));
+}
+
+function _commas(n) {
+  return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+/**
+ * The service area to use from a point query. Several polygons can overlap
+ * (a district inside a city). Residential service areas come first, then the
+ * smallest population served, since that is the retail system nearest the tap.
+ */
+function _pickWaterSystem(features) {
+  const rows = (Array.isArray(features) ? features : [])
+    .map(f => (f && f.attributes) || null)
+    .filter(a => a && /^[A-Z0-9]{9}$/i.test(String(a.PWSID || '').trim()));
+  if (rows.length === 0) return null;
+  const pop = a => { const n = Number(a.Population_Served_Count); return isFinite(n) && n >= 0 ? n : null; };
+  const resi = a => /residential/i.test(String(a.Service_Area_Type || '')) ? 0 : 1;
+  rows.sort((x, y) => resi(x) - resi(y) ||
+    (pop(x) === null ? Infinity : pop(x)) - (pop(y) === null ? Infinity : pop(y)));
+  const a = rows[0];
+  return {
+    pwsid: String(a.PWSID).trim().toUpperCase(),
+    name: String(a.PWS_Name || 'this water system').replace(/[<>&"]/g, '').trim() || 'this water system',
+    population: pop(a),
+  };
+}
+
+/** Milliseconds (UTC midnight) of a SDWIS date such as "2017-04-01 00:00:00", or null. */
+function _sdwisDate(v) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v === undefined || v === null ? '' : v));
+  return m ? Date.UTC(+m[1], +m[2] - 1, +m[3]) : null;
+}
+
+/** Counts the score rules need from the violation rows. */
+function _waterViolationStats(rows, now) {
+  const d = now || new Date();
+  const cut5  = Date.UTC(d.getFullYear() - 5,  d.getMonth(), d.getDate());
+  const cut10 = Date.UTC(d.getFullYear() - 10, d.getMonth(), d.getDate());
+  const s = { total: Array.isArray(rows) ? rows.length : 0, healthBased: 0, lastYear: null, healthLast5: 0, tier1Last10: 0, unresolved: 0 };
+  (Array.isArray(rows) ? rows : []).forEach(r => {
+    if (!r || typeof r !== 'object') return;
+    const hb    = String(_pickField(r, ['IS_HEALTH_BASED_IND']) || '').trim().toUpperCase() === 'Y';
+    const began = _sdwisDate(_pickField(r, ['COMPL_PER_BEGIN_DATE']));
+    const tier1 = Number(_pickField(r, ['PUBLIC_NOTIFICATION_TIER'])) === 1;
+    if (hb) {
+      s.healthBased += 1;
+      if (began !== null) {
+        const y = new Date(began).getUTCFullYear();
+        if (s.lastYear === null || y > s.lastYear) s.lastYear = y;
+        if (began >= cut5) s.healthLast5 += 1;
+      }
+      if (_pickField(r, ['RTC_DATE']) === undefined) s.unresolved += 1;
+    }
+    if (tier1 && began !== null && began >= cut10) s.tier1Last10 += 1;
+  });
+  return s;
+}
+
+/**
+ * Score and finding for a mapped system. violations is the row array, or null
+ * when the violation history could not be read (score from population only).
+ */
+function _mapWaterSystem(sys, violations, now) {
+  const small = sys.population !== null && sys.population < WATER_SMALL_SYSTEM;
+  const who = `On ${sys.name} (${sys.pwsid}${sys.population !== null ? `, ${_commas(sys.population)} people` : ''}).`;
+  if (!Array.isArray(violations)) {
+    return {
+      kind: 'system', pwsid: sys.pwsid,
+      score: small ? 2 : 1,
+      finding: `${who} The violation history could not be read, so this score uses the number of people served only.`,
+      confidence: 'Low', source: WATER_SRC_BOUNDS,
+    };
+  }
+  const st = _waterViolationStats(violations, now);
+  let score = 1;
+  if (small) score += 1;
+  if (st.healthLast5 > 0) score += 1;
+  if (st.tier1Last10 > 0) score += 1;
+  if (st.unresolved > 0) score += 1;
+  score = Math.min(5, score);
+
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  const parts = [];
+  if (st.healthBased === 0) {
+    parts.push('no health-based violations on record');
+  } else {
+    parts.push(`${plural(st.healthBased, 'health-based violation')}${st.lastYear !== null ? `, last in ${st.lastYear}` : ''}`);
+    parts.push(st.healthLast5 > 0 ? `${st.healthLast5} began in the last 5 years` : 'none in the last 5 years');
+  }
+  parts.push(st.tier1Last10 > 0
+    ? `${plural(st.tier1Last10, 'acute (Tier 1) violation')} in the last 10 years`
+    : 'no acute (Tier 1) violations in the last 10 years');
+  let text = `${who} ${parts.join('; ').replace(/^./, c => c.toUpperCase())}.`;
+  if (st.unresolved > 0) {
+    text += ` ${st.unresolved === 1 ? '1 health-based violation has' : `${st.unresolved} health-based violations have`} no recorded return to compliance.`;
+  }
+  if (small) text += ` Systems serving fewer than ${_commas(WATER_SMALL_SYSTEM)} people score one level higher.`;
+  text += ' Main breaks and boil-water orders are not in this record.';
+  return { kind: 'system', pwsid: sys.pwsid, score, finding: text, confidence: 'High', source: WATER_SRC_FULL };
+}
+
+/**
+ * Deadline for the violations call: the time left before _tracked's cap
+ * (less a margin), never more than TIMEOUT_MS. Below 250 ms the call is
+ * skipped. A found system is then scored from population, never dropped.
+ */
+function _violationsBudgetMs(startedAt, capMs) {
+  const left = _timeLeftMs(startedAt, capMs);
+  return left >= 250 ? Math.min(API_CONFIG.TIMEOUT_MS, left) : 0;
+}
+
+async function _callWaterAPI(lat, lng, capMs) {
+  const startedAt = Date.now();
+  console.log('[EPA Water] Starting for', _coarse(lat), _coarse(lng));
+  const url = `${API_CONFIG.EPA_WATER_BOUNDARIES}?geometry=${_esriPointParam(lat, lng)}` +
+    `&geometryType=esriGeometryPoint&inSR=4326&spatialRel=esriSpatialRelIntersects` +
+    `&outFields=PWSID,PWS_Name,Population_Served_Count,Service_Area_Type&returnGeometry=false&f=json`;
+  // A failed boundaries call throws: the hazard goes to "Needs your judgment".
+  const data = await directFetch(url);
+  if (!data || !Array.isArray(data.features)) throw new Error('Unexpected water boundaries response');
+
+  const sys = _pickWaterSystem(data.features);
+  if (!sys) {
+    // Polygons came back but none has a usable system id: the layer changed,
+    // which is a failed lookup, not a private well.
+    if (data.features.length > 0) throw new Error('Water boundaries answered without a usable PWSID');
+    console.log('[EPA Water] No service area at this point (private well)');
+    return { kind: 'well' };
+  }
+  let rows = null;
+  const budget = _violationsBudgetMs(startedAt, capMs);
+  if (budget > 0) {
+    try {
+      const v = await directFetch(`${API_CONFIG.EPA_SDWIS_VIOLATIONS}/${sys.pwsid}/JSON`, { timeoutMs: budget });
+      if (Array.isArray(v)) rows = v;
+      else console.warn('[EPA Water] violations response was not a list');
+    } catch (e) {
+      console.warn('[EPA Water] violations not read:', e.message);
+    }
+  } else {
+    console.warn('[EPA Water] no time left for the violations call');
+  }
+  const result = _mapWaterSystem(sys, rows, new Date());
+  console.log('[EPA Water] Result:', result);
+  return result;
+}
+
+/** Private-well result; flood or drought at 4 or more adds one level. */
+function _mapWaterWell(findings, stateAbbr) {
+  const high = [];
+  [H_ID.FLOOD_RIVERINE, H_ID.FLASH_FLOOD, H_ID.DROUGHT].forEach(id => {
+    if (_researchSkipsNa(id, stateAbbr)) return;   // ruled out by the user: not a reason
+    const f = (findings || []).find(x => x.hazardId === id);
+    if (f && typeof f.scoreAssigned === 'number' && f.scoreAssigned >= 4) high.push(H_NAME[id].toLowerCase());
+  });
+  let text = 'No public water system is mapped at this address, which usually means a private well. ' +
+    'Wells depend on your pump, your power and your groundwater.';
+  if (high.length > 0) {
+    const list = high.length === 1 ? high[0] : `${high.slice(0, -1).join(', ')} and ${high[high.length - 1]}`;
+    text += ` Raised one level because ${list} ${high.length === 1 ? 'is' : 'are'} rated 4 or more here.`;
+  }
+  return { score: Math.min(5, 3 + (high.length > 0 ? 1 : 0)), finding: text, confidence: 'Medium', source: WATER_SRC_WELL };
+}
+
+/* ---------------------------------------------------------------
+   API 10 — SOIL SHRINK-SWELL (USDA Soil Data Access, SSURGO)
+   Route: direct POST (CORS, checked 2026-10-31). Linear extensibility
+   (lep_r, percent) of every horizon above 150 cm in the major components of
+   the map unit under the point. The largest value sets the score.
+--------------------------------------------------------------- */
+
+const SOIL_SRC = 'USDA NRCS Soil Data Access (SSURGO), linear extensibility';
+
+function _soilSql(lat, lng) {
+  return 'SELECT c.compname, c.comppct_r, ch.hzdept_r, ch.hzdepb_r, ch.lep_r ' +
+    `FROM SDA_Get_Mukey_from_intersection_with_WktWgs84('point(${_coarse(lng)} ${_coarse(lat)})') AS k ` +
+    'JOIN component c ON c.mukey = k.mukey JOIN chorizon ch ON ch.cokey = c.cokey ' +
+    "WHERE c.majcompflag = 'Yes' AND ch.hzdept_r < 150 ORDER BY c.comppct_r DESC, ch.hzdept_r";
+}
+
+/** Linear extensibility (percent) to Likelihood: under 3 = 1, 3 to 4.5 = 2, 4.5 to 6 = 3, 6 to 9 = 4, 9 and up = 5. */
+function _soilScore(lep) {
+  return _binScore(lep, [3, 4.5, 6, 9]);
+}
+
+function _soilClass(lep) {
+  return lep >= 9 ? 'very high' : lep >= 6 ? 'high' : lep >= 3 ? 'moderate' : 'low';
+}
+
+/**
+ * Result from a Soil Data Access reply { Table: [[columns], [row], ...] }.
+ * Null lep_r counts as 0, but a reply where every lep_r is null holds no
+ * shrink-swell data at all, so it returns null instead of a "low" score.
+ */
+function _mapSoilTable(data) {
+  const table = data && Array.isArray(data.Table) ? data.Table : null;
+  if (!table || table.length < 2 || !Array.isArray(table[0])) return null;
+  const col = n => table[0].findIndex(c => String(c).toLowerCase() === n);
+  const iName = col('compname'), iTop = col('hzdept_r'), iBot = col('hzdepb_r'), iLep = col('lep_r');
+  if (iName < 0 || iLep < 0) return null;
+  let best = null, anyValue = false;
+  table.slice(1).forEach(r => {
+    if (!Array.isArray(r)) return;
+    const top = iTop >= 0 ? parseFloat(r[iTop]) : NaN;
+    if (iTop >= 0 && isFinite(top) && top >= 150) return;
+    const raw = parseFloat(r[iLep]);
+    if (isFinite(raw)) anyValue = true;
+    const lep = isFinite(raw) && raw > 0 ? raw : 0;
+    if (!best || lep > best.lep) {
+      best = { lep, name: String(r[iName] || 'The main soil').replace(/[<>&"]/g, '').trim() || 'The main soil',
+               top: iTop >= 0 ? r[iTop] : null, bot: iBot >= 0 ? r[iBot] : null };
+    }
+  });
+  if (!best || !anyValue) return null;
+  const val = String(Number(best.lep.toFixed(1)));
+  const depth = (best.top !== null && best.top !== undefined && best.bot !== null && best.bot !== undefined &&
+                 isFinite(parseFloat(best.top)) && isFinite(parseFloat(best.bot)))
+    ? ` in a layer at ${Math.round(parseFloat(best.top))} to ${Math.round(parseFloat(best.bot))} cm` : '';
+  return {
+    score: _soilScore(best.lep),
+    finding: `${best.name}: shrink-swell (LEP) up to ${val} percent${depth}; ${_soilClass(best.lep)}. ` +
+             'A soil map describes a map unit of several acres; the ground under one house can differ.',
+    confidence: 'Medium',
+    source: SOIL_SRC,
+    lep: best.lep,
+  };
+}
+
+async function _callSoilAPI(lat, lng) {
+  console.log('[USDA SDA] Starting for', _coarse(lat), _coarse(lng));
+  // No rows (water, rock, unmapped) and any failure both throw, so the hazard
+  // goes to "Needs your judgment" with the Web Soil Survey link.
+  const data = await directPostForm(API_CONFIG.USDA_SDA, { query: _soilSql(lat, lng), format: 'JSON+COLUMNNAME' });
+  const result = _mapSoilTable(data);
+  // The service answered with no usable rows (water, rock, unmapped): a
+  // neutral "no record" on the step, not a failure
+  if (!result) throw _codedError(NO_RECORD, 'No shrink-swell data for this location');
+  console.log('[USDA SDA] Result:', result);
+  return result;
+}
+
+/** Rate or count for a sentence: 33, 2.4, 0.6, 0; a tiny non-zero value reads "less than 0.1". */
+function _fmt1(v) {
+  if (!(v > 0)) return '0';
+  if (v >= 10) return String(Math.round(v));
+  const s = String(Number(v.toFixed(1)));
+  return s === '0' ? 'less than 0.1' : s;
+}
+
+/* ---------------------------------------------------------------
+   API 11 — NWS WARNINGS OVER THE POINT (Iowa Environmental Mesonet)
+   Route: relay first (the Worker caches IEM for 30 days, which IEM asks
+   for), then direct (CORS, checked 2026-10-31). Every warning whose zone or
+   county covers the point since 2015-01-01, up to 1 January of this year.
+   The same warning is listed once per UGC (forecast zone and county), so
+   events are deduplicated on office, product, significance, event number
+   and year (event numbers restart each year). High Wind Warnings set the
+   high wind score; winter, heat and cold counts ride along on the result.
+--------------------------------------------------------------- */
+
+const IEM_FIRST_YEAR = 2015;
+/* Product groups. NWS renamed Wind Chill (WC) to Extreme Cold (EC) around
+   2024-10-01 and Excessive Heat (EH) to Extreme Heat (XH) around
+   2025-03-04, so each pair counts together. */
+const IEM_GROUPS = {
+  highWind: ['HW.W'],
+  winter:   ['WS.W', 'BZ.W'],
+  heat:     ['EH.W', 'XH.W'],
+  cold:     ['WC.W', 'EC.W'],
+};
+
+/** Years covered: 2015 through last year; edate is 1 January of this year. */
+function _iemPeriod(now) {
+  const y = (now || new Date()).getFullYear();
+  return { firstYear: IEM_FIRST_YEAR, lastYear: y - 1, years: y - IEM_FIRST_YEAR, sdate: `${IEM_FIRST_YEAR}-01-01`, edate: `${y}-01-01` };
+}
+
+/** Rounded to 2 decimals (about 1 km) so neighbours share one cached relay answer. */
+function _iemUrl(lat, lng, now) {
+  const p = _iemPeriod(now);
+  return `${API_CONFIG.IEM_VTEC_BYPOINT}?lat=${Number(lat).toFixed(2)}&lon=${Number(lng).toFixed(2)}` +
+    `&sdate=${p.sdate}&edate=${p.edate}`;
+}
+
+/** Year of an IEM timestamp such as "2024-01-01T12:00:00Z", or null. */
+function _iemYear(v) {
+  const m = /^(\d{4})/.exec(String(v === undefined || v === null ? '' : v));
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * Count deduplicated warnings by group over the period.
+ * Returns { firstYear, lastYear, years, counts, perYear, byYear }.
+ */
+function _countIemEvents(events, now) {
+  const p = _iemPeriod(now);
+  const groupOf = {};
+  Object.keys(IEM_GROUPS).forEach(g => IEM_GROUPS[g].forEach(code => { groupOf[code] = g; }));
+  const counts = {}, byYear = {};
+  Object.keys(IEM_GROUPS).forEach(g => { counts[g] = 0; });
+  const seen = new Set();
+  (Array.isArray(events) ? events : []).forEach(e => {
+    if (!e || typeof e !== 'object') return;
+    const code = `${String(e.phenomena || '').toUpperCase()}.${String(e.significance || '').toUpperCase()}`;
+    const g = groupOf[code];
+    if (!g) return;
+    const year = _iemYear(e.issue);
+    if (year === null || year < p.firstYear || year > p.lastYear) return;
+    // A missing event number would merge every such warning in a year; use the event's link instead
+    const num = (e.eventid === null || e.eventid === undefined || e.eventid === '') ? `url:${e.url || ''}` : String(e.eventid);
+    const key = [String(e.wfo || '').toUpperCase(), code, num, year].join('|');
+    if (seen.has(key)) return;
+    seen.add(key);
+    counts[g] += 1;
+    if (!byYear[year]) byYear[year] = {};
+    byYear[year][g] = (byYear[year][g] || 0) + 1;
+  });
+  const perYear = {};
+  Object.keys(counts).forEach(g => { perYear[g] = p.years > 0 ? counts[g] / p.years : 0; });
+  return { firstYear: p.firstYear, lastYear: p.lastYear, years: p.years, counts, perYear, byYear };
+}
+
+/** High Wind Warnings a year to Likelihood: below 0.25 = 1, 0.25 to 1 = 2, 1 to 3 = 3, 3 to 6 = 4, 6 and up = 5. */
+function _windWarningScore(perYear) {
+  return _binScore(perYear, [0.25, 1, 3, 6]);
+}
+
+async function _callWarningsAPI(lat, lng) {
+  const now = new Date();
+  console.log('[IEM] Starting NWS warning count');
+  const data = await relayThenDirect(_iemUrl(lat, lng, now), {
+    useRelay: API_CONFIG.IEM_VIA_RELAY === true,
+    accept: d => !!d && Array.isArray(d.events),
+  });
+  if (!data || !Array.isArray(data.events)) throw new Error('Unexpected IEM response');
+  const result = _countIemEvents(data.events, now);
+  if (!(result.years > 0)) throw new Error('No full year to count');
+  console.log('[IEM] Result:', result.counts, 'over', result.years, 'years');
+  return result;
+}
+
+/**
+ * High wind (63): the larger of the IEM High Wind Warning score and the NRI
+ * thunderstorm wind score. Null when IEM did not answer (the caller keeps
+ * the v3.1 NRI-only finding).
+ */
+function _mapWindWarnings(warnings, nriSwnd) {
+  if (!warnings || !warnings.perYear || !(warnings.years > 0)) return null;
+  const rate = warnings.perYear.highWind || 0;
+  const iemScore = _windWarningScore(rate);
+  const nriRate = _nriNum(nriSwnd);
+  const nri = nriRate !== null ? _mapNRIWind(nriRate) : null;
+  const period = `${warnings.firstYear} to ${warnings.lastYear}`;
+  const head = rate > 0
+    ? `${_fmt1(rate)} High Wind Warning${_fmt1(rate) === '1' ? '' : 's'} a year here (NWS, ${period})`
+    : `No High Wind Warnings here (NWS, ${period})`;
+  return {
+    score: Math.max(iemScore, nri ? nri.score : 1),
+    finding: head + (nri ? ` and ${_fmt1(nriRate)} thunderstorm wind events a year (FEMA NRI)` : ''),
+    confidence: 'High',
+    source: `NWS warnings via Iowa Environmental Mesonet, ${period}` + (nri ? ', and FEMA NRI' : ''),
+    iemScore,
+  };
+}
+
+/* ---------------------------------------------------------------
+   API 12 — NOAA 1991-2020 CLIMATE NORMALS (NCEI)
+   Route: direct (CORS, checked 2026-10-31). Search for normals stations in
+   a box about 25 km each way, take the nearest one (or the first when the
+   search gives no coordinates), then read its days at or above 90 F and
+   100 F and nights at or below 0 F.
+--------------------------------------------------------------- */
+
+const NORMALS_DATASET = 'normals-annualseasonal-1991-2020';
+const NORMALS_BOX_DEG = 0.25;
+const NORMALS_TYPES   = { d90: 'ANN-TMAX-AVGNDS-GRTH090', d100: 'ANN-TMAX-AVGNDS-GRTH100', d0: 'ANN-TMIN-AVGNDS-LSTH000' };
+
+function _normalsSearchUrl(lat, lng) {
+  const b = v => Number(v.toFixed(4));
+  const box = [b(lat + NORMALS_BOX_DEG), b(lng - NORMALS_BOX_DEG), b(lat - NORMALS_BOX_DEG), b(lng + NORMALS_BOX_DEG)].join(',');
+  return `${API_CONFIG.NCEI_SEARCH}?dataset=${NORMALS_DATASET}&bbox=${box}&dataTypes=${NORMALS_TYPES.d90}&limit=5`;
+}
+
+function _normalsDataUrl(stationId) {
+  return `${API_CONFIG.NCEI_DATA}?dataset=${NORMALS_DATASET}&stations=${stationId}` +
+    `&dataTypes=${[NORMALS_TYPES.d90, NORMALS_TYPES.d100, NORMALS_TYPES.d0].join(',')}&format=json`;
+}
+
+/** [lat, lon] from whichever coordinate fields an object carries, or null. */
+function _stationCoords(o) {
+  if (!o || typeof o !== 'object') return null;
+  const ok = (la, lo) => isFinite(la) && isFinite(lo) && Math.abs(la) <= 90 && Math.abs(lo) <= 180 ? [la, lo] : null;
+  const num = v => (v === null || v === undefined || v === '') ? NaN : Number(v);
+  const pairs = [['latitude', 'longitude'], ['lat', 'lon'], ['lat', 'lng'], ['LATITUDE', 'LONGITUDE']];
+  for (const [a, b] of pairs) {
+    const r = ok(num(o[a]), num(o[b]));
+    if (r) return r;
+  }
+  const loc = o.location;
+  if (loc && typeof loc === 'object') {
+    let c = loc.coordinates;
+    while (Array.isArray(c) && Array.isArray(c[0])) c = c[0];
+    if (Array.isArray(c) && c.length >= 2) return ok(num(c[1]), num(c[0]));   // GeoJSON order: lon, lat
+    return _stationCoords(Object.assign({}, loc, { location: undefined }));
+  }
+  if (typeof loc === 'string') {
+    const m = /^\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)\s*$/.exec(loc);
+    if (m) return ok(Number(m[1]), Number(m[2]));
+  }
+  return null;
+}
+
+/** Distance in km between two points (haversine). */
+function _kmBetween(la1, lo1, la2, lo2) {
+  const r = Math.PI / 180;
+  const a = Math.sin((la2 - la1) * r / 2) ** 2 + Math.cos(la1 * r) * Math.cos(la2 * r) * Math.sin((lo2 - lo1) * r / 2) ** 2;
+  return 6371 * 2 * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+/**
+ * [lat, lon] of an NCEI search result. The live reply (checked 2026-10-31)
+ * puts them on the result as boundingPoints[0].coordinates in lon, lat
+ * order; station objects carry none. A result-level location is the fallback.
+ */
+function _normalsResultCoords(res) {
+  if (!res || typeof res !== 'object') return null;
+  const bp = Array.isArray(res.boundingPoints) ? res.boundingPoints[0] : null;
+  if (bp && typeof bp === 'object') {
+    const c = _stationCoords({ location: bp });
+    if (c) return c;
+  }
+  return _stationCoords({ location: res.location }) || _stationCoords(Object.assign({}, res, { location: undefined }));
+}
+
+/**
+ * Station to read from an NCEI search reply: the result nearest the point
+ * (haversine on the result's coordinates, or the station's own when it has
+ * them). The first result is used only when no result has coordinates: the
+ * API does not promise any order, and a mountain station in the box would
+ * misrate heat for a plains address.
+ */
+function _pickNormalsStation(search, lat, lng) {
+  const list = [];
+  (search && Array.isArray(search.results) ? search.results : []).forEach(res => {
+    if (!res || typeof res !== 'object') return;
+    const resCoords = _normalsResultCoords(res);
+    let stations = Array.isArray(res.stations) ? res.stations : [];
+    if (stations.length === 0) {
+      // A result with no station list still names its file: USC00050848.csv
+      const m = /([A-Z0-9]{6,20})\.csv$/i.exec(String(res.name || res.filePath || res.id || ''));
+      if (m) stations = [{ id: m[1] }];
+    }
+    stations.forEach(st => {
+      const id = String((st && st.id) || '').trim().toUpperCase();
+      if (!/^[A-Z0-9]{6,20}$/.test(id) || list.some(x => x.id === id)) return;
+      const name = String((st && st.name) || '').replace(/[<>&"]/g, '').trim() || id;
+      list.push({ id, name, coords: _stationCoords(st) || resCoords || null });
+    });
+  });
+  if (list.length === 0) return null;
+  const located = list.filter(s => s.coords);
+  if (located.length === 0) return { id: list[0].id, name: list[0].name, km: null };
+  located.forEach(s => { s.km = _kmBetween(lat, lng, s.coords[0], s.coords[1]); });
+  located.sort((a, b) => a.km - b.km);
+  return { id: located[0].id, name: located[0].name, km: located[0].km };
+}
+
+/** A normals day count, or null for a missing, blank or negative (sentinel) value. */
+function _normalsNum(v) {
+  if (v === null || v === undefined) return null;
+  const n = parseFloat(String(v).trim());
+  return isFinite(n) && n >= 0 ? n : null;
+}
+
+/** { d90, d100, d0 } for the station from the data reply; null when it holds none of them. */
+function _parseNormals(rows, stationId) {
+  const list = Array.isArray(rows) ? rows : [];
+  const row = list.find(r => r && String(r.STATION || '').trim().toUpperCase() === stationId) || list[0];
+  if (!row || typeof row !== 'object') return null;
+  const out = { d90: _normalsNum(row[NORMALS_TYPES.d90]), d100: _normalsNum(row[NORMALS_TYPES.d100]), d0: _normalsNum(row[NORMALS_TYPES.d0]) };
+  return (out.d90 === null && out.d0 === null) ? null : out;
+}
+
+async function _callNormalsAPI(lat, lng) {
+  console.log('[NCEI normals] Searching for a station');
+  const station = _pickNormalsStation(await directFetch(_normalsSearchUrl(lat, lng)), lat, lng);
+  if (!station) throw new Error('No normals station within the search box');
+  const values = _parseNormals(await directFetch(_normalsDataUrl(station.id)), station.id);
+  if (!values) throw new Error(`No normals values for ${station.id}`);
+  const result = Object.assign({ station }, values);
+  console.log('[NCEI normals] Result:', result);
+  return result;
+}
+
+const NORMALS_PERIOD = 'NOAA normals 1991 to 2020';
+function _normalsSource(normals) {
+  return `NOAA 1991 to 2020 climate normals, ${normals.station.name}`;
+}
+
+/** Days at or above 90 F to Likelihood: below 5 = 1, 5 to 15 = 2, 15 to 45 = 3, 45 to 90 = 4, 90 and up = 5. */
+function _heatDaysScore(d90, d100) {
+  const base = _binScore(d90, [5, 15, 45, 90]);
+  return (d100 !== null && d100 !== undefined && d100 >= 10) ? Math.min(5, base + 1) : base;
+}
+
+/** Extreme heat (9) from station normals, or null when the station has no 90 F count. */
+function _mapNormalsHeat(normals) {
+  if (!normals || normals.d90 === null || normals.d90 === undefined || !normals.station) return null;
+  const has100 = normals.d100 !== null && normals.d100 !== undefined;
+  const raised = has100 && normals.d100 >= 10;
+  return {
+    score: _heatDaysScore(normals.d90, normals.d100),
+    finding: `${_fmt1(normals.d90)} days a year at or above 90 F` +
+             (has100 ? ` and ${_fmt1(normals.d100)} at or above 100 F` : '') +
+             ` at ${normals.station.name} (${NORMALS_PERIOD})` +
+             (raised ? '. Ten or more days at or above 100 F add one level' : ''),
+    confidence: 'High',
+    source: _normalsSource(normals),
+  };
+}
+
+/** Extreme heat fallback (9): NRI HWAV_AFREQ, heat wave days a year. */
+function _mapNRIHeat(afreq) {
+  const f = _nriNum(afreq);
+  if (f === null) return null;
+  return {
+    score: _binScore(f, [2, 4, 8, 15]),
+    finding: `About ${_fmtRate(f)} heat wave days a year, based on recorded heat events (FEMA NRI). ` +
+             'NOAA climate normals were not available for this area, and this count can run low where the weather office logs few heat events',
+    confidence: 'Low',
+  };
+}
+
+/** Nights at or below 0 F that raise the winter score one level. */
+const COLD_NIGHTS_RAISE = 5;
+
+/* ---------------------------------------------------------------
+   API 13 — BAD-AIR DAYS BY COUNTY (EPA AQI, geopub)
+   Route: direct (CORS, checked 2026-10-31). One row per county and month
+   with the percent of days in each AQI category. Days worse than moderate
+   (sensitive groups and up) are summed per year and averaged.
+--------------------------------------------------------------- */
+
+const AIRDAYS_FIELDS = ['YEAR', 'MONTH_NUMBER', 'Unhealthy_for_Sensitive_Group', 'Unhealthy', 'Very_Unhealthy', 'Hazardous'];
+
+function _airDaysUrl(fips5) {
+  return `${API_CONFIG.EPA_AQI_COUNTY}?where=${encodeURIComponent(`CTFIPS='${fips5}'`).replace(/'/g, '%27')}` +
+    `&outFields=${AIRDAYS_FIELDS.join(',')}&returnGeometry=false&f=json`;
+}
+
+/** Days in a month (1 to 12) of a year. */
+function _daysInMonth(year, month) {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+/**
+ * Average days a year worse than moderate from monthly percent rows.
+ * Null percentages count as 0. Only years with all 12 months count, so a
+ * year with a few months cannot pull the average down; when no year is
+ * complete, the months present are used and the result is marked partial.
+ * Returns { days, firstYear, lastYear, yearCount, partial, byYear } or null
+ * when no usable row is present.
+ */
+function _airDaysFromRows(rows) {
+  const perYear = {}, months = {};
+  (Array.isArray(rows) ? rows : []).forEach(r => {
+    const a = r && (r.attributes || r);
+    if (!a || typeof a !== 'object') return;
+    const y = parseInt(a.YEAR, 10), m = parseInt(a.MONTH_NUMBER, 10);
+    if (!(y >= 1980 && y <= 2100) || !(m >= 1 && m <= 12)) return;
+    const pct = AIRDAYS_FIELDS.slice(2).reduce((s, k) => {
+      const v = parseFloat(a[k]);
+      return s + (isFinite(v) && v > 0 ? v : 0);
+    }, 0);
+    (months[y] = months[y] || new Set());
+    if (months[y].has(m)) return;   // one row per county and month; ignore a repeat
+    months[y].add(m);
+    perYear[y] = (perYear[y] || 0) + pct / 100 * _daysInMonth(y, m);
+  });
+  const all = Object.keys(perYear).map(Number).sort((a, b) => a - b);
+  if (all.length === 0) return null;
+  const complete = all.filter(y => months[y].size === 12);
+  const years = complete.length > 0 ? complete : all;
+  const total = years.reduce((s, y) => s + perYear[y], 0);
+  return { days: total / years.length, firstYear: years[0], lastYear: years[years.length - 1], yearCount: years.length,
+           partial: complete.length === 0, byYear: perYear };
+}
+
+/** Bad-air days a year to Likelihood: below 1 = 1, 1 to 4 = 2, 4 to 10 = 3, 10 to 25 = 4, 25 and up = 5. */
+function _airDaysScore(days) {
+  return _binScore(days, [1, 4, 10, 25]);
+}
+
+/** Smoke and bad air days (23) from the county AQI record. */
+function _mapAirDays(stats, countyLabel) {
+  if (!stats || !(stats.yearCount > 0)) return null;
+  const period = stats.firstYear === stats.lastYear ? `${stats.firstYear}` : `${stats.firstYear} to ${stats.lastYear}`;
+  const n = _fmt1(stats.days);
+  return {
+    score: _airDaysScore(stats.days),
+    finding: `About ${n} day${n === '1' ? '' : 's'} a year with air quality worse than moderate in ${countyLabel || 'this county'} (EPA, ${period}${stats.partial ? ', partial year' : ''}). ` +
+             'The count includes ozone days, since this source does not separate smoke from other pollution',
+    confidence: 'Medium',
+    source: `EPA Air Quality Index days by county, ${period}`,
+  };
+}
+
+async function _callAirDaysAPI(fips5) {
+  if (!/^\d{5}$/.test(String(fips5 || ''))) throw new Error('No 5-digit FIPS');
+  console.log('[EPA AQI days] Starting for county', fips5);
+  const data = await directFetch(_airDaysUrl(fips5));
+  if (!data || !Array.isArray(data.features)) throw new Error('Unexpected EPA AQI response');
+  if (data.features.length === 0) throw _codedError(NO_RECORD, 'No AQI record for this county (no monitor)');
+  const stats = _airDaysFromRows(data.features);
+  if (!stats) throw new Error('AQI rows without a usable year and month');
+  console.log('[EPA AQI days] Result:', stats);
+  return stats;
+}
+
+/* ---------------------------------------------------------------
+   API 14 and 15 — RADON ZONES AND POWER RELIABILITY (static data files)
+   Route: same-origin JSON under data/, built by scripts/build-data.js and
+   refreshed yearly by the "Data refresh" GitHub Action. Both sources are
+   files (EPA radon zones by county; EIA-861 utility reliability), not point
+   services. A missing or unreadable file, or a county not in it, throws, so
+   the hazard stays on "Needs your judgment" with its link.
+--------------------------------------------------------------- */
+
+const RADON_SRC = 'EPA Map of Radon Zones (county), 2024';
+const POWER_SRC = 'EIA-861 reliability, median';
+const POWER_SRC_STATE = 'EIA-861 reliability, customer-weighted mean of utility medians';
+/* Estimates that come from a county-level table: not a failed source, not a state rule of thumb. */
+const COUNTY_ESTIMATE_RE = /^(EPA Map of Radon Zones|EIA-861 reliability)/i;
+function _isCountyEstimate(f) {
+  return !!f && f.status === 'estimated' && COUNTY_ESTIMATE_RE.test(String(f.source || ''));
+}
+
+/** A static data file as parsed JSON. A 404, a non-JSON body or a timeout throws. */
+async function _loadDataFile(relPath) {
+  let data;
+  try {
+    data = await directFetch(relPath);
+  } catch (e) {
+    // The data files arrive by a separate pull request from the data-refresh
+    // workflow. Until then the step is "not available yet", not an error.
+    if (/HTTP 404/.test(String(e && e.message))) throw _codedError(NO_DATA_FILE, `${relPath} is not published yet`);
+    throw e;
+  }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error(`${relPath} is not a data file`);
+  return data;
+}
+
+/** County name for matching: no punctuation, "Saint" as "St", no trailing County/Parish/Borough. */
+function _countyKey(name) {
+  return String(name || '').toLowerCase().replace(/[.'’]/g, '').replace(/\bsaint\b/g, 'st').replace(/\s+/g, ' ').trim()
+    .replace(/\s+(county|parish|borough|census area|municipality|city and borough)$/, '');
+}
+
+/**
+ * Zone for a county by 5-digit FIPS from the radon file's zonesByFips
+ * (built from the Census county list, so independent cities and their
+ * namesake counties stay apart). Returns { zone, key } or null.
+ */
+function _radonLookupFips(zonesByFips, fips5) {
+  if (!zonesByFips || typeof zonesByFips !== 'object' || !/^\d{5}$/.test(String(fips5 || ''))) return null;
+  const zone = parseInt(zonesByFips[fips5], 10);
+  return [1, 2, 3].includes(zone) ? { key: String(fips5), zone } : null;
+}
+
+/**
+ * Zone for a county from the radon file ({ zones: { "Boulder, CO": 1 } }).
+ * The address lookup gives "Boulder County" or "Boulder"; the file keys have
+ * no suffix, so both sides are matched without it. Returns { zone, key } or null.
+ */
+function _radonLookup(zones, county, stateAbbr) {
+  const st = String(stateAbbr || '').toUpperCase();
+  const want = _countyKey(county);
+  if (!zones || typeof zones !== 'object' || !st || !want) return null;
+  let hit = null;
+  Object.keys(zones).forEach(k => {
+    const i = k.lastIndexOf(',');
+    if (i < 0 || k.slice(i + 1).trim().toUpperCase() !== st) return;
+    if (!hit && _countyKey(k.slice(0, i)) === want) hit = { key: k, zone: parseInt(zones[k], 10) };
+  });
+  return hit && [1, 2, 3].includes(hit.zone) ? hit : null;
+}
+
+/**
+ * fips5 is looked up first; the name (the FCC or geocoder county, never a
+ * city) only when the file has no FIPS table or no row for that code.
+ */
+async function _callRadonAPI(fips5, countyName, stateAbbr) {
+  console.log('[Radon zones] Starting for', fips5, countyName, stateAbbr);
+  const file = await _loadDataFile(API_CONFIG.DATA_RADON);
+  const hit = _radonLookupFips(file.zonesByFips, fips5) || _radonLookup(file.zones, countyName, stateAbbr);
+  if (!hit) throw new Error('County not in the radon zone file');
+  console.log('[Radon zones] Result:', hit);
+  return { zone: hit.zone, key: hit.key, built: file.built || '' };
+}
+
+const RADON_ZONE_INFO = {
+  1: { score: 4, word: 'highest',  level: 'EPA predicts an average indoor screening level above 4 pCi/L, its action level, in zone 1 counties.' },
+  2: { score: 3, word: 'moderate', level: 'EPA predicts an average indoor screening level between 2 and 4 pCi/L in zone 2 counties.' },
+  3: { score: 2, word: 'lowest',   level: 'EPA predicts an average indoor screening level below 2 pCi/L in zone 3 counties.' },
+};
+
+/** Radon (64) from the county zone: zone 1 = 4, zone 2 = 3, zone 3 = 2. Only a test answers it for one house. */
+function _mapRadonZone(radon, countyLabel, stateAbbr) {
+  const info = radon && RADON_ZONE_INFO[radon.zone];
+  if (!info) return null;
+  const middle = (radon.zone === 1 && String(stateAbbr).toUpperCase() === 'CO')
+    ? 'About half of Colorado homes test above the action level.'
+    : info.level;
+  return {
+    score: info.score,
+    finding: `${countyLabel || 'This county'} is in EPA radon zone ${radon.zone} (${info.word}). ${middle} Only a test answers it for your house.`,
+    confidence: 'Low',
+    source: RADON_SRC,
+  };
+}
+
+/**
+ * Highest SAIDI (minutes a year, including major events) among the county's
+ * utilities, or the state figure when the county has none. `file` is the
+ * parsed power-reliability.json. Returns null when neither exists.
+ */
+function _powerLookup(file, fips5, stateAbbr) {
+  if (!file || typeof file !== 'object') return null;
+  const rows = file.byCounty && Array.isArray(file.byCounty[fips5]) ? file.byCounty[fips5] : [];
+  const usable = rows.filter(r => r && isFinite(parseFloat(r.saidi)) && parseFloat(r.saidi) > 0);
+  if (usable.length > 0) {
+    const top = usable.reduce((a, b) => (parseFloat(b.saidi) > parseFloat(a.saidi) ? b : a));
+    return { level: 'county', saidi: parseFloat(top.saidi), utility: String(top.utility || '').replace(/[<>&"]/g, '').trim(),
+             years: Array.isArray(top.years) ? top.years : null, utilityCount: usable.length };
+  }
+  const st = String(stateAbbr || '').toUpperCase();
+  const sv = file.byState ? parseFloat(file.byState[st]) : NaN;
+  if (isFinite(sv) && sv > 0) {
+    const y = parseInt(file.year, 10);
+    const yr = Array.isArray(file.yearRange) ? file.yearRange : (y ? [y, y] : null);
+    return { level: 'state', saidi: sv, utility: '', years: yr, utilityCount: 0 };
+  }
+  return null;
+}
+
+async function _callPowerAPI(fips5, stateAbbr) {
+  console.log('[EIA-861] Starting for county', fips5, stateAbbr);
+  const file = await _loadDataFile(API_CONFIG.DATA_POWER);
+  const hit = _powerLookup(file, String(fips5 || ''), stateAbbr);
+  if (!hit) throw new Error('No reliability record for this county or state');
+  console.log('[EIA-861] Result:', hit);
+  return hit;
+}
+
+/** Minutes without power a year to Likelihood: under 90 = 1, 90 to 180 = 2, 180 to 360 = 3, 360 to 720 = 4, over 720 = 5. */
+function _powerScore(minutes) {
+  return minutes < 90 ? 1 : minutes < 180 ? 2 : minutes < 360 ? 3 : minutes <= 720 ? 4 : 5;
+}
+
+function _yearsLabel(years) {
+  if (!Array.isArray(years) || years.length === 0) return '';
+  const a = years[0], b = years[years.length - 1];
+  return a === b ? String(a) : `${a} to ${b}`;
+}
+
+/** Long power outage (24) from EIA-861 SAIDI. The figure is for the utility, not the street. */
+function _mapPowerReliability(power, countyLabel, stateAbbr) {
+  if (!power || !(power.saidi > 0)) return null;
+  const yrs = _yearsLabel(power.years);
+  const mins = _commas(power.saidi);
+  const tail = ' Planned safety shutoffs are extra: check your utility\'s wildfire-safety page.';
+  let finding;
+  if (power.level === 'county') {
+    finding = `Customers of ${power.utility || 'the utility listed for this county'} averaged ${mins} minutes without power a year including major events (EIA-861${yrs ? ', ' + yrs : ''}).`;
+    if (power.utilityCount > 1) {
+      finding += ` This is the highest of the ${power.utilityCount} utilities listed for ${countyLabel || 'this county'}; the one that serves you may be lower.`;
+    }
+  } else {
+    finding = `No utility is listed for ${countyLabel || 'this county'}, so this is the ${String(stateAbbr || '').toUpperCase() || 'state'} figure: utilities there averaged ${mins} minutes without power a year including major events (EIA-861${yrs ? ', ' + yrs : ''}).`;
+  }
+  return {
+    score: _powerScore(power.saidi),
+    finding: finding + tail,
+    confidence: 'Low',
+    source: `${power.level === 'state' ? POWER_SRC_STATE : POWER_SRC}${yrs ? ' ' + yrs : ''}`,
+  };
+}
+
+/* ---------------------------------------------------------------
    DERIVED: AIR QUALITY SCORE
 --------------------------------------------------------------- */
 
@@ -1297,7 +2228,8 @@ function _deriveAirQualityScore(whpScore, epaHighHazardCount, stateAbbr) {
 
 function _compileFindings(apiResults, geocoded) {
   const {
-    flood, earthquake, wildfire, weather, drought, epa, landslide, nri, declarations,
+    flood, earthquake, wildfire, weather, drought, epa, landslide, nri, declarations, water, soil,
+    warnings, normals, airdays, radon, power,
   } = apiResults;
 
   const stateAbbr     = geocoded.stateAbbr || weather?.stateAbbr || '';
@@ -1377,12 +2309,26 @@ function _compileFindings(apiResults, geocoded) {
   // Wildfire hazard also drives the smoke estimate
   const whpScore = wildfire?.score || 2;
 
+  // Smoke and bad air days: the county's EPA AQI record when it answers.
+  // Otherwise the v3 derivation below, with its existing labels.
+  const airFromEpa = airdays ? _mapAirDays(airdays, countyLabel) : null;
+  if (airFromEpa) {
+    findings.push({
+      hazardId: H_ID.AIR_QUALITY, hazardName: H_NAME[23], category: _hCat(23),
+      scoreAssigned: airFromEpa.score,
+      source: airFromEpa.source,
+      finding: airFromEpa.finding,
+      confidence: airFromEpa.confidence,
+      status: 'success', isOverridden: false,
+    });
+  }
+
   // Air quality — derived. If either input was a placeholder, so is this.
   const epaHigh  = epa?.highHazardCount || 0;
   const aqResult = _deriveAirQualityScore(whpScore, epaHigh, stateAbbr);
   const aqDerivedFromData = !!(wildfire && epa);
   const aqRelayOff = !wildfire && (_research.failCodes || {}).wildfire === RELAY_NOT_CONFIGURED;
-  findings.push({
+  if (!airFromEpa) findings.push({
     hazardId: H_ID.AIR_QUALITY, hazardName: H_NAME[23], category: _hCat(23),
     scoreAssigned: aqResult.score,
     source: aqDerivedFromData
@@ -1400,25 +2346,36 @@ function _compileFindings(apiResults, geocoded) {
   // when it answers. The state table in scoreMapper.js (getStateWeatherScores)
   // is the fallback; the NWS call only confirms the state, so the fallback
   // never cites NOAA.
-  // Extreme heat stays on the state rule of thumb on purpose: NRI HWAV_AFREQ
-  // rates Boulder "Very Low" (0.79 heat wave days a year) against about 33
-  // days a year at or above 90 F in the 1991-2020 normals, because it counts
-  // only heat events the local NWS office logged. v3.3 adds NOAA normals.
-  // Hurricane also stays on the rule of thumb (skipped when ruled out).
+  // Extreme heat (v3.2.0) comes from the nearest NOAA 1991-2020 normals
+  // station (days at or above 90 F). NRI HWAV_AFREQ is only the fallback,
+  // at Low confidence: it rates Boulder 0.79 heat wave days a year against
+  // about 33 days at or above 90 F, because it counts only heat events the
+  // local NWS office logged. The rule of thumb is the last resort.
+  // Station nights at or below 0 F replace the NRI cold wave rule for winter.
+  // Hurricane stays on the rule of thumb (skipped when ruled out).
   const weatherNote = stateAbbr
     ? `Statewide estimate for ${stateAbbr}, not specific to this address.`
     : 'Regional estimate; state could not be confirmed.';
   const weatherSrc = WEATHER_RULE_SRC;
+  const normalsOk   = !!(normals && normals.station);
+  const heatNormals = normalsOk ? _mapNormalsHeat(normals) : null;
+  const heatNriRow  = (nriTract && _nriNum(nriTract.HWAV_AFREQ) !== null) ? nriTract : nriCounty;
+  const heatNri     = heatNormals ? null : (heatNriRow ? _mapNRIHeat(heatNriRow.HWAV_AFREQ) : null);
+  const winterNri   = nriTract ? _mapNRIWinter(nriTract.WNTW_AFREQ, nriTract.CWAV_AFREQ, normalsOk ? normals : null) : null;
   const nriWeather = {
     [H_ID.SEVERE_THUNDERSTORM]: nriTract  ? _mapNRIHail(nriTract.HAIL_AFREQ) : null,
     [H_ID.TORNADO]:             nriCounty ? _mapNRITornado(nriCounty.TRND_AFREQ, nriCounty.AREA, countyLabel) : null,
-    [H_ID.WINTER_STORM]:        nriTract  ? _mapNRIWinter(nriTract.WNTW_AFREQ, nriTract.CWAV_AFREQ) : null,
+    [H_ID.WINTER_STORM]:        winterNri,
+    [H_ID.EXTREME_HEAT]:        heatNormals || heatNri,
   };
   const nriSource = {
     [H_ID.SEVERE_THUNDERSTORM]: NRI_SRC_TRACT,
     [H_ID.TORNADO]:             NRI_SRC_COUNTY,
-    [H_ID.WINTER_STORM]:        NRI_SRC_TRACT,
+    [H_ID.WINTER_STORM]:        (winterNri && winterNri.coldFromNormals) ? `${NRI_SRC_TRACT}; ${_normalsSource(normals)}` : NRI_SRC_TRACT,
+    [H_ID.EXTREME_HEAT]:        heatNormals ? heatNormals.source : (heatNriRow === nriTract ? NRI_SRC_TRACT : NRI_SRC_COUNTY),
   };
+  // Rule-of-thumb winter still takes the cold-night level from station normals.
+  const coldNights = normalsOk ? _normalsNum(normals.d0) : null;
 
   const weatherMap = [
     { id: H_ID.SEVERE_THUNDERSTORM, key: 'severeThunderstorm' },
@@ -1444,26 +2401,36 @@ function _compileFindings(apiResults, geocoded) {
       });
       return;
     }
-    const score = weatherScores[key] || 2;
+    let score = weatherScores[key] || 2;
+    let finding = `${score === 4 ? 'Likely' : score === 3 ? 'Possible' : 'Unlikely'}. ${weatherNote}`;
+    let source = weatherSrc;
+    if (id === H_ID.WINTER_STORM && coldNights !== null && coldNights >= COLD_NIGHTS_RAISE) {
+      score = Math.min(5, score + 1);
+      finding += ` ${_fmt1(coldNights)} nights a year at or below 0 F at ${normals.station.name} (${NORMALS_PERIOD}) add one level.`;
+      source = `${weatherSrc}; ${_normalsSource(normals)}`;
+    }
     findings.push({
       hazardId: id, hazardName: H_NAME[id], category: _hCat(id),
       scoreAssigned: score,
-      source: weatherSrc,
-      finding: `${score === 4 ? 'Likely' : score === 3 ? 'Possible' : 'Unlikely'}. ${weatherNote}`,
+      source,
+      finding,
       confidence: 'Low',
       status: 'estimated', isOverridden: false,
     });
   });
 
   // ── HIGH WIND ─────────────────────────────────────────────
-  // NRI thunderstorm wind only. There is no state rule of thumb for wind,
-  // so without NRI it stays on the "Needs your judgment" list.
-  const wind = nriTract ? _mapNRIWind(nriTract.SWND_AFREQ) : null;
+  // NWS High Wind Warnings over the point (IEM), which include downslope
+  // windstorms, and NRI thunderstorm wind: the larger score wins. Without
+  // IEM, the v3.1 NRI-only finding. There is no state rule of thumb for
+  // wind, so with neither it stays on the "Needs your judgment" list.
+  const wind = _mapWindWarnings(warnings, nriTract ? nriTract.SWND_AFREQ : null) ||
+               (nriTract ? _mapNRIWind(nriTract.SWND_AFREQ) : null);
   if (wind && !_researchSkipsNa(H_ID.HIGH_WIND, stateAbbr)) {
     findings.push({
       hazardId: H_ID.HIGH_WIND, hazardName: H_NAME[63], category: _hCat(63),
       scoreAssigned: wind.score,
-      source: NRI_SRC_TRACT,
+      source: wind.source || NRI_SRC_TRACT,
       finding: wind.finding,
       confidence: wind.confidence,
       status: 'success', isOverridden: false,
@@ -1510,6 +2477,46 @@ function _compileFindings(apiResults, geocoded) {
     });
   }
 
+  // ── SOIL SHRINK-SWELL (66) ────────────────────────────────
+  // Sits in "Less common here" on the Assess screen; the research report
+  // groups by category, so it lists with Natural Hazards like Hurricane.
+  if (soil && !_researchSkipsNa(H_ID.SOIL, stateAbbr)) {
+    findings.push({
+      hazardId: H_ID.SOIL, hazardName: H_NAME[66], category: _hCat(66),
+      scoreAssigned: soil.score,
+      source: soil.source || SOIL_SRC,
+      finding: soil.finding,
+      confidence: soil.confidence,
+      status: 'success', isOverridden: false,
+    });
+  }
+
+  // ── RADON (64) AND LONG POWER OUTAGE (24) ─────────────────
+  // County-level tables from data/*.json. Absent file, or a county not in it:
+  // no finding, and the hazard stays on "Needs your judgment".
+  const radonF = radon ? _mapRadonZone(radon, countyLabel, stateAbbr) : null;
+  if (radonF && !_researchSkipsNa(H_ID.RADON, stateAbbr)) {
+    findings.push({
+      hazardId: H_ID.RADON, hazardName: H_NAME[64], category: _hCat(64),
+      scoreAssigned: radonF.score,
+      source: radonF.source,
+      finding: radonF.finding,
+      confidence: radonF.confidence,
+      status: 'estimated', isOverridden: false,
+    });
+  }
+  const powerF = power ? _mapPowerReliability(power, countyLabel, stateAbbr) : null;
+  if (powerF && !_researchSkipsNa(H_ID.POWER, stateAbbr)) {
+    findings.push({
+      hazardId: H_ID.POWER, hazardName: H_NAME[24], category: _hCat(24),
+      scoreAssigned: powerF.score,
+      source: powerF.source,
+      finding: powerF.finding,
+      confidence: powerF.confidence,
+      status: 'estimated', isOverridden: false,
+    });
+  }
+
   // ── FEMA DECLARATION FLOORS (raise only, after everything else) ──
   if (declarations) {
     // Floors are an extra; a bug here must not discard the findings.
@@ -1518,6 +2525,24 @@ function _compileFindings(apiResults, geocoded) {
     } catch (e) {
       console.warn('[OpenFEMA] floors not applied:', e.message);
     }
+  }
+
+  // ── DRINKING WATER (27) ───────────────────────────────────
+  // A mapped system is scored from its violation record. No mapped system
+  // means a private well, which depends on the flood and drought findings,
+  // so it runs after the declaration floors and ignores hazards marked
+  // "Does not apply here". A failed lookup adds no finding (judgment list
+  // with the EPA map).
+  if (water && !_researchSkipsNa(H_ID.WATER, stateAbbr)) {
+    const w = water.kind === 'well' ? _mapWaterWell(findings, stateAbbr) : water;
+    findings.push({
+      hazardId: H_ID.WATER, hazardName: H_NAME[27], category: _hCat(27),
+      scoreAssigned: w.score,
+      source: w.source,
+      finding: w.finding,
+      confidence: w.confidence,
+      status: water.kind === 'well' ? 'estimated' : 'success', isOverridden: false,
+    });
   }
 
   return findings;
@@ -1540,10 +2565,36 @@ function _renderStepItem(stepId, status) {
   const step   = STEPS.find(s => s.id === stepId);
   if (!step || !iconEl) return;
 
-  const icons = { pending: 'circle-dashed', running: 'loader-circle', success: 'circle-check', error: 'triangle-alert' };
+  const icons = { pending: 'circle-dashed', running: 'loader-circle', success: 'circle-check', error: 'triangle-alert',
+                  skipped: 'minus', norecord: 'minus' };
   iconEl.innerHTML = ic(icons[status] || 'circle-dashed');
 
-  el.className = `research-step step-${status}`;
+  // Neutral states carry a short note after the label (and as a tooltip)
+  // so the minus icon is not left to explain itself.
+  const note = _stepNote(stepId, status);
+  let noteEl = el.querySelector('.step-note');
+  if (note) {
+    if (!noteEl && typeof document.createElement === 'function') {
+      noteEl = document.createElement('small');
+      noteEl.className = 'step-note';
+      el.appendChild(noteEl);
+    }
+    if (noteEl) noteEl.textContent = note;
+    el.title = note;
+  } else {
+    if (noteEl) noteEl.remove();
+    el.removeAttribute('title');
+  }
+
+  el.className = `research-step step-${status === 'norecord' ? 'skipped' : status}`;
+}
+
+const STEP_NO_RECORD_NOTES = { soil: 'No soil data mapped here', airdays: 'No air monitor in this county' };
+/** Text shown after a step label for the neutral states, or '' for the others. */
+function _stepNote(stepId, status) {
+  if (status === 'skipped') return 'Not available yet';
+  if (status === 'norecord') return STEP_NO_RECORD_NOTES[stepId] || 'No record here';
+  return '';
 }
 
 /* ---------------------------------------------------------------
@@ -1560,7 +2611,7 @@ function _renderStepItem(stepId, status) {
 function _tracked(stepId, apiPromise) {
   // Relay calls can take up to TIMEOUT_MS + PROXY_EXTRA_MS per relay, so the
   // outer cap has to be larger than one relay attempt or nothing ever lands.
-  const cap = API_CONFIG.TIMEOUT_MS + API_CONFIG.PROXY_EXTRA_MS + 3000;
+  const cap = _trackedCapMs();
   return withTimeout(apiPromise, cap, stepId)
     .then(result => {
       // A null/undefined result is a failure, not a success with no data
@@ -1569,8 +2620,18 @@ function _tracked(stepId, apiPromise) {
       return result;
     })
     .catch(err => {
-      console.warn(`[Research] ${stepId} failed:`, err.message);
       if (err && err.code) _research.failCodes[stepId] = err.code;
+      if (err && err.code === NO_DATA_FILE) {
+        console.log(`[Research] ${stepId} skipped: ${err.message}`);
+        _setStep(stepId, 'skipped');   // neutral: the source is not published yet
+        return null;
+      }
+      if (err && err.code === NO_RECORD) {
+        console.log(`[Research] ${stepId}: ${err.message}`);
+        _setStep(stepId, 'norecord');  // neutral: the source answered, with nothing here
+        return null;
+      }
+      console.warn(`[Research] ${stepId} failed:`, err.message);
       _setStep(stepId, 'error');
       return null;   // null signals "_compileFindings" to use fallback
     });
@@ -1625,10 +2686,11 @@ async function startResearch() {
   }
 
   // ── PARALLEL API CALLS (spinners update independently) ──
-  ['nri','flood','earthquake','wildfire','weather','drought','epa','airquality','landslide','declarations']
+  ['nri','flood','earthquake','wildfire','weather','drought','epa','airquality','landslide','declarations','water','soil',
+   'warnings','normals','airdays','radon','power']
     .forEach(id => _setStep(id, 'running'));
 
-  const { lat, lng, zip, fips5, stateFips, countyFips } = geocoded;
+  const { lat, lng, zip, fips5, stateFips, countyFips, countyName, stateAbbr } = geocoded;
 
   console.log('[Research] Starting parallel API calls for lat:', lat, 'lng:', lng, 'zip:', zip, 'fips5:', fips5);
 
@@ -1637,7 +2699,8 @@ async function startResearch() {
   // One NRI call feeds hail, wind, winter, tornado, the flood fallback and
   // the landslide fallback. Flood waits on it only if it reaches Method D.
   const nriP = _tracked('nri', _callNRIAPI(lat, lng, fips5));
-  const [nri, flood, earthquake, wildfire, weather, drought, epa, landslide, declarations] =
+  const [nri, flood, earthquake, wildfire, weather, drought, epa, landslide, declarations, water, soil,
+         warnings, normals, airdays, radon, power] =
     await Promise.all([
       nriP,
       _tracked('flood',      _callFloodAPI(lat, lng, fips5, nriP)),
@@ -1648,21 +2711,31 @@ async function startResearch() {
       _tracked('epa',        _callEPAAPI(zip)),
       _tracked('landslide',  _callLandslideAPI(lat, lng)),
       _tracked('declarations', _callDeclarationsAPI(stateFips, countyFips)),
+      _tracked('water',      _callWaterAPI(lat, lng)),
+      _tracked('soil',       _callSoilAPI(lat, lng)),
+      _tracked('warnings',   _callWarningsAPI(lat, lng)),
+      _tracked('normals',    _callNormalsAPI(lat, lng)),
+      _tracked('airdays',    _callAirDaysAPI(fips5)),
+      _tracked('radon',      _callRadonAPI(fips5, countyName, stateAbbr)),
+      _tracked('power',      _callPowerAPI(fips5, stateAbbr)),
     ]);
 
   if (run !== _research.runId) return;   // cancelled while the lookups ran
 
-  // Air quality is derived from wildfire and EPA; it is only a real result when both are
-  _setStep('airquality', (wildfire && epa) ? 'success' : 'error');
+  // The smoke row has data when the EPA AQI record answered; otherwise it is
+  // derived from wildfire and EPA TRI, which is only a real result when both are
+  _setStep('airquality', (airdays || (wildfire && epa)) ? 'success' : 'error');
 
   console.log('[Research] All API calls settled. Results:', {
-    nri, flood, earthquake, wildfire, weather, drought, epa, landslide, declarations
+    nri, flood, earthquake, wildfire, weather, drought, epa, landslide, declarations, water, soil,
+    warnings, normals, airdays, radon, power,
   });
 
   // ── COMPILE FINDINGS ──────────────────────────────────────
   try {
     _research.findings = _compileFindings(
-      { flood, earthquake, wildfire, weather, drought, epa, landslide, nri, declarations },
+      { flood, earthquake, wildfire, weather, drought, epa, landslide, nri, declarations, water, soil,
+        warnings, normals, airdays, radon, power },
       geocoded
     );
     _research.hasResults = true;
@@ -2141,7 +3214,7 @@ function _renderReport() {
   // Only hazards without a finding that are not ruled out
   manualIds.forEach(numId => {
     const id = numId;
-    const reason = MANUAL_REASONS[numId];
+    const reason = _manualReason(numId, geo && geo.stateAbbr);
     // Pipeline (17) and Nuclear (18) get rich interactive cards
     if (numId === 17 || numId === 18) {
       html += _buildManualLookupCard(numId);
@@ -2169,8 +3242,12 @@ function _renderReport() {
  */
 function _researchSummarySub(estimated, failedCount, manualCount) {
   const rule  = estimated.filter(_isRuleOfThumb).length;
-  const other = estimated.length - rule;
+  const answered = estimated.filter(_isAnsweredEstimate).length;
+  const county = estimated.filter(_isCountyEstimate).length;
+  const other = estimated.length - rule - answered - county;
   return [
+    county > 0 ? `${county} ${county === 1 ? 'is a county-level estimate' : 'are county-level estimates'} from a published table.` : '',
+    answered > 0 ? `${answered} ${answered === 1 ? 'is an estimate' : 'are estimates'} where the source answered but holds no record for this address.` : '',
     other > 0 ? `${other} ${other === 1 ? 'is a' : 'are'} rough placeholder${other === 1 ? '' : 's'} because a source did not respond.` : '',
     rule > 0 ? `No address-level source exists yet for ${rule} item${rule === 1 ? '' : 's'}; ${rule === 1 ? 'it uses' : 'they use'} a state rule of thumb.` : '',
     failedCount > 0 ? `${failedCount} could not be scored.` : '',

@@ -107,4 +107,66 @@ const API_CONFIG = {
   // USGS post-fire debris-flow assessments, layer 4 Basin Combined Hazard (count within 1 km)
   USGS_POSTFIRE:
     'https://services.arcgis.com/v01gqwM5QqNysAAi/ArcGIS/rest/services/USGS_Post_Fire_Hazard_Assessment_Data/FeatureServer/4/query',
+
+  /* ── EPA Water System Boundaries (v3) — no key required ───
+     Community water system service areas as polygons (ArcGIS Online, EPA).
+     A point query returns PWSID, PWS_Name, Population_Served_Count and
+     Service_Area_Type. No polygon at a point usually means a private well.
+     Sends CORS headers, so it is called direct (checked from Henry's
+     browser, 2026-10-31). */
+  EPA_WATER_BOUNDARIES:
+    'https://services.arcgis.com/cJ9YHowT8TU7DUyn/arcgis/rest/services/Water_System_Boundaries/FeatureServer/0/query',
+
+  /* ── EPA SDWIS violations through Envirofacts — no key required ─
+     <base>/<PWSID>/JSON returns one row per violation with lowercase
+     fields. Direct, about 1.5 s (checked 2026-10-31). */
+  EPA_SDWIS_VIOLATIONS:
+    'https://data.epa.gov/efservice/VIOLATION/PWSID',
+
+  /* ── USDA Soil Data Access (SSURGO) — no key required ─────
+     The only POST in the app: a form-encoded SQL query. Answers direct with
+     CORS (108 to 544 ms, checked 2026-10-31). The relay is GET-only, so it
+     cannot help with this one. */
+  USDA_SDA:
+    'https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest',
+
+  /* ── Iowa Environmental Mesonet: NWS warnings by point — no key required ─
+     Every NWS watch and warning (VTEC) whose zone or county covers the
+     point. Answers direct with CORS (checked 2026-10-31). Coordinates are
+     rounded to 2 decimals (about 1 km) before the call. */
+  IEM_VTEC_BYPOINT:
+    'https://mesonet.agron.iastate.edu/json/vtec_events_bypoint.py',
+  /* IEM asks not to be called from busy sites. The relay can cache IEM
+     answers for 30 days, but Cloudflare's Cache API only works for a Worker
+     on a custom domain, and RELAY_URL is a workers.dev address, where the
+     cache does nothing. So v3.2.0 calls IEM direct. Set this to true once
+     the relay runs on a custom domain and RELAY_URL points at it: the app
+     then asks the relay first and calls direct only when the relay fails. */
+  IEM_VIA_RELAY: false,
+
+  /* ── NOAA NCEI 1991-2020 climate normals — no key required ─
+     Search finds normals stations in a box (bbox order north,west,south,east);
+     the data service returns the annual values for one station as strings
+     with leading spaces. Both direct with CORS (checked 2026-10-31). */
+  NCEI_SEARCH:
+    'https://www.ncei.noaa.gov/access/services/search/v1/data',
+  NCEI_DATA:
+    'https://www.ncei.noaa.gov/access/services/data/v1',
+
+  /* ── EPA AQI days by county (geopub map service) — no key required ─
+     Monthly percent of days in each AQI category per county with a monitor.
+     The capitalised /ArcGIS/ path answers; the lower-case one does not.
+     Direct with CORS, about 600 ms (checked 2026-10-31). */
+  EPA_AQI_COUNTY:
+    'https://geopub.epa.gov/ArcGIS/rest/services/myenv/aqi/MapServer/0/query',
+
+  /* ── Static data files, built by scripts/build-data.js ─────
+     Same-origin files under data/, refreshed once a year by the
+     "Data refresh" GitHub Action, which opens a pull request. The sources
+     are files, not point services (EPA radon zones by county, EIA-861
+     utility reliability), and the EPA file blocks browsers. Paths are
+     relative to the page. While a file is missing, its hazard stays on
+     "Needs your judgment". */
+  DATA_RADON: 'data/radon-zones.json',
+  DATA_POWER: 'data/power-reliability.json',
 };

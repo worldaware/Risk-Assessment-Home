@@ -9,7 +9,10 @@
 // v2.4.0: Import from JSON, Continue card, default action items, walk-through card, share text, custom-domain guide.
 // v3.0.0: hazard cut to 20 core + 8 less common, household checklist sets impact, "Does not apply here".
 // v3.1.0: FEMA National Risk Index for hail, wind, winter, tornado; USGS landslide map; FEMA declaration floors.
-const CACHE_NAME = 'wa-risk-v3.1.0';
+// v3.2.0: water, soil, NWS warnings, NOAA normals, EPA bad-air days; radon and power history from data/*.json.
+// data/*.json is deliberately not in APP_SHELL: the files do not exist until the first data-refresh pull request
+// is merged, and cache.addAll fails the whole install on one 404. The fetch handler below caches them on first use.
+const CACHE_NAME = 'wa-risk-v3.2.0';
 
 // App shell files to cache on install
 const APP_SHELL = [
