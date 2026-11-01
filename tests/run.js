@@ -1557,7 +1557,7 @@ async function v32StageAChecks() {
   const src = fs.readFileSync(path.join(ROOT, 'js/research.js'), 'utf8');
   check('runner: water and soil run in the parallel set and reach _compileFindings',
     src.includes("_tracked('water',      _callWaterAPI(lat, lng))") && src.includes("_tracked('soil',       _callSoilAPI(lat, lng))") &&
-    /\['nri'[^\]]*'water','soil'[,\]]/.test(src) && /declarations, water, soil,?\s*\n?\s*(warnings, normals, airdays )?\},\s*\n\s*geocoded/.test(src));
+    /\['nri'[^\]]*'water','soil'[,\]]/.test(src) && /declarations, water, soil,?\s*\n?\s*(warnings, normals, airdays(, radon, power)? )?\},\s*\n\s*geocoded/.test(src));
   check('soil uses the one POST helper, and no relay (it is GET-only)', src.includes('directPostForm(API_CONFIG.USDA_SDA') && !/proxyFetch\(API_CONFIG\.USDA_SDA|relayFetch\(API_CONFIG\.USDA_SDA/.test(src));
   check('water calls are direct, not through the relay', !/proxyFetch\([^)]*(WATER|SDWIS)|relayFetch\([^)]*(WATER|SDWIS)/.test(src));
   ctx.fetch = () => Promise.reject(new Error('no network in tests'));
@@ -1975,8 +1975,8 @@ async function v32StageBChecks() {
   const src = fs.readFileSync(path.join(ROOT, 'js/research.js'), 'utf8');
   check('runner: warnings, normals and airdays run in the parallel set and reach _compileFindings',
     src.includes("_tracked('warnings',   _callWarningsAPI(lat, lng))") && src.includes("_tracked('normals',    _callNormalsAPI(lat, lng))") &&
-    src.includes("_tracked('airdays',    _callAirDaysAPI(fips5))") && /'warnings','normals','airdays'\]/.test(src) &&
-    /warnings, normals, airdays \},\s*\n\s*geocoded/.test(src));
+    src.includes("_tracked('airdays',    _callAirDaysAPI(fips5))") && /'warnings','normals','airdays'(,'radon','power')?\]/.test(src) &&
+    /warnings, normals, airdays(, radon, power)? \},\s*\n\s*geocoded/.test(src));
   check('IEM goes relay-first; normals and AQI days are direct', /relayThenDirect\(_iemUrl\(/.test(src) && /directFetch\(_normalsSearchUrl\(/.test(src) &&
     /directFetch\(_normalsDataUrl\(/.test(src) && /directFetch\(_airDaysUrl\(/.test(src));
   check('relay budget plus a direct retry fits inside the _tracked cap', ev('RELAY_FIRST_BUDGET_MS') + cfg.TIMEOUT_MS < cfg.TIMEOUT_MS + cfg.PROXY_EXTRA_MS + 3000);
@@ -2114,6 +2114,460 @@ async function v32StageBChecks() {
   }
 }
 
-asyncChecks().then(v31Checks).then(v32StageAChecks).then(v32StageBChecks).catch(e => { failed++; console.log('  FAIL async checks threw — ' + e.message + '\n' + e.stack); }).then(() => {  console.log(`\n${passed} passed, ${failed} failed`);
+/* ---------------------------------------------------------------
+   v3.2.0 Stage C: radon (64) and long power outage (24) from static data
+   files, the build script, the data-refresh workflow, version pins.
+   The data files the app reads in these checks are built by running
+   scripts/build-data.js on tests/fixtures/ (synthetic inputs in the EPA and
+   EIA-861 layouts), so the script and the app are tested end to end.
+--------------------------------------------------------------- */
+async function v32StageCChecks() {
+  console.log('v3.2.0 Stage C: radon, power history, build script');
+  const os = require('os');
+  const { spawnSync } = require('child_process');
+  const noop = () => {};
+  const ctx = {
+    console: { log: noop, warn: noop, error: console.error },
+    document: { getElementById: () => null, querySelector: () => null, querySelectorAll: () => [], addEventListener: noop },
+    localStorage: { getItem: () => null, setItem: noop, removeItem: noop },
+    AbortController: class { constructor() { this.signal = {}; } abort() {} },
+    setTimeout, clearTimeout, URL, Number, String, Math, Date, Array, Object, JSON, RegExp, Error, Promise, Set, Map,
+    fetch: () => Promise.reject(new Error('no network in tests')),
+  };
+  ctx.window = ctx; ctx.globalThis = ctx; ctx.addEventListener = noop; ctx.navigator = {};
+  vm.createContext(ctx);
+  ['js/apiConfig.js', 'js/scoreMapper.js', 'js/research.js', 'js/actions.js', 'js/report.js',
+   'js/importValidator.js', 'js/checklist.js', 'app.js']
+    .forEach(f => vm.runInContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), ctx, { filename: f }));
+  const ev = code => vm.runInContext(code, ctx);
+  const cfg = ev('API_CONFIG');
+  const HD = ev('HAZARD_DATA');
+  const names = Object.fromEntries(HD.map(h => [h.id, h.name]));
+  const cats = Object.fromEntries(HD.map(h => [h.id, h.category]));
+  const json = body => Promise.resolve({ ok: true, status: 200, json: async () => body });
+  const seen = [];
+  const route = handler => { seen.length = 0; ctx.fetch = (url, opts) => { seen.push({ url: String(url), opts: opts || {} }); return handler(String(url), opts || {}); }; };
+  const by = (fs_, id) => fs_.find(f => f.hazardId === id);
+  const NOW = new Date(2026, 9, 31);
+  const FX = path.join(ROOT, 'tests', 'fixtures');
+  const SCRIPT = path.join(ROOT, 'scripts', 'build-data.js');
+  const bd = require(SCRIPT);
+  let e1;
+
+  // ── Build script on the local fixtures ──
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-stagec-'));
+  const run = (args, extra) => spawnSync(process.execPath, [SCRIPT].concat(args), Object.assign({ encoding: 'utf8' }, extra || {}));
+  const baseArgs = out => ['--out', out, '--radon-file', path.join(FX, 'radon-zones-sample.json'),
+    '--eia-dir', path.join(FX, 'eia861-2025'), '--eia-dir', path.join(FX, 'eia861-2024'), '--fips-file', path.join(FX, 'national_county-sample.txt'),
+    '--min-radon', '5', '--min-power-counties', '3', '--built', '2026-10-31'];
+  let radonFile, powerFile;
+  try {
+    const out1 = path.join(tmp, 'data');
+    const r1 = run(baseArgs(out1));
+    check('build script: runs on local fixtures with no network and exits 0', r1.status === 0, r1.stderr);
+    radonFile = JSON.parse(fs.readFileSync(path.join(out1, 'radon-zones.json'), 'utf8'));
+    powerFile = JSON.parse(fs.readFileSync(path.join(out1, 'power-reliability.json'), 'utf8'));
+    check('build script radon: { built, source, zones } with numeric zones keyed "County, ST"',
+      radonFile.built === '2026-10-31' && radonFile.source === 'https://www.epa.gov/system/files/other-files/2024-06/radon-zones-202406.json' &&
+      radonFile.zones['Boulder, CO'] === 1 && radonFile.zones['Cook, IL'] === 2 && radonFile.zones['Miami-Dade, FL'] === 3 && radonFile.zones['St. Louis, MO'] === 2,
+      JSON.stringify(radonFile).slice(0, 200));
+    check('build script radon: rows with no zone or a zone outside 1 to 3 are skipped', !('Bad Row, CO' in radonFile.zones) && !('Unzoned, CO' in radonFile.zones) &&
+      Object.keys(radonFile.zones).length === 10 && r1.stdout.includes('2 rows skipped'), r1.stdout);
+    check('build script radon: keys sorted', Object.keys(radonFile.zones).join('|') === Object.keys(radonFile.zones).slice().sort().join('|'));
+    check('build script power: { built, source, year, byCounty, byState }',
+      powerFile.built === '2026-10-31' && powerFile.source === 'https://www.eia.gov/electricity/data/eia861/zip/f8612025.zip' && powerFile.year === 2025 &&
+      powerFile.byCounty && powerFile.byState, Object.keys(powerFile).join());
+    const bou = powerFile.byCounty['08013'];
+    check('build script power: Boulder County lists its three utilities, highest first, as { utility, saidi, years }',
+      bou.length === 3 && bou[0].utility === 'Public Service Co of Colorado' && bou[1].utility === 'United Power, Inc.' && bou[2].utility === 'Longmont Power & Communications' &&
+      bou.every(u => typeof u.saidi === 'number' && Array.isArray(u.years) && u.years.length === 2), JSON.stringify(bou));
+    check('build script power: median over the last 5 reported years (900, 900 in 2019 and 2020 are left out; 240, 200, 269.9, 255.1, 300 -> 255.1)',
+      bou[0].saidi === 255.1 && JSON.stringify(bou[0].years) === '[2021,2025]', JSON.stringify(bou[0]));
+    check('build script power: a year repeated in two folders keeps the first folder listed (PSCo 2024 is 255.1 in the median, not 999)', bou[0].saidi === 255.1);
+    check('build script power: fewer than 5 years uses what is reported (Longmont 2020, 2023, 2024, 2025: median of 5000, 80, 95, 85 = 90)',
+      bou[2].saidi === 90 && JSON.stringify(bou[2].years) === '[2020,2025]', JSON.stringify(bou[2]));
+    check('build script power: values in the "other standard" columns are used when the IEEE columns are empty (Alaska 1500)',
+      powerFile.byCounty['02013'][0].saidi === 1500);
+    check('build script power: implausible SAIDI (150000 minutes) and utilities with no SAIDI add no row',
+      !bou.some(u => /Absurd|Tiny/.test(u.utility)) && !powerFile.byCounty['08069']);
+    check('build script power: county names turn into 5-digit FIPS; "Baltimore" is the county and "Baltimore City" the city',
+      powerFile.byCounty['24005'] && powerFile.byCounty['24510'] && powerFile.byCounty['27053'] && powerFile.byCounty['08123'].length === 1);
+    check('build script power: a repeated territory row lists the utility once; an earlier territory year is ignored; an unknown county is counted, not guessed',
+      bou.filter(u => /Public Service/.test(u.utility)).length === 1 && !bou.some(u => /Old Co/.test(u.utility)) && /1 territory rows without a county code/.test(r1.stdout), r1.stdout);
+    const wmean = (255.1 * 1500000 + 240 * 100000 + 90 * 50000) / 1650000;
+    check('build script power: state figure is the customer-weighted mean of utility medians (CO), a plain value for MN',
+      Math.abs(powerFile.byState.CO - Math.round(wmean * 10) / 10) < 1e-9 && powerFile.byState.MN === 160 && powerFile.byState.AK === 1500 && /customer-weighted/.test(powerFile.stateMethod), JSON.stringify(powerFile.byState));
+    check('build script power: yearRange covers the years used', JSON.stringify(powerFile.yearRange) === '[2020,2025]');
+
+    // Same inputs again: nothing changes, including the built date
+    const again = run(baseArgs(out1).map(a => (a === '2026-10-31' ? '2027-01-02' : a)));
+    const radonText = fs.readFileSync(path.join(out1, 'radon-zones.json'), 'utf8');
+    check('build script: a re-run on unchanged data keeps the old built date (no diff)', again.status === 0 && JSON.parse(radonText).built === '2026-10-31' &&
+      JSON.parse(fs.readFileSync(path.join(out1, 'power-reliability.json'), 'utf8')).built === '2026-10-31');
+    const out2 = path.join(tmp, 'data2');
+    run(baseArgs(out2).concat(['--only', 'radon']));
+    check('build script: --only radon writes just the radon file', fs.existsSync(path.join(out2, 'radon-zones.json')) && !fs.existsSync(path.join(out2, 'power-reliability.json')));
+    check('build script: the file is JSON that reads one county per line', radonText.split('\n').length === 17 && /\n    "Boulder, CO": 1,\n/.test(radonText));
+
+    // Failures: nothing is written for the failed source, exit code 1
+    const out3 = path.join(tmp, 'data3');
+    const low = run(['--out', out3, '--radon-file', path.join(FX, 'radon-zones-sample.json'), '--only', 'radon']);
+    check('build script: a radon file with far fewer counties than expected fails, writes nothing, exits 1',
+      low.status === 1 && /Only 10 radon zone rows/.test(low.stderr) && !fs.existsSync(path.join(out3, 'radon-zones.json')), low.stderr);
+    fs.writeFileSync(path.join(tmp, 'bad.json'), '{"rows":[]}');
+    const bad = run(['--out', out3, '--radon-file', path.join(tmp, 'bad.json'), '--only', 'radon']);
+    check('build script: a radon file without a "data" array fails', bad.status === 1 && /no "data" array/.test(bad.stderr));
+    const empty = path.join(tmp, 'empty-eia'); fs.mkdirSync(empty);
+    const noRel = run(['--out', out3, '--eia-dir', empty, '--fips-file', path.join(FX, 'national_county-sample.txt'), '--only', 'power']);
+    check('build script: an EIA folder with no reliability rows fails with a clear message', noRel.status === 1 && /No reliability rows/.test(noRel.stderr), noRel.stderr);
+    const partial = run(baseArgs(path.join(tmp, 'data4')).map(a => (a === path.join(FX, 'radon-zones-sample.json') ? path.join(tmp, 'bad.json') : a)));
+    check('build script: one source failing still writes the other, and the run exits 1 so the workflow stops',
+      partial.status === 1 && fs.existsSync(path.join(tmp, 'data4', 'power-reliability.json')) && !fs.existsSync(path.join(tmp, 'data4', 'radon-zones.json')));
+    check('build script: unknown option and bad year are refused', run(['--nope', 'x']).status === 1 && run(['--year', 'abc']).status === 1 && run(['--only', 'water']).status === 1);
+
+    // Unit level
+    check('csv parser: quotes, embedded commas and quotes, CRLF, BOM', JSON.stringify(bd.parseCsv('﻿a,"b,c","d ""e"""\r\n1,2,3\r\n')) === '[["a","b,c","d \\"e\\""],["1","2","3"]]');
+    const idx = bd.buildCountyIndex(fs.readFileSync(path.join(FX, 'national_county-sample.txt'), 'utf8'));
+    check('county index: with and without the County/Borough word, case, periods and "Saint"',
+      idx.lookup('CO', 'Boulder') === '08013' && idx.lookup('CO', 'BOULDER COUNTY') === '08013' && idx.lookup('AK', 'Aleutians East') === '02013' &&
+      idx.lookup('MD', 'Baltimore') === '24005' && idx.lookup('MD', 'Baltimore City') === '24510' && idx.lookup('CO', 'Atlantis') === '' && idx.lookup('MN', 'Hennepin') === '27053');
+    const pipe = bd.buildCountyIndex('STATE|STATEFP|COUNTYFP|COUNTYNS|COUNTYNAME|CLASSFP|FUNCSTAT\nCO|08|013|00198122|Boulder County|H1|A\n');
+    check('county index: also reads the pipe-separated Census layout', pipe.lookup('CO', 'Boulder') === '08013');
+    const mkTerr = (n, miss) => Array.from({ length: n }, (_, i) => ({ util: '1', name: 'U', state: 'CO', county: i < miss ? 'Nowhere' + i : 'Boulder', fips: '', year: 2025 }));
+    const rel1 = [{ util: '1', name: 'U', state: 'CO', year: 2025, saidi: 100, customers: 0 }];
+    e1 = null; try { bd.buildPower(rel1, mkTerr(20, 2), idx, { minPowerCounties: 1 }); } catch (e) { e1 = e; }
+    check('build script: up to 10 percent of territory rows may be unmatched', !e1);
+    e1 = null; try { bd.buildPower(rel1, mkTerr(20, 3), idx, { minPowerCounties: 1 }); } catch (e) { e1 = e; }
+    check('build script: more than 10 percent unmatched stops the build (county names may have changed)', !!e1 && /3 of 20 territory rows/.test(e1.message), e1 && e1.message);
+    check('build script: territory rows that carry their own FIPS need no county list', (() => {
+      const p = bd.buildPower(rel1, [{ util: '1', name: 'U', state: 'CO', county: 'Boulder', fips: '08013', year: 2025 }], null, { minPowerCounties: 1 });
+      return p.payload.byCounty['08013'][0].saidi === 100 && p.payload.byState.CO === 100;
+    })());
+    check('build script: a utility listed under a state it did not report for falls back to its own figure', (() => {
+      const p = bd.buildPower(rel1, [{ util: '1', name: 'U', state: 'WY', county: 'X', fips: '56001', year: 2025 }], null, { minPowerCounties: 1 });
+      return p.payload.byCounty['56001'][0].saidi === 100;
+    })());
+    const hdr = bd.findHeader([['Title'], ['', 'IEEE'], ['Data Year', 'Utility Number', 'State', 'SAIDI With MED'], [2025, 7, 'CO', 5]], t => t.some(x => /saidi/.test(x)));
+    check('sheet reader: finds the header under title and group rows, and joins the rows above it', hdr && hdr.first === 3 && hdr.text[3] === 'saidi with med');
+    check('sheet reader: xlsx without the xlsx package says how to install it', (() => {
+      try { require.resolve('xlsx'); return true; } catch (e) { /* not installed: the CI check job does not install it */ }
+      try { bd.readEia([(() => { const d = path.join(tmp, 'x'); fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, 'Reliability_2025.xlsx'), 'x'); return d; })()]); return false; }
+      catch (e) { return /npm install xlsx@0\.18\.5 --no-save/.test(e.message); }
+    })());
+    const scriptSrc = fs.readFileSync(SCRIPT, 'utf8');
+    check('build script: no dependencies at load (xlsx only inside readSheets, only for .xlsx files)', !/^const .*require\('xlsx'\)/m.test(scriptSrc) && (scriptSrc.match(/require\('xlsx'\)/g) || []).length === 1 &&
+      (scriptSrc.match(/require\('([^'.][^']*)'\)/g) || []).every(m => /'(fs|os|path|child_process|xlsx)'/.test(m)));
+    check('build script: sends an identifying User-Agent on downloads and defaults to the spec sources',
+      /User-Agent': UA/.test(scriptSrc) && scriptSrc.includes('radon-zones-202406.json') && scriptSrc.includes('f861${year}.zip') && /year: 2025/.test(scriptSrc));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+
+  // ── Workflow ──
+  const wf = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'data-refresh.yml'), 'utf8');
+  check('workflow: manual run and a yearly schedule in the first week of July', /workflow_dispatch:/.test(wf) && /cron: '\d+ \d+ [1-7] 7 \*'/.test(wf));
+  check('workflow: installs xlsx@0.18.5 without saving, then runs the script', wf.includes('npm install xlsx@0.18.5 --no-save') && wf.includes('node scripts/build-data.js'));
+  check('workflow: opens a pull request on branch data/refresh with the spec title, and only the data files',
+    wf.includes('peter-evans/create-pull-request@v6') && /branch: data\/refresh/.test(wf) && wf.includes("title: 'Data refresh: radon zones and power reliability'") &&
+    /add-paths: \|?\s*\n?\s*data\/\*\.json/.test(wf));
+  check('workflow: never pushes to main', !/git push|push:|branches:\s*\[?\s*main/.test(wf) && /permissions:\s*\n\s+contents: write\s*\n\s+pull-requests: write/.test(wf));
+  check('workflow: matches the check workflow (checkout v4, setup-node v4, node 20)', wf.includes('actions/checkout@v4') && wf.includes('actions/setup-node@v4') && /node-version: '20'/.test(wf));
+  check('workflow: the year input goes through an env variable, not straight into the shell', /EIA_YEAR: \$\{\{ inputs\.eia_year/.test(wf) && /--year "\$EIA_YEAR"/.test(wf));
+  const chk = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'check.yml'), 'utf8');
+  check('check workflow also syntax-checks scripts/*.js', /for f in app\.js sw\.js js\/\*\.js scripts\/\*\.js; do node --check/.test(chk));
+
+  // ── Config, names, steps ──
+  check('Stage C config: relative data file paths', cfg.DATA_RADON === 'data/radon-zones.json' && cfg.DATA_POWER === 'data/power-reliability.json');
+  check('Stage C names and categories match HAZARD_DATA exactly (24 and 64)', ev('H_NAME')[24] === names[24] && ev('H_NAME')[64] === names[64] &&
+    names[64] === 'Radon' && names[24] === 'Long power outage, including planned safety shutoffs' && ev('_hCat')(24) === cats[24] && ev('_hCat')(64) === cats[64] &&
+    cats[24] === 'Outages & Service Interruptions' && cats[64] === 'Home');
+  const steps = ev('STEPS');
+  check('Stage C steps: radon and power after airdays', steps.findIndex(s => s.id === 'radon') === steps.findIndex(s => s.id === 'airdays') + 1 &&
+    steps.findIndex(s => s.id === 'power') === steps.findIndex(s => s.id === 'radon') + 1);
+
+  // ── Radon mapping and name lookup ──
+  const rm = (z, st) => ctx._mapRadonZone({ zone: z }, 'Boulder County', st || 'CO');
+  check('radon zones: 1 = 4, 2 = 3, 3 = 2', rm(1).score === 4 && rm(2).score === 3 && rm(3).score === 2);
+  check('radon zone outside 1 to 3 gives nothing', rm(0) === null && rm(4) === null && ctx._mapRadonZone(null, 'X', 'CO') === null);
+  check('radon Boulder finding is the spec sentence, Low confidence, county source',
+    rm(1).finding === 'Boulder County is in EPA radon zone 1 (highest). About half of Colorado homes test above the action level. Only a test answers it for your house.' &&
+    rm(1).confidence === 'Low' && rm(1).source === 'EPA Map of Radon Zones (county), 2024', rm(1).finding);
+  check('radon outside Colorado does not borrow the Colorado statistic; it states EPA\'s zone meaning',
+    rm(1, 'MN').finding === 'Boulder County is in EPA radon zone 1 (highest). EPA predicts an average indoor level above 4 pCi/L, its action level, in zone 1 counties. Only a test answers it for your house.' &&
+    /between 2 and 4 pCi\/L/.test(rm(2).finding) && /below 2 pCi\/L/.test(rm(3).finding) && !/Colorado/.test(rm(2).finding));
+  const Z = radonFile.zones;
+  const rl = (c, s) => { const h = ctx._radonLookup(Z, c, s); return h && h.zone; };
+  check('radon lookup: "Boulder County" and "Boulder" both find "Boulder, CO"', rl('Boulder County', 'CO') === 1 && rl('Boulder', 'CO') === 1 && rl('boulder county', 'co') === 1);
+  check('radon lookup: the state must match (Boulder, MN is not in the file)', rl('Boulder County', 'MN') === null && rl('Hennepin County', 'MN') === 1);
+  check('radon lookup: St. Louis, Saint Louis, Anchorage Municipality, Miami-Dade',
+    rl('St. Louis County', 'MO') === 2 && rl('Saint Louis County', 'MO') === 2 && rl('Anchorage Municipality', 'AK') === 3 && rl('Miami-Dade County', 'FL') === 3);
+  check('radon lookup: unknown county, empty name, no state, bad zone value, string zone',
+    rl('Atlantis County', 'CO') === null && rl('', 'CO') === null && rl('Boulder', '') === null && rl('Boulder', 'CO') === 1 &&
+    ctx._radonLookup({ 'Boulder, CO': 7 }, 'Boulder', 'CO') === null && ctx._radonLookup({ 'Boulder, CO': '2' }, 'Boulder', 'CO').zone === 2 && ctx._radonLookup(null, 'Boulder', 'CO') === null);
+
+  // ── Radon file call: absent, present ──
+  route(() => json(radonFile));
+  const rc = await ctx._callRadonAPI('Boulder County', 'CO');
+  check('radon call: one GET of the relative data path, no relay, zone 1', seen.length === 1 && seen[0].url === 'data/radon-zones.json' && !seen[0].opts.method && rc.zone === 1);
+  route(() => Promise.resolve({ ok: false, status: 404, json: async () => ({}) }));
+  e1 = null; try { await ctx._callRadonAPI('Boulder County', 'CO'); } catch (e) { e1 = e; }
+  check('radon call: file absent (404) throws a NO_DATA_FILE error, so the hazard stays on "Needs your judgment"', !!e1 && e1.code === 'NO_DATA_FILE' && /not published yet/.test(e1.message));
+  route(() => Promise.resolve({ ok: true, status: 200, json: async () => { throw new SyntaxError('Unexpected token <'); } }));
+  e1 = null; try { await ctx._callRadonAPI('Boulder County', 'CO'); } catch (e) { e1 = e; }
+  check('radon call: an HTML page served for the missing file (not JSON) throws', !!e1);
+  route(() => json(radonFile));
+  e1 = null; try { await ctx._callRadonAPI('Atlantis County', 'CO'); } catch (e) { e1 = e; }
+  check('radon call: a county that is not in the file throws', !!e1 && /not in the radon zone file/.test(e1.message));
+  route(() => json([1, 2]));
+  e1 = null; try { await ctx._callRadonAPI('Boulder County', 'CO'); } catch (e) { e1 = e; }
+  check('radon call: a file that is not an object throws', !!e1);
+
+  // ── Power mapping ──
+  const ps = m => ctx._powerScore(m);
+  check('power SAIDI: 89.9 = 1, 90 = 2, 179.9 = 2, 180 = 3', ps(89.9) === 1 && ps(90) === 2 && ps(179.9) === 2 && ps(180) === 3);
+  check('power SAIDI: 359.9 = 3, 360 = 4, 720 = 4 (over 720 is 5), 720.1 = 5', ps(359.9) === 3 && ps(360) === 4 && ps(720) === 4 && ps(720.1) === 5);
+  check('power SAIDI: 0 = 1, 5000 = 5', ps(0) === 1 && ps(5000) === 5);
+  const pl = (fips, st) => ctx._powerLookup(powerFile, fips, st);
+  const pb = pl('08013', 'CO');
+  check('power lookup: the highest SAIDI among the county\'s utilities, with its name, years and the utility count',
+    pb.level === 'county' && pb.saidi === 255.1 && pb.utility === 'Public Service Co of Colorado' && pb.utilityCount === 3 && JSON.stringify(pb.years) === '[2021,2025]', JSON.stringify(pb));
+  const unordered = { byCounty: { '08013': [{ utility: 'A', saidi: 100, years: [2021, 2025] }, { utility: 'B', saidi: 300, years: [2021, 2025] }, { utility: 'C', saidi: 200, years: [2021, 2025] }] }, byState: {} };
+  check('power lookup: takes the maximum whatever the order in the file', ctx._powerLookup(unordered, '08013', 'CO').utility === 'B');
+  const ps2 = pl('08069', 'CO');
+  check('power lookup: a county missing from the file uses the state value', ps2.level === 'state' && ps2.saidi === powerFile.byState.CO && JSON.stringify(ps2.years) === '[2020,2025]', JSON.stringify(ps2));
+  check('power lookup: no county and no state value gives nothing', pl('99999', 'ZZ') === null && ctx._powerLookup(null, '08013', 'CO') === null && ctx._powerLookup({}, '08013', 'CO') === null);
+  check('power lookup: entries without a usable SAIDI are ignored', ctx._powerLookup({ byCounty: { '08013': [{ utility: 'A', saidi: 'n/a' }, { utility: 'B', saidi: 0 }] }, byState: { CO: 200 }, year: 2025 }, '08013', 'CO').level === 'state');
+  const pf = ctx._mapPowerReliability(pb, 'Boulder County', 'CO');
+  check('power Boulder: 255.1 minutes = 3, Low, source names the median years',
+    pf.score === 3 && pf.confidence === 'Low' && pf.source === 'EIA-861 reliability, median 2021 to 2025', JSON.stringify(pf));
+  check('power finding: utility, minutes, years, planned shutoffs note (spec sentence)',
+    pf.finding.startsWith('Customers of Public Service Co of Colorado averaged 255 minutes without power a year including major events (EIA-861, 2021 to 2025).') &&
+    pf.finding.endsWith('Planned safety shutoffs are extra: check your utility\'s wildfire-safety page.'), pf.finding);
+  check('power finding: several utilities in the county says it is the highest and yours may be lower',
+    pf.finding.includes('This is the highest of the 3 utilities listed for Boulder County; the one that serves you may be lower.') &&
+    !ctx._mapPowerReliability(pl('27053', 'MN'), 'Hennepin County', 'MN').finding.includes('highest of'));
+  const pst = ctx._mapPowerReliability(ps2, 'Larimer County', 'CO');
+  check('power state fallback: says no utility is listed for the county and gives the state figure',
+    pst.finding.startsWith('No utility is listed for Larimer County, so this is the CO figure: utilities there averaged 249 minutes without power a year including major events (EIA-861, 2020 to 2025).') &&
+    pst.score === 3 && pst.source === 'EIA-861 reliability, median 2020 to 2025');
+  check('power: thousands get a comma, one year reads as one year', ctx._mapPowerReliability({ level: 'county', saidi: 1500, utility: 'Remote Coop Alaska', years: [2025, 2025], utilityCount: 1 }, 'X Borough', 'AK').finding.startsWith('Customers of Remote Coop Alaska averaged 1,500 minutes') &&
+    ctx._mapPowerReliability({ level: 'county', saidi: 1500, utility: 'R', years: [2025, 2025], utilityCount: 1 }, 'X', 'AK').source === 'EIA-861 reliability, median 2025');
+  check('power: no usable value gives nothing', ctx._mapPowerReliability(null, 'X', 'CO') === null && ctx._mapPowerReliability({ level: 'county', saidi: 0 }, 'X', 'CO') === null);
+
+  // ── Power file call ──
+  route(() => json(powerFile));
+  const pc = await ctx._callPowerAPI('08013', 'CO');
+  check('power call: one GET of the relative data path, highest SAIDI returned', seen.length === 1 && seen[0].url === 'data/power-reliability.json' && pc.saidi === 255.1);
+  route(() => Promise.resolve({ ok: false, status: 404, json: async () => ({}) }));
+  e1 = null; try { await ctx._callPowerAPI('08013', 'CO'); } catch (e) { e1 = e; }
+  check('power call: file absent (404) throws a NO_DATA_FILE error', !!e1 && e1.code === 'NO_DATA_FILE');
+  route(() => json(powerFile));
+  e1 = null; try { await ctx._callPowerAPI('99999', 'ZZ'); } catch (e) { e1 = e; }
+  check('power call: no record for the county or the state throws', !!e1);
+  e1 = null; try { await ctx._callPowerAPI('', ''); } catch (e) { e1 = e; }
+  check('power call: no FIPS and no state throws', !!e1);
+
+  // ── _compileFindings ──
+  ev('state = freshState();');
+  const geo = { lat: 40.015, lng: -105.2705, zip: '80302', stateAbbr: 'CO', county: 'Boulder County', fips5: '08013' };
+  const ok = (score) => ({ score, finding: 'x', confidence: 'High' });
+  const nriD = { tract: NRI_FX.downtown, county: NRI_FX.county };
+  const base = { flood: ok(2), earthquake: ok(3), wildfire: ok(3), weather: { stateAbbr: 'CO' }, drought: ok(2),
+    epa: { chemScore: 2, finding: '2 facilities', confidence: 'Medium', highHazardCount: 1, potwCount: 1 }, landslide: null, nri: nriD };
+  const comp = extra => ctx._compileFindings(Object.assign({}, base, extra || {}), geo);
+  const withBoth = comp({ radon: rc, power: pc });
+  const fr = by(withBoth, 64), fp = by(withBoth, 24);
+  check('compile: radon 64 is 4, Low, estimated, county source, Home category, HAZARD_DATA name',
+    fr.scoreAssigned === 4 && fr.confidence === 'Low' && fr.status === 'estimated' && fr.source === 'EPA Map of Radon Zones (county), 2024' &&
+    fr.hazardName === 'Radon' && fr.category === 'Home' && fr.isOverridden === false, JSON.stringify(fr));
+  check('compile: radon finding names the county from the research', fr.finding.startsWith('Boulder County is in EPA radon zone 1 (highest).'));
+  check('compile: power 24 is 3, Low, estimated, EIA source, Outages category, HAZARD_DATA name',
+    fp.scoreAssigned === 3 && fp.confidence === 'Low' && fp.status === 'estimated' && fp.source === 'EIA-861 reliability, median 2021 to 2025' &&
+    fp.hazardName === names[24] && fp.category === 'Outages & Service Interruptions', JSON.stringify(fp));
+  check('compile: files absent or county missing means no finding for 64 and 24 (they stay on the judgment list)',
+    !by(comp(), 64) && !by(comp(), 24) && !by(comp({ radon: null, power: null }), 64));
+  const lists = comp({ radon: rc, power: pc });
+  check('compile: exactly one finding each for 64 and 24', lists.filter(f => f.hazardId === 64).length === 1 && lists.filter(f => f.hazardId === 24).length === 1);
+  ev('state.scores[64] = { na: true }; state.scores[24] = { na: true };');
+  check('compile: radon or power marked Does not apply here: no finding', !by(comp({ radon: rc, power: pc }), 64) && !by(comp({ radon: rc, power: pc }), 24));
+  ev('state = freshState();');
+  const mnGeo = { lat: 44.98, lng: -93.27, zip: '55401', stateAbbr: 'MN', county: 'Hennepin County', fips5: '27053' };
+  const mnR = await (async () => { route(() => json(radonFile)); return ctx._callRadonAPI('Hennepin County', 'MN'); })();
+  const mnP = await (async () => { route(() => json(powerFile)); return ctx._callPowerAPI('27053', 'MN'); })();
+  const mn = ctx._compileFindings(Object.assign({}, base, { radon: mnR, power: mnP, nri: { tract: Object.assign({ COUNTY: 'Hennepin' }, NRI_FX.minneapolis), county: null } }), mnGeo);
+  check('compile Minneapolis: radon zone 1 = 4 with the generic EPA sentence, power 160 minutes = 2, county named',
+    by(mn, 64).scoreAssigned === 4 && !/Colorado/.test(by(mn, 64).finding) && /Hennepin County is in EPA radon zone 1/.test(by(mn, 64).finding) &&
+    by(mn, 24).scoreAssigned === 2 && /Northern States Power Co - Minnesota averaged 160 minutes/.test(by(mn, 24).finding));
+  check('Stage C findings keep the shape and HAZARD_DATA names', [withBoth, mn].every(L => L.every(f => ['hazardId', 'hazardName', 'category', 'scoreAssigned', 'source', 'finding', 'confidence', 'status'].every(k => k in f) && f.hazardName === names[f.hazardId])));
+
+  // ── County estimates are counted as such, not as failed sources ──
+  check('county estimate test: radon and power findings are county estimates; placeholders and the rule of thumb are not',
+    ctx._isCountyEstimate(fr) && ctx._isCountyEstimate(fp) && !ctx._isCountyEstimate({ status: 'estimated', source: 'World Aware placeholder (EPA TRI did not respond)' }) &&
+    !ctx._isCountyEstimate({ status: 'success', source: fr.source }) && !ctx._isRuleOfThumb(fr) && !ctx._isAnsweredEstimate(fr));
+  const subC = ctx._researchSummarySub([fr, fp], 0, 3);
+  check('summary line: two county estimates read as such and add no placeholder or rule-of-thumb clause',
+    subC === '2 are county-level estimates from a published table. 3 need your judgment.', subC);
+  check('summary line: one county estimate is singular', ctx._researchSummarySub([fr], 0, 3).startsWith('1 is a county-level estimate from a published table.'));
+  check('summary line: a real placeholder beside county estimates is still counted as a placeholder',
+    ctx._researchSummarySub([fr, fp, { status: 'estimated', source: 'World Aware placeholder (x did not respond)' }], 0, 0) ===
+    '2 are county-level estimates from a published table. 1 is a rough placeholder because a source did not respond. 0 need your judgment.');
+  ev(`state = freshState(); state.researchReport = { geocoded: ${JSON.stringify(geo)}, findings: ${JSON.stringify(withBoth)}, timestamp: 't' }; state.researchAddress = 'x';`);
+  const rd = ev('buildReportData()').research;
+  check('saved report data: countyEstimateCount counts radon and power, and they are not rule-of-thumb items',
+    rd.countyEstimateCount === 2 && rd.ruleOfThumbCount === 0 && rd.answeredEstimateCount === 0, JSON.stringify([rd.countyEstimateCount, rd.ruleOfThumbCount, rd.answeredEstimateCount]));
+  check('report sentence: county estimates are not "rough placeholders because a source did not respond"',
+    ctx._sourcesSentence({ findingCount: 10, estimatedCount: 2, ruleOfThumbCount: 0, countyEstimateCount: 2 }) === 'Public data supplied the likelihood for 8 hazards; 2 are county-level estimates from a published table.' &&
+    ctx._sourcesSentence({ findingCount: 10, estimatedCount: 3, ruleOfThumbCount: 1, answeredEstimateCount: 0, countyEstimateCount: 2 }).includes('2 are county-level estimates from a published table; no address-level source exists yet for 1 item'));
+  check('report sentence: saved reports without countyEstimateCount read as before',
+    ctx._sourcesSentence({ findingCount: 12, estimatedCount: 2, ruleOfThumbCount: 1 }) === 'Public data supplied the likelihood for 10 hazards; 1 is a rough placeholder because a source did not respond; no address-level source exists yet for 1 item; it uses a state rule of thumb.');
+  check('report items: county estimates say so in the on-screen note and the PDF prefix', (() => {
+    const rsrc = fs.readFileSync(path.join(ROOT, 'js/report.js'), 'utf8');
+    return rsrc.includes("' Likelihood is a county-level estimate from a published table.'") && rsrc.includes("'County-level estimate: '") && ctx._isCountyEstimateItem({ source: fr.source }) && !ctx._isCountyEstimateItem({ source: 'EPA TRI' });
+  })());
+  ev('state = freshState();');
+
+  // ── Override rules: research never overwrites a likelihood the user set ──
+  const realShow = ctx.showScreen, realSave = ctx.autoSave;
+  ctx.showScreen = noop; ctx.autoSave = noop;
+  try {
+    const setup = (scores) => {
+      ev(`state = freshState(); _research.geocoded = ${JSON.stringify(geo)}; _research.address = 'x'; _research.findings = ${JSON.stringify(withBoth)}; _research.hasResults = true;`);
+      Object.keys(scores).forEach(id => { ev(`state.scores[${id}] = Object.assign(state.scores[${id}] || {}, ${JSON.stringify(scores[id])});`); });
+    };
+    setup({});
+    ctx.applyResearchScores();
+    const s0 = ev('state.scores');
+    check('apply: untouched radon and power get the researched likelihood, flagged auto and as estimates', s0[64].l === 4 && s0[64].isAuto === true && s0[64].isEstimate === true &&
+      s0[24].l === 3 && s0[24].isAuto === true && s0[24].isEstimate === true);
+    check('apply: research never invents an impact for radon or power', (s0[64].iManual !== true) && ev('state.autoScoreOrigins[64].source') === 'EPA Map of Radon Zones (county), 2024');
+    setup({ 64: { l: 2, i: 5, iManual: true }, 24: { l: 5, i: 2, iManual: true } });
+    ctx.applyResearchScores();
+    const s1 = ev('state.scores');
+    check('apply: a radon and a power likelihood the user set by hand (with a hand-set impact) are left exactly as entered',
+      s1[64].l === 2 && s1[64].i === 5 && s1[64].iManual === true && !s1[64].isAuto && s1[24].l === 5 && s1[24].i === 2 && !s1[24].isAuto);
+    setup({ 64: { l: 1, i: 3 } });
+    ctx.applyResearchScores();
+    check('apply: a user likelihood without a hand-set impact is also kept, and its impact is untouched', ev('state.scores[64].l') === 1 && ev('state.scores[64].i') === 3);
+    setup({ 64: { l: 3, isAuto: true } });
+    ctx.applyResearchScores();
+    check('apply: a likelihood from an earlier research run is replaced by the new one', ev('state.scores[64].l') === 4);
+    setup({ 64: { na: true } });
+    ctx.applyResearchScores();
+    check('apply: radon marked Does not apply here is not filled in', !(ev('state.scores[64].l') > 0));
+  } finally {
+    ctx.showScreen = realShow; ctx.autoSave = realSave;
+    ev('state = freshState();');
+  }
+
+  // ── Judgment list wording ──
+  const mr = ev('MANUAL_REASONS');
+  check('judgment list: radon (64) and power (24) keep their reasons and now link to EPA and EIA',
+    /Haven't tested: rate it 3\. Tested high: 5\. Tested low: 1\./.test(mr[64]) && mr[64].includes('https://www.epa.gov/radon') &&
+    /planned shutoff map \(Xcel publishes one\)/.test(mr[24]) && mr[24].includes('https://www.eia.gov/electricity/data/eia861/'));
+
+  // ── Full run with every host mocked: data files present, then absent ──
+  console.log('v3.2.0 Stage C: full research run, data files present and absent');
+  {
+    const savedRelay = cfg.RELAY_URL;
+    cfg.RELAY_URL = '';
+    const mkRoute = (files, point) => (url) => {
+      const u = String(url);
+      if (u.startsWith('https://nominatim.openstreetmap.org/')) return point === 'mn'
+        ? json([{ lat: '44.9778', lon: '-93.2650', display_name: 'Nicollet Mall, Minneapolis, Minnesota', address: { postcode: '55401', 'ISO3166-2-lvl4': 'US-MN', county: 'Hennepin County', city: 'Minneapolis' } }])
+        : json([{ lat: '40.015', lon: '-105.2705', display_name: 'Pearl Street, Boulder, Colorado', address: { postcode: '80302', 'ISO3166-2-lvl4': 'US-CO', county: 'Boulder County', city: 'Boulder' } }]);
+      if (u.startsWith('https://geo.fcc.gov/')) return point === 'mn' ? json({ County: { FIPS: '27053', name: 'Hennepin' }, State: { code: 'MN' } }) : json({ County: { FIPS: '08013', name: 'Boulder' }, State: { code: 'CO' } });
+      if (u === 'data/radon-zones.json') return files ? json(radonFile) : Promise.resolve({ ok: false, status: 404, json: async () => ({}) });
+      if (u === 'data/power-reliability.json') return files ? json(powerFile) : Promise.resolve({ ok: false, status: 404, json: async () => ({}) });
+      if (u.startsWith(cfg.NRI_TRACT)) return json({ features: [{ attributes: point === 'mn' ? Object.assign({ COUNTY: 'Hennepin' }, NRI_FX.minneapolis) : NRI_FX.downtown }] });
+      if (u.startsWith(cfg.NRI_COUNTY)) return json({ features: [{ attributes: point === 'mn' ? { COUNTY: 'Hennepin', AREA: 606, STCOFIPS: '27053' } : NRI_FX.county }] });
+      return Promise.reject(new Error('unrouted ' + u));
+    };
+    const runResearch = async (files, point) => {
+      route(mkRoute(files, point));
+      const page = [];
+      ctx.document.getElementById = id => id === 'research-address-input' ? { value: point === 'mn' ? '1 Nicollet Mall, Minneapolis, MN 55401' : '1234 Pearl St, Boulder, CO 80302' }
+        : id === 'research-report-content' ? { set innerHTML(v) { page.push(v); } } : null;
+      ev('state = freshState(); _research.isRunning = false; _research.hasResults = false;');
+      await ctx.startResearch();
+      const fs_ = ev('_research.findings'), st_ = ev('_research.stepStatuses');
+      const html = page.join('');
+      const sub = ((html.match(/<span class="report-summary-sub">([^<]*)<\/span>/) || [])[1]) || '';
+      return { fs_, st_, html, sub };
+    };
+    const present = await runResearch(true, 'co');
+    check('full run, files present (Boulder): radon step and power step succeed', present.st_.radon === 'success' && present.st_.power === 'success', JSON.stringify(present.st_));
+    check('full run, files present (Boulder): radon 4 and power 3, both estimated, no longer on the judgment list',
+      by(present.fs_, 64) && by(present.fs_, 64).scoreAssigned === 4 && by(present.fs_, 24) && by(present.fs_, 24).scoreAssigned === 3 &&
+      by(present.fs_, 64).status === 'estimated' && !/Radon is only known by testing/.test(present.html) && !/Outage history by address is not public/.test(present.html));
+    check('full run, files present: the report lists both findings with their sources', present.html.includes('EPA Map of Radon Zones (county), 2024') && present.html.includes('EIA-861 reliability, median 2021 to 2025'));
+    check('full run, files present: summary line calls them county-level estimates, not placeholders',
+      /2 are county-level estimates from a published table\./.test(present.sub) && (present.sub.match(/rough placeholder/g) || []).length === (present.fs_.filter(f => f.status === 'estimated').length - 2 > 0 ? 1 : 0), present.sub);
+    check('full run, files present: the radon and power rows read as "Rough estimate" cards (Low confidence)', present.html.includes('Rough estimate'));
+
+    const absent = await runResearch(false, 'co');
+    check('full run, files absent (404): radon and power steps show as skipped (not errors) and nothing else breaks',
+      absent.st_.radon === 'skipped' && absent.st_.power === 'skipped' && absent.st_.geocode === 'success' && ev('_research.hasResults') === true);
+    check('full run, files absent: no finding for 64 or 24; both appear under "Needs your judgment" with their links',
+      !by(absent.fs_, 64) && !by(absent.fs_, 24) && absent.html.includes('Radon is only known by testing the house') && absent.html.includes('https://www.epa.gov/radon') &&
+      absent.html.includes('Outage history by address is not public') && absent.html.includes('https://www.eia.gov/electricity/data/eia861/'));
+    check('full run, files absent: the summary has no county-estimate clause', !/county-level estimate/.test(absent.sub));
+
+    const mnRun = await runResearch(true, 'mn');
+    check('full run, files present (Minneapolis): radon 4 (zone 1) and power 2 (160 minutes), Hennepin County named',
+      by(mnRun.fs_, 64) && by(mnRun.fs_, 24) && by(mnRun.fs_, 64).scoreAssigned === 4 && by(mnRun.fs_, 24).scoreAssigned === 2 && /Hennepin County is in EPA radon zone 1/.test(by(mnRun.fs_, 64).finding),
+      JSON.stringify([mnRun.st_.radon, mnRun.st_.power, mnRun.st_.geocode, ev('_research.geocoded')]));
+    ev('state = freshState(); _research.isRunning = false;');
+    ctx.document.getElementById = () => null;
+    cfg.RELAY_URL = savedRelay;
+    ctx.fetch = () => Promise.reject(new Error('no network in tests'));
+  }
+
+  // ── Service worker and wiring ──
+  const sw = fs.readFileSync(path.join(ROOT, 'sw.js'), 'utf8');
+  const shell = (sw.match(/const APP_SHELL = \[([\s\S]*?)\n\];/) || [])[1] || '';
+  const shellPaths = (shell.match(/'\.\/[^']+'/g) || []).map(s => s.slice(3, -1));
+  check('sw: every file in APP_SHELL exists (one 404 fails cache.addAll and with it the whole install)', shellPaths.length > 20 && shellPaths.every(p => p === '' || fs.existsSync(path.join(ROOT, p))),
+    shellPaths.filter(p => p !== '' && !fs.existsSync(path.join(ROOT, p))).join());
+  const dataShellEntries = shellPaths.filter(p => p.startsWith('data/'));
+  check('sw: data files are in APP_SHELL only if they exist in the repo (they are cached on first use otherwise)',
+    dataShellEntries.every(p => fs.existsSync(path.join(ROOT, p))) && (fs.existsSync(path.join(ROOT, 'data', 'radon-zones.json')) || dataShellEntries.length === 0));
+  check('sw: the fetch handler caches same-origin 200 responses on first use and never caches a 404',
+    /if \(!response \|\| response\.status !== 200\) return response;/.test(sw) && /caches\.open\(CACHE_NAME\)\.then\(cache => cache\.put\(event\.request, clone\)\)/.test(sw));
+  const src = fs.readFileSync(path.join(ROOT, 'js/research.js'), 'utf8');
+  check('runner: radon and power run in the parallel set with the geocoded county, state and FIPS',
+    src.includes("_tracked('radon',      _callRadonAPI(county, stateAbbr))") && src.includes("_tracked('power',      _callPowerAPI(fips5, stateAbbr))") &&
+    /'airdays','radon','power'\]/.test(src) && /airdays, radon, power \},\s*\n\s*geocoded/.test(src));
+  check('data files are read with the same-origin helper, not the relay', /directFetch\(relPath\)/.test(src) && !/relayFetch\(API_CONFIG\.DATA_|proxyFetch\(API_CONFIG\.DATA_/.test(src));
+  // Committed data files, when present, must have the shape the app reads
+  const dataDir = path.join(ROOT, 'data');
+  if (fs.existsSync(path.join(dataDir, 'radon-zones.json'))) {
+    const d = JSON.parse(fs.readFileSync(path.join(dataDir, 'radon-zones.json'), 'utf8'));
+    check('data/radon-zones.json: built, source and at least 3000 counties with zones 1 to 3 (and Boulder, CO is zone 1)',
+      !!d.built && /^https:/.test(d.source) && Object.keys(d.zones).length >= 3000 && Object.values(d.zones).every(z => [1, 2, 3].includes(z)) && d.zones['Boulder, CO'] === 1);
+  }
+  if (fs.existsSync(path.join(dataDir, 'power-reliability.json'))) {
+    const d = JSON.parse(fs.readFileSync(path.join(dataDir, 'power-reliability.json'), 'utf8'));
+    check('data/power-reliability.json: built, source, year, utilities per county with minutes, and a state value for CO',
+      !!d.built && /^https:/.test(d.source) && d.year >= 2020 && Object.keys(d.byCounty).length >= 1500 && /^\d{5}$/.test(Object.keys(d.byCounty)[0]) &&
+      Object.values(d.byCounty).every(L => L.every(u => u.utility && u.saidi > 0 && u.years.length === 2)) && d.byState.CO > 0);
+  }
+
+  // ── Version ──
+  const appSrc = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+  const html3 = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  check('version 3.2.0 in app.js, sw.js CACHE_NAME and the About line',
+    /const APP_VERSION = '3\.2\.0';/.test(appSrc) && /const CACHE_NAME = 'wa-risk-v3\.2\.0';/.test(sw) && html3.includes('World Aware Risk Assessment v3.2.0') && !/v3\.1\.0<\/p>/.test(html3));
+
+  // ── Copy rules ──
+  const copy = [rm(1).finding, rm(2).finding, rm(3).finding, rm(1, 'MN').finding, pf.finding, pf.source, pst.finding, fr.source, mr[64], mr[24],
+    ctx._researchSummarySub([fr, fp], 0, 3), ctx._sourcesSentence({ findingCount: 10, estimatedCount: 2, countyEstimateCount: 2 }),
+    'Looking up your county on the EPA radon zone map', 'Checking utility outage records for your county (EIA)'];
+  check('Stage C copy: no em dash, no exclamation point', !copy.some(t => /[—!]/.test(t)), copy.filter(t => /[—!]/.test(t)).join(' | '));
+  check('Stage C copy: no "not X but Y" and no AI-style transitions', !copy.some(t => /\bnot (just )?[^.;]{1,40}\bbut\b|moreover|furthermore/i.test(t)));
+  check('Stage C copy: no placeholder syntax or bad numbers', !copy.some(t => /\[[A-Z ]+\]|\{\w+\}|undefined|NaN|null|Infinity/.test(t)), copy.filter(t => /undefined|NaN|null/.test(t)).join(' | '));
+  ctx.fetch = () => Promise.reject(new Error('no network in tests'));
+}
+
+asyncChecks().then(v31Checks).then(v32StageAChecks).then(v32StageBChecks).then(v32StageCChecks).catch(e => { failed++; console.log('  FAIL async checks threw — ' + e.message + '\n' + e.stack); }).then(() => {  console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 });

@@ -110,6 +110,11 @@ function _isRuleOfThumbItem(it) {
   return !!it && /rule of thumb/i.test(String(it.source || ''));
 }
 
+/** A research estimate read from a county-level table (radon zones, utility reliability): the source answered. */
+function _isCountyEstimateItem(it) {
+  return !!it && typeof _isCountyEstimate === 'function' && _isCountyEstimate({ status: 'estimated', source: it.source });
+}
+
 /** One honest sentence about where the likelihoods came from. */
 function _sourcesSentence(rs) {
   const real = Math.max(0, (rs.findingCount || 0) - (rs.estimatedCount || 0));
@@ -117,9 +122,12 @@ function _sourcesSentence(rs) {
   const rule  = Math.min(rs.estimatedCount || 0, rs.ruleOfThumbCount || 0);
   // v3.2.0: estimates where the source answered but holds no record (private well)
   const answered = Math.min((rs.estimatedCount || 0) - rule, rs.answeredEstimateCount || 0);
-  const other = (rs.estimatedCount || 0) - rule - answered;
+  // v3.2.0: estimates read from a county-level table
+  const county = Math.min((rs.estimatedCount || 0) - rule - answered, rs.countyEstimateCount || 0);
+  const other = (rs.estimatedCount || 0) - rule - answered - county;
   const parts = [];
   if (real > 0) parts.push(`Public data supplied the likelihood for ${real} hazard${real === 1 ? '' : 's'}`);
+  if (county) parts.push(`${county} ${county === 1 ? 'is a county-level estimate' : 'are county-level estimates'} from a published table`);
   if (answered) parts.push(`${answered} ${answered === 1 ? 'is an estimate' : 'are estimates'} where the source answered but holds no record for this address`);
   if (other) parts.push(`${other} ${other === 1 ? 'is a' : 'are'} rough placeholder${other === 1 ? '' : 's'} because a source did not respond`);
   if (rule) parts.push(`no address-level source exists yet for ${rule} item${rule === 1 ? '' : 's'}; ${rule === 1 ? 'it uses' : 'they use'} a state rule of thumb`);
@@ -205,7 +213,7 @@ function buildReportViewHtml(r) {
           <div class="rd-item-body">
             <div class="rd-item-name"><span class="rd-rank">${idx + 1}.</span> ${escHtml(it.name)}</div>
             <div class="rd-item-action">${escHtml(RISK_LEVELS[it.level].label)}: ${escHtml(RISK_LEVELS[it.level].action)}.</div>
-            <div class="rd-item-meta">${escHtml(catLabel(it.category))}. ${escHtml(it.liText)}.${it.fromResearch ? (it.isEstimate ? (_isRuleOfThumbItem(it) ? ' Likelihood is a state rule of thumb; no address-level source exists yet.' : ' Likelihood is a rough estimate (source did not respond).') : ' Likelihood from public data.') : ''}</div>
+            <div class="rd-item-meta">${escHtml(catLabel(it.category))}. ${escHtml(it.liText)}.${it.fromResearch ? (it.isEstimate ? (_isRuleOfThumbItem(it) ? ' Likelihood is a state rule of thumb; no address-level source exists yet.' : _isCountyEstimateItem(it) ? ' Likelihood is a county-level estimate from a published table.' : ' Likelihood is a rough estimate (source did not respond).') : ' Likelihood from public data.') : ''}</div>
             ${it.fromResearch && it.finding ? `<div class="rd-item-finding">${escHtml(it.finding)}</div>` : ''}
             ${_editable('notes.' + it.id, it.reportNotes, 'Add notes', 'div', 'rd-notes')}
           </div>
@@ -531,7 +539,7 @@ async function buildReportPDF() {
     boxNum: String(it.score),
     meta: `${RISK_LEVELS[it.level].label}: ${RISK_LEVELS[it.level].action}. ${catLabel(it.category)}. ${it.liText}.`,
     extra: (it.fromResearch && it.finding)
-      ? [(it.isEstimate ? (_isRuleOfThumbItem(it) ? 'State rule of thumb (no address-level source yet): ' : 'Rough estimate (source did not respond): ') : 'Public data: ') + it.finding]
+      ? [(it.isEstimate ? (_isRuleOfThumbItem(it) ? 'State rule of thumb (no address-level source yet): ' : _isCountyEstimateItem(it) ? 'County-level estimate: ' : 'Rough estimate (source did not respond): ') : 'Public data: ') + it.finding]
       : [],
   }));
   heading('Ranked risks', r.scored.length ? itemHeight(r.scored[0], 1, scoredOpts[0]) : lh(10.5) * 2);

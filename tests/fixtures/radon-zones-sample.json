@@ -1,0 +1,88 @@
+{
+ "data": [
+  {
+   "County,State": "Boulder, CO",
+   "COUNTY LABEL": "Boulder County",
+   "STATE": "Colorado",
+   "Region": "8",
+   "Zone": "1"
+  },
+  {
+   "County,State": "Denver, CO",
+   "COUNTY LABEL": "Denver County",
+   "STATE": "Colorado",
+   "Region": "8",
+   "Zone": "1"
+  },
+  {
+   "County,State": "Larimer, CO",
+   "COUNTY LABEL": "Larimer County",
+   "STATE": "Colorado",
+   "Region": "8",
+   "Zone": "1"
+  },
+  {
+   "County,State": "Hennepin, MN",
+   "COUNTY LABEL": "Hennepin County",
+   "STATE": "Minnesota",
+   "Region": "5",
+   "Zone": "1"
+  },
+  {
+   "County,State": "Ramsey, MN",
+   "COUNTY LABEL": "Ramsey County",
+   "STATE": "Minnesota",
+   "Region": "5",
+   "Zone": "1"
+  },
+  {
+   "County,State": "Cook, IL",
+   "COUNTY LABEL": "Cook County",
+   "STATE": "Illinois",
+   "Region": "5",
+   "Zone": "2"
+  },
+  {
+   "County,State": "St. Louis, MO",
+   "COUNTY LABEL": "St. Louis County",
+   "STATE": "Missouri",
+   "Region": "7",
+   "Zone": "2"
+  },
+  {
+   "County,State": "Miami-Dade, FL",
+   "COUNTY LABEL": "Miami-Dade County",
+   "STATE": "Florida",
+   "Region": "4",
+   "Zone": "3"
+  },
+  {
+   "County,State": "Anchorage, AK",
+   "COUNTY LABEL": "Anchorage Municipality",
+   "STATE": "Alaska",
+   "Region": "10",
+   "Zone": "3"
+  },
+  {
+   "County,State": "Baltimore, MD",
+   "COUNTY LABEL": "Baltimore County",
+   "STATE": "Maryland",
+   "Region": "3",
+   "Zone": "2"
+  },
+  {
+   "County,State": "Bad Row, CO",
+   "COUNTY LABEL": "Bad Row County",
+   "STATE": "Colorado",
+   "Region": "8",
+   "Zone": ""
+  },
+  {
+   "County,State": "Unzoned, CO",
+   "COUNTY LABEL": "Unzoned County",
+   "STATE": "Colorado",
+   "Region": "8",
+   "Zone": "4"
+  }
+ ]
+}

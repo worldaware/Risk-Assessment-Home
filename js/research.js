@@ -28,6 +28,8 @@ const H_ID = {
   HIGH_WIND:          63,
   WATER:              27,   // "Water outage or unsafe tap water"
   SOIL:               66,   // "Shifting or swelling soil under the house"
+  POWER:              24,   // "Long power outage, including planned safety shutoffs"
+  RADON:              64,
 };
 // v3.0.0 dropped the dust storm (14), wastewater (21) and WUI (55) findings:
 // those hazards merged into smoke, water outage and wildfire.
@@ -50,8 +52,13 @@ const H_NAME = {
   27: 'Water outage or unsafe tap water',
   63: 'High wind',
   66: 'Shifting or swelling soil under the house',
+  24: 'Long power outage, including planned safety shutoffs',
+  64: 'Radon',
 };
-const H_CAT = { 15: 'Industrial & CBRN', 27: 'Outages & Service Interruptions' };
+const H_CAT = {
+  15: 'Industrial & CBRN', 27: 'Outages & Service Interruptions',
+  24: 'Outages & Service Interruptions', 64: 'Home',
+};
 function _hCat(id) { return H_CAT[id] || 'Natural Hazards'; }
 
 /* Hazards no public source can score for an address, with what to check instead */
@@ -61,13 +68,13 @@ const MANUAL_REASONS = {
   11: 'The USGS landslide map did not load for this address. Look it up at https://www.usgs.gov/tools/us-landslide-inventory-and-susceptibility-map and rate it higher for a steep slope or a burn scar above you.',
   20: 'Old mine workings and quarries are on county and Colorado Geological Survey maps. Local knowledge helps.',
   22: 'Disease outbreaks are regional. No address-level data exists.',
-  24: 'Outage history is not public. Check your utility\'s planned shutoff map (Xcel publishes one) and how often your street loses power.',
+  24: 'Outage history by address is not public. Check your utility\'s planned shutoff map (Xcel publishes one) and how often your street loses power. Utility averages are in the EIA reliability tables at https://www.eia.gov/electricity/data/eia861/.',
   27: 'Water main breaks and boil orders are tracked by your water provider. The EPA service-area lookup did not load for this address. Find your system on the EPA map at https://www.epa.gov/ground-water-and-drinking-water/community-water-system-service-area-boundaries and enter what you know.',
   36: 'Depends on how many roads lead out of your neighborhood and what could block them. Local knowledge required.',
   53: 'Civil unrest depends on where you live and work. Enter what you know.',
   54: 'Active threat risk depends on local context. Enter what you know.',
   63: 'NWS warning records and FEMA wind records did not load for this address. Rate it from what you see on your street: downed limbs, roof damage, shutoffs.',
-  64: 'Radon is only known by testing the house. Haven\'t tested: rate it 3. Tested high: 5. Tested low: 1.',
+  64: 'Radon is only known by testing the house. Haven\'t tested: rate it 3. Tested high: 5. Tested low: 1. EPA radon information is at https://www.epa.gov/radon.',
   65: 'House fire depends on the home itself: heating, wiring, dryer and cooking. Enter what you know.',
   66: 'The USDA soil lookup found no mapped soil layers at this address, or did not load. Look up linear extensibility on Web Soil Survey at https://websoilsurvey.nrcs.usda.gov/ and the Colorado Geological Survey swelling-soil maps. Cracked foundations or sticking doors are a sign.',
   60: 'Custom hazard. Enter manually.',
@@ -141,6 +148,8 @@ const STEPS = [
   { id: 'warnings',   label: 'Counting NWS warnings over this point (Iowa Environmental Mesonet)' },
   { id: 'normals',    label: 'Checking NOAA climate normals for the nearest station' },
   { id: 'airdays',    label: 'Counting bad-air days for your county (EPA)' },
+  { id: 'radon',      label: 'Looking up your county on the EPA radon zone map' },
+  { id: 'power',      label: 'Checking utility outage records for your county (EIA)' },
 ];
 
 /* ---------------------------------------------------------------
@@ -160,6 +169,7 @@ function withTimeout(promise, ms, label) {
 /** Error codes that change the wording of a placeholder finding. */
 const RELAY_NOT_CONFIGURED = 'RELAY_NOT_CONFIGURED';
 const NO_SOURCE            = 'NO_SOURCE';
+const NO_DATA_FILE         = 'NO_DATA_FILE';   // static data file not published yet
 
 function _codedError(code, message) {
   const e = new Error(message);
@@ -1906,6 +1916,159 @@ async function _callAirDaysAPI(fips5) {
 }
 
 /* ---------------------------------------------------------------
+   API 14 and 15 — RADON ZONES AND POWER RELIABILITY (static data files)
+   Route: same-origin JSON under data/, built by scripts/build-data.js and
+   refreshed yearly by the "Data refresh" GitHub Action. Both sources are
+   files (EPA radon zones by county; EIA-861 utility reliability), not point
+   services. A missing or unreadable file, or a county not in it, throws, so
+   the hazard stays on "Needs your judgment" with its link.
+--------------------------------------------------------------- */
+
+const RADON_SRC = 'EPA Map of Radon Zones (county), 2024';
+const POWER_SRC = 'EIA-861 reliability, median';
+/* Estimates that come from a county-level table: not a failed source, not a state rule of thumb. */
+const COUNTY_ESTIMATE_RE = /^(EPA Map of Radon Zones|EIA-861 reliability)/i;
+function _isCountyEstimate(f) {
+  return !!f && f.status === 'estimated' && COUNTY_ESTIMATE_RE.test(String(f.source || ''));
+}
+
+/** A static data file as parsed JSON. A 404, a non-JSON body or a timeout throws. */
+async function _loadDataFile(relPath) {
+  let data;
+  try {
+    data = await directFetch(relPath);
+  } catch (e) {
+    // The data files arrive by a separate pull request from the data-refresh
+    // workflow. Until then the step is "not available yet", not an error.
+    if (/HTTP 404/.test(String(e && e.message))) throw _codedError(NO_DATA_FILE, `${relPath} is not published yet`);
+    throw e;
+  }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error(`${relPath} is not a data file`);
+  return data;
+}
+
+/** County name for matching: no punctuation, "Saint" as "St", no trailing County/Parish/Borough. */
+function _countyKey(name) {
+  return String(name || '').toLowerCase().replace(/[.'’]/g, '').replace(/\bsaint\b/g, 'st').replace(/\s+/g, ' ').trim()
+    .replace(/\s+(county|parish|borough|census area|municipality|city and borough)$/, '');
+}
+
+/**
+ * Zone for a county from the radon file ({ zones: { "Boulder, CO": 1 } }).
+ * The address lookup gives "Boulder County" or "Boulder"; the file keys have
+ * no suffix, so both sides are matched without it. Returns { zone, key } or null.
+ */
+function _radonLookup(zones, county, stateAbbr) {
+  const st = String(stateAbbr || '').toUpperCase();
+  const want = _countyKey(county);
+  if (!zones || typeof zones !== 'object' || !st || !want) return null;
+  let hit = null;
+  Object.keys(zones).forEach(k => {
+    const i = k.lastIndexOf(',');
+    if (i < 0 || k.slice(i + 1).trim().toUpperCase() !== st) return;
+    if (!hit && _countyKey(k.slice(0, i)) === want) hit = { key: k, zone: parseInt(zones[k], 10) };
+  });
+  return hit && [1, 2, 3].includes(hit.zone) ? hit : null;
+}
+
+async function _callRadonAPI(county, stateAbbr) {
+  console.log('[Radon zones] Starting for', county, stateAbbr);
+  const file = await _loadDataFile(API_CONFIG.DATA_RADON);
+  const hit = _radonLookup(file.zones, county, stateAbbr);
+  if (!hit) throw new Error('County not in the radon zone file');
+  console.log('[Radon zones] Result:', hit);
+  return { zone: hit.zone, key: hit.key, built: file.built || '' };
+}
+
+const RADON_ZONE_INFO = {
+  1: { score: 4, word: 'highest',  level: 'EPA predicts an average indoor level above 4 pCi/L, its action level, in zone 1 counties.' },
+  2: { score: 3, word: 'moderate', level: 'EPA predicts an average indoor level between 2 and 4 pCi/L in zone 2 counties.' },
+  3: { score: 2, word: 'lowest',   level: 'EPA predicts an average indoor level below 2 pCi/L in zone 3 counties.' },
+};
+
+/** Radon (64) from the county zone: zone 1 = 4, zone 2 = 3, zone 3 = 2. Only a test answers it for one house. */
+function _mapRadonZone(radon, countyLabel, stateAbbr) {
+  const info = radon && RADON_ZONE_INFO[radon.zone];
+  if (!info) return null;
+  const middle = (radon.zone === 1 && String(stateAbbr).toUpperCase() === 'CO')
+    ? 'About half of Colorado homes test above the action level.'
+    : info.level;
+  return {
+    score: info.score,
+    finding: `${countyLabel || 'This county'} is in EPA radon zone ${radon.zone} (${info.word}). ${middle} Only a test answers it for your house.`,
+    confidence: 'Low',
+    source: RADON_SRC,
+  };
+}
+
+/**
+ * Highest SAIDI (minutes a year, including major events) among the county's
+ * utilities, or the state figure when the county has none. `file` is the
+ * parsed power-reliability.json. Returns null when neither exists.
+ */
+function _powerLookup(file, fips5, stateAbbr) {
+  if (!file || typeof file !== 'object') return null;
+  const rows = file.byCounty && Array.isArray(file.byCounty[fips5]) ? file.byCounty[fips5] : [];
+  const usable = rows.filter(r => r && isFinite(parseFloat(r.saidi)) && parseFloat(r.saidi) > 0);
+  if (usable.length > 0) {
+    const top = usable.reduce((a, b) => (parseFloat(b.saidi) > parseFloat(a.saidi) ? b : a));
+    return { level: 'county', saidi: parseFloat(top.saidi), utility: String(top.utility || '').replace(/[<>&"]/g, '').trim(),
+             years: Array.isArray(top.years) ? top.years : null, utilityCount: usable.length };
+  }
+  const st = String(stateAbbr || '').toUpperCase();
+  const sv = file.byState ? parseFloat(file.byState[st]) : NaN;
+  if (isFinite(sv) && sv > 0) {
+    const y = parseInt(file.year, 10);
+    const yr = Array.isArray(file.yearRange) ? file.yearRange : (y ? [y, y] : null);
+    return { level: 'state', saidi: sv, utility: '', years: yr, utilityCount: 0 };
+  }
+  return null;
+}
+
+async function _callPowerAPI(fips5, stateAbbr) {
+  console.log('[EIA-861] Starting for county', fips5, stateAbbr);
+  const file = await _loadDataFile(API_CONFIG.DATA_POWER);
+  const hit = _powerLookup(file, String(fips5 || ''), stateAbbr);
+  if (!hit) throw new Error('No reliability record for this county or state');
+  console.log('[EIA-861] Result:', hit);
+  return hit;
+}
+
+/** Minutes without power a year to Likelihood: under 90 = 1, 90 to 180 = 2, 180 to 360 = 3, 360 to 720 = 4, over 720 = 5. */
+function _powerScore(minutes) {
+  return minutes < 90 ? 1 : minutes < 180 ? 2 : minutes < 360 ? 3 : minutes <= 720 ? 4 : 5;
+}
+
+function _yearsLabel(years) {
+  if (!Array.isArray(years) || years.length === 0) return '';
+  const a = years[0], b = years[years.length - 1];
+  return a === b ? String(a) : `${a} to ${b}`;
+}
+
+/** Long power outage (24) from EIA-861 SAIDI. The figure is for the utility, not the street. */
+function _mapPowerReliability(power, countyLabel, stateAbbr) {
+  if (!power || !(power.saidi > 0)) return null;
+  const yrs = _yearsLabel(power.years);
+  const mins = _commas(power.saidi);
+  const tail = ' Planned safety shutoffs are extra: check your utility\'s wildfire-safety page.';
+  let finding;
+  if (power.level === 'county') {
+    finding = `Customers of ${power.utility || 'the utility listed for this county'} averaged ${mins} minutes without power a year including major events (EIA-861${yrs ? ', ' + yrs : ''}).`;
+    if (power.utilityCount > 1) {
+      finding += ` This is the highest of the ${power.utilityCount} utilities listed for ${countyLabel || 'this county'}; the one that serves you may be lower.`;
+    }
+  } else {
+    finding = `No utility is listed for ${countyLabel || 'this county'}, so this is the ${String(stateAbbr || '').toUpperCase() || 'state'} figure: utilities there averaged ${mins} minutes without power a year including major events (EIA-861${yrs ? ', ' + yrs : ''}).`;
+  }
+  return {
+    score: _powerScore(power.saidi),
+    finding: finding + tail,
+    confidence: 'Low',
+    source: `${POWER_SRC}${yrs ? ' ' + yrs : ''}`,
+  };
+}
+
+/* ---------------------------------------------------------------
    DERIVED: AIR QUALITY SCORE
 --------------------------------------------------------------- */
 
@@ -1948,7 +2111,7 @@ function _deriveAirQualityScore(whpScore, epaHighHazardCount, stateAbbr) {
 function _compileFindings(apiResults, geocoded) {
   const {
     flood, earthquake, wildfire, weather, drought, epa, landslide, nri, declarations, water, soil,
-    warnings, normals, airdays,
+    warnings, normals, airdays, radon, power,
   } = apiResults;
 
   const stateAbbr     = geocoded.stateAbbr || weather?.stateAbbr || '';
@@ -2226,6 +2389,32 @@ function _compileFindings(apiResults, geocoded) {
     });
   }
 
+  // ── RADON (64) AND LONG POWER OUTAGE (24) ─────────────────
+  // County-level tables from data/*.json. Absent file, or a county not in it:
+  // no finding, and the hazard stays on "Needs your judgment".
+  const radonF = radon ? _mapRadonZone(radon, countyLabel, stateAbbr) : null;
+  if (radonF && !_researchSkipsNa(H_ID.RADON, stateAbbr)) {
+    findings.push({
+      hazardId: H_ID.RADON, hazardName: H_NAME[64], category: _hCat(64),
+      scoreAssigned: radonF.score,
+      source: radonF.source,
+      finding: radonF.finding,
+      confidence: radonF.confidence,
+      status: 'estimated', isOverridden: false,
+    });
+  }
+  const powerF = power ? _mapPowerReliability(power, countyLabel, stateAbbr) : null;
+  if (powerF && !_researchSkipsNa(H_ID.POWER, stateAbbr)) {
+    findings.push({
+      hazardId: H_ID.POWER, hazardName: H_NAME[24], category: _hCat(24),
+      scoreAssigned: powerF.score,
+      source: powerF.source,
+      finding: powerF.finding,
+      confidence: powerF.confidence,
+      status: 'estimated', isOverridden: false,
+    });
+  }
+
   // ── FEMA DECLARATION FLOORS (raise only, after everything else) ──
   if (declarations) {
     // Floors are an extra; a bug here must not discard the findings.
@@ -2256,7 +2445,7 @@ function _renderStepItem(stepId, status) {
   const step   = STEPS.find(s => s.id === stepId);
   if (!step || !iconEl) return;
 
-  const icons = { pending: 'circle-dashed', running: 'loader-circle', success: 'circle-check', error: 'triangle-alert' };
+  const icons = { pending: 'circle-dashed', running: 'loader-circle', success: 'circle-check', error: 'triangle-alert', skipped: 'minus' };
   iconEl.innerHTML = ic(icons[status] || 'circle-dashed');
 
   el.className = `research-step step-${status}`;
@@ -2285,8 +2474,13 @@ function _tracked(stepId, apiPromise) {
       return result;
     })
     .catch(err => {
-      console.warn(`[Research] ${stepId} failed:`, err.message);
       if (err && err.code) _research.failCodes[stepId] = err.code;
+      if (err && err.code === NO_DATA_FILE) {
+        console.log(`[Research] ${stepId} skipped: ${err.message}`);
+        _setStep(stepId, 'skipped');   // neutral: the source is not published yet
+        return null;
+      }
+      console.warn(`[Research] ${stepId} failed:`, err.message);
       _setStep(stepId, 'error');
       return null;   // null signals "_compileFindings" to use fallback
     });
@@ -2342,10 +2536,10 @@ async function startResearch() {
 
   // ── PARALLEL API CALLS (spinners update independently) ──
   ['nri','flood','earthquake','wildfire','weather','drought','epa','airquality','landslide','declarations','water','soil',
-   'warnings','normals','airdays']
+   'warnings','normals','airdays','radon','power']
     .forEach(id => _setStep(id, 'running'));
 
-  const { lat, lng, zip, fips5, stateFips, countyFips } = geocoded;
+  const { lat, lng, zip, fips5, stateFips, countyFips, county, stateAbbr } = geocoded;
 
   console.log('[Research] Starting parallel API calls for lat:', lat, 'lng:', lng, 'zip:', zip, 'fips5:', fips5);
 
@@ -2355,7 +2549,7 @@ async function startResearch() {
   // the landslide fallback. Flood waits on it only if it reaches Method D.
   const nriP = _tracked('nri', _callNRIAPI(lat, lng, fips5));
   const [nri, flood, earthquake, wildfire, weather, drought, epa, landslide, declarations, water, soil,
-         warnings, normals, airdays] =
+         warnings, normals, airdays, radon, power] =
     await Promise.all([
       nriP,
       _tracked('flood',      _callFloodAPI(lat, lng, fips5, nriP)),
@@ -2371,6 +2565,8 @@ async function startResearch() {
       _tracked('warnings',   _callWarningsAPI(lat, lng)),
       _tracked('normals',    _callNormalsAPI(lat, lng)),
       _tracked('airdays',    _callAirDaysAPI(fips5)),
+      _tracked('radon',      _callRadonAPI(county, stateAbbr)),
+      _tracked('power',      _callPowerAPI(fips5, stateAbbr)),
     ]);
 
   if (run !== _research.runId) return;   // cancelled while the lookups ran
@@ -2381,14 +2577,14 @@ async function startResearch() {
 
   console.log('[Research] All API calls settled. Results:', {
     nri, flood, earthquake, wildfire, weather, drought, epa, landslide, declarations, water, soil,
-    warnings, normals, airdays,
+    warnings, normals, airdays, radon, power,
   });
 
   // ── COMPILE FINDINGS ──────────────────────────────────────
   try {
     _research.findings = _compileFindings(
       { flood, earthquake, wildfire, weather, drought, epa, landslide, nri, declarations, water, soil,
-        warnings, normals, airdays },
+        warnings, normals, airdays, radon, power },
       geocoded
     );
     _research.hasResults = true;
@@ -2896,8 +3092,10 @@ function _renderReport() {
 function _researchSummarySub(estimated, failedCount, manualCount) {
   const rule  = estimated.filter(_isRuleOfThumb).length;
   const answered = estimated.filter(_isAnsweredEstimate).length;
-  const other = estimated.length - rule - answered;
+  const county = estimated.filter(_isCountyEstimate).length;
+  const other = estimated.length - rule - answered - county;
   return [
+    county > 0 ? `${county} ${county === 1 ? 'is a county-level estimate' : 'are county-level estimates'} from a published table.` : '',
     answered > 0 ? `${answered} ${answered === 1 ? 'is an estimate' : 'are estimates'} where the source answered but holds no record for this address.` : '',
     other > 0 ? `${other} ${other === 1 ? 'is a' : 'are'} rough placeholder${other === 1 ? '' : 's'} because a source did not respond.` : '',
     rule > 0 ? `No address-level source exists yet for ${rule} item${rule === 1 ? '' : 's'}; ${rule === 1 ? 'it uses' : 'they use'} a state rule of thumb.` : '',

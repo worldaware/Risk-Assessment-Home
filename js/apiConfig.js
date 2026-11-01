@@ -155,4 +155,14 @@ const API_CONFIG = {
      Direct with CORS, about 600 ms (checked 2026-10-31). */
   EPA_AQI_COUNTY:
     'https://geopub.epa.gov/ArcGIS/rest/services/myenv/aqi/MapServer/0/query',
+
+  /* ── Static data files, built by scripts/build-data.js ─────
+     Same-origin files under data/, refreshed once a year by the
+     "Data refresh" GitHub Action, which opens a pull request. The sources
+     are files, not point services (EPA radon zones by county, EIA-861
+     utility reliability), and the EPA file blocks browsers. Paths are
+     relative to the page. While a file is missing, its hazard stays on
+     "Needs your judgment". */
+  DATA_RADON: 'data/radon-zones.json',
+  DATA_POWER: 'data/power-reliability.json',
 };

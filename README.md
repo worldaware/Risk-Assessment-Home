@@ -9,6 +9,7 @@ Household and neighborhood hazard risk assessment. Vanilla JS, no build step, se
 - `relay/`: the Cloudflare Worker that relays the government lookups that block browsers, with its deploy steps.
 - `js/report.js`, `js/wa-pdf-theme.js`, `js/vendor/jspdf.umd.min.js`: the editable report and PDF.
 - `sw.js`: service worker for offline use of the shell. It never caches cross-origin (API) responses.
+- `data/radon-zones.json`, `data/power-reliability.json`: EPA radon zones by county and EIA-861 utility reliability by county, read by the address lookup for radon and long power outages. They do not exist until the first "Data refresh" pull request is merged; without them those two hazards stay on "Needs your judgment". Built by `scripts/build-data.js` (`node scripts/build-data.js --help` lists the options; it reads `.xlsx` only if `npm install xlsx@0.18.5 --no-save` was run) and refreshed by `.github/workflows/data-refresh.yml`, which opens a pull request each July (or when you run it by hand). In the repository settings, turn on Settings, Actions, General, "Allow GitHub Actions to create and approve pull requests", or the workflow cannot open it.
 - `tests/run.js`: unit tests for the mapping functions and a few invariants. `node tests/run.js`.
 
 ## Release checklist

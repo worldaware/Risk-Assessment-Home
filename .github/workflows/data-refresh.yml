@@ -1,0 +1,49 @@
+name: Data refresh
+
+# Builds data/radon-zones.json (EPA radon zones by county) and
+# data/power-reliability.json (EIA-861 utility reliability by county) with
+# scripts/build-data.js, then opens a pull request with whatever changed.
+# It never pushes to main: review the pull request and merge it yourself.
+# EIA publishes the final data for a year in October of the next year, so bump
+# the default year below each October (or pick the year when you run it by hand).
+
+on:
+  workflow_dispatch:
+    inputs:
+      eia_year:
+        description: 'EIA-861 data year (the f861<year>.zip file)'
+        required: false
+        default: '2025'
+  schedule:
+    # Yearly, July 2 at 09:17 UTC (first week of July)
+    - cron: '17 9 2 7 *'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install the spreadsheet reader (build time only; the app has no dependencies)
+        run: npm install xlsx@0.18.5 --no-save
+      - name: Build the data files
+        env:
+          EIA_YEAR: ${{ inputs.eia_year || '2025' }}
+        run: node scripts/build-data.js --out data --year "$EIA_YEAR"
+      - name: Open a pull request with the changed data files
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: data/refresh
+          title: 'Data refresh: radon zones and power reliability'
+          commit-message: 'Data refresh: radon zones and power reliability'
+          add-paths: data/*.json
+          body: |
+            Rebuilt by the Data refresh workflow from the EPA radon zone file and the EIA-861 reliability and service territory files.
+
+            Before merging, open the diff and check that the county and utility counts did not drop and that Boulder County (radon zone 1, utilities under 08013) still looks right.
