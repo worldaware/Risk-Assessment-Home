@@ -2190,6 +2190,25 @@ async function v32StageCChecks() {
   const bd = require(SCRIPT);
   let e1;
 
+  // ── Real-world input quirks found on the first workflow run (2026-11-10) ──
+  {
+    const qtmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-quirks-'));
+    const bomFile = path.join(qtmp, 'radon-bom.json');
+    fs.writeFileSync(bomFile, '﻿' + JSON.stringify({ data: [{ 'County,State': 'Boulder, CO', 'COUNTY LABEL': 'Boulder County', STATE: 'Colorado', Region: '8', Zone: '1' }] }));
+    let bomOk = false; try { bomOk = bd.readJsonFile(bomFile).data[0].Zone === '1'; } catch (e) { bomOk = false; }
+    check('build script: EPA radon JSON with a UTF-8 byte-order mark parses', bomOk);
+    const html = path.join(qtmp, 'f8612023.zip');
+    fs.writeFileSync(html, '<!DOCTYPE html><html><body>moved</body></html>');
+    const zip = path.join(qtmp, 'real.zip');
+    fs.writeFileSync(zip, Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.alloc(32)]));
+    check('build script: an HTML page saved as .zip is not treated as a zip', bd.isZipFile(html) === false && bd.isZipFile(zip) === true);
+    check('build script: older EIA years also try the archive path', bd.eiaArchiveZipUrl(2023) === 'https://www.eia.gov/electricity/data/eia861/archive/zip/f8612023.zip');
+    // A radon fixture with a BOM runs through the whole script
+    const out = path.join(qtmp, 'out');
+    const r = spawnSync(process.execPath, [SCRIPT, '--out', out, '--only', 'radon', '--radon-file', bomFile, '--min-radon', '1', '--built', '2026-11-10'], { encoding: 'utf8' });
+    check('build script: --only radon with a BOM file writes radon-zones.json', r.status === 0 && fs.existsSync(path.join(out, 'radon-zones.json')), (r.stderr || '').slice(0, 200));
+  }
+
   // ── Build script on the local fixtures ──
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-stagec-'));
   const run = (args, extra) => spawnSync(process.execPath, [SCRIPT].concat(args), Object.assign({ encoding: 'utf8' }, extra || {}));

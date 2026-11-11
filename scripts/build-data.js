@@ -37,6 +37,37 @@ const { execFileSync } = require('child_process');
 
 const RADON_URL = 'https://www.epa.gov/system/files/other-files/2024-06/radon-zones-202406.json';
 const eiaZipUrl = year => `https://www.eia.gov/electricity/data/eia861/zip/f861${year}.zip`;
+// EIA moves each year's file to the archive path once a newer year is published.
+const eiaArchiveZipUrl = year => `https://www.eia.gov/electricity/data/eia861/archive/zip/f861${year}.zip`;
+const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);   // "PK\x03\x04"
+
+/** Read a JSON file that may start with a UTF-8 byte-order mark (EPA's radon file does). */
+function readJsonFile(file) {
+  return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+}
+
+/** True when the file starts with the zip signature; EIA returns an HTML page with 200 for a moved file. */
+function isZipFile(file) {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const head = Buffer.alloc(4);
+    const n = fs.readSync(fd, head, 0, 4, 0);
+    return n === 4 && head.equals(ZIP_MAGIC);
+  } finally { fs.closeSync(fd); }
+}
+
+/** Download an EIA-861 year from the current path, then the archive path; throws if neither is a zip. */
+async function downloadEiaYear(year, destFile) {
+  const tried = [];
+  for (const url of [eiaZipUrl(year), eiaArchiveZipUrl(year)]) {
+    try {
+      await download(url, destFile);
+      if (isZipFile(destFile)) return url;
+      tried.push(`${url} (not a zip file)`);
+    } catch (e) { tried.push(`${url} (${e.message})`); }
+  }
+  throw new Error(`EIA-861 ${year}: ${tried.join('; ')}`);
+}
 const FIPS_URL = 'https://www2.census.gov/geo/docs/reference/codes/files/national_county.txt';
 const UA = 'worldaware-data-refresh (https://github.com/worldaware/Risk-Assessment-Home)';
 const MAX_SAIDI = 100000;   // minutes a year; anything above is a reporting error (69 days)
@@ -452,6 +483,7 @@ function readEia(dirs) {
    Main
 --------------------------------------------------------------- */
 function unzipTo(zip, dir) {
+  if (!isZipFile(zip)) throw new Error(`${path.basename(zip)} is not a zip file`);
   fs.mkdirSync(dir, { recursive: true });
   execFileSync('unzip', ['-oq', zip, '-d', dir], { stdio: 'inherit' });
 }
@@ -478,11 +510,11 @@ async function main(argv) {
     if (o.only !== 'power') {
       try {
         let raw;
-        if (o.radonFile) raw = JSON.parse(fs.readFileSync(o.radonFile, 'utf8'));
+        if (o.radonFile) raw = readJsonFile(o.radonFile);
         else {
           const f = path.join(tmp, 'radon.json');
           await download(RADON_URL, f);
-          raw = JSON.parse(fs.readFileSync(f, 'utf8'));
+          raw = readJsonFile(f);
         }
         let idx = null;
         // A local radon file with no local county list stays offline (tests): names only
@@ -503,7 +535,7 @@ async function main(argv) {
           // Newest first, so a year repeated in two files keeps the newest figure
           for (let y = o.year; y > o.year - o.historyYears; y--) {
             const z = path.join(tmp, `f861${y}.zip`);
-            try { await download(eiaZipUrl(y), z); } catch (e) {
+            try { await downloadEiaYear(y, z); } catch (e) {
               if (y === o.year) throw e;
               console.warn(`EIA-861 ${y} not downloaded (${e.message}); continuing with the years that are`);
               continue;
@@ -529,7 +561,7 @@ async function main(argv) {
 
 module.exports = {
   parseArgs, parseCsv, countyKey, stringifyData, buildRadon, findHeader, parseReliability, parseTerritory,
-  buildCountyIndex, buildPower, readEia, main, defaultEiaYear,
+  buildCountyIndex, buildPower, readEia, main, defaultEiaYear, readJsonFile, isZipFile, eiaArchiveZipUrl,
 };
 
 if (require.main === module) {
